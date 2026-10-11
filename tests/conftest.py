@@ -61,6 +61,7 @@ class FauxLien:
         self.retard = 0.0
         self.muet = False
         self.robot: dict | None = fragment()
+        self.delai_robot = 0.0
         self.en_vol = 0
         self.max_en_vol = 0
 
@@ -79,6 +80,8 @@ class FauxLien:
             self.en_vol -= 1
         self.publies.append((sujet, octets))
         if octets == DEMANDE_CONFIGURATION and self.robot is not None and self.session is not None:
+            if self.delai_robot:  # horloge réelle : la réponse doit être datée après la demande
+                await asyncio.sleep(self.delai_robot)
             self.horloge.t += 0.01
             self.session.recevoir_etat(dict(self.robot))
 
@@ -136,6 +139,15 @@ def session(tmp_path, horloge, lien, messages) -> Session:
         horloge=horloge, dormir=horloge.dormir, signaler=messages.append,
     )
     lien.session = s
+    return s
+
+
+@pytest.fixture
+def session_reelle(tmp_path, lien, messages) -> Session:
+    """Session à l'horloge réelle (tests du serveur web) ; le faux robot répond après 30 ms."""
+    s = Session(lien, APPAREIL, Journal(tmp_path), Calibration(), frozenset(Categorie), signaler=messages.append)
+    lien.session = s
+    lien.delai_robot = 0.03
     return s
 
 

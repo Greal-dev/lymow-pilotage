@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -19,6 +20,7 @@ from .config import Calibration
 from .journal import Journal, declarer_secret
 from .protocole import Categorie
 from .session import EchecOrdre, Session
+from .vendor.ha_lymow.api import LymowApiClient
 from .vendor.ha_lymow.auth import LymowAuth
 from .vendor.ha_lymow.const import REGION_CONFIG
 from .vendor.ha_lymow.mqtt import LymowMqttClient
@@ -60,6 +62,56 @@ async def obtenir_acces(http: aiohttp.ClientSession, ident: Identifiants) -> Acc
     for secret in (aws["identity_id"], cles.get("AccessKeyId"), cles.get("SecretKey"), cles.get("SessionToken")):
         declarer_secret(secret)
     return Acces(aws["identity_id"], jetons["AccessToken"], cles)
+
+
+def _hote_video(url: object, schema: str, region: str) -> bool:
+    """Réponse du nuage non fiable : seul un hôte Kinesis Video de la région est accepté."""
+    if not isinstance(url, str):
+        return False
+    morceaux = urlparse(url)
+    hote = morceaux.hostname or ""
+    return (
+        morceaux.scheme == schema
+        and hote.endswith(f".kinesisvideo.{region}.amazonaws.com")
+        and not morceaux.username
+        and morceaux.port in (None, 443)
+    )
+
+
+async def demarrer_video(http: aiohttp.ClientSession, ident: Identifiants, acces: Acces) -> dict[str, Any]:
+    """Ouvre une session vidéo (spectateur) : URL de signalisation présignée et serveurs ICE.
+
+    Tout ce qui est rendu est un secret temporaire : déclaré au filtre, jamais journalisé.
+    Enchaînement repris du socle (`coordinator.async_start_video_session`).
+    """
+    client = LymowApiClient(http, acces.jeton_acces, ident.region, acces.identite)
+    session = await client.start_video_session(ident.appareil)
+    canal = session.get("channelARN") if isinstance(session, dict) else None
+    cles = session.get("credentials") if isinstance(session, dict) else None
+    noms = ("accessKeyId", "secretAccessKey", "sessionToken")
+    if not isinstance(canal, str) or not isinstance(cles, dict) or not all(isinstance(cles.get(n), str) for n in noms):
+        raise EchecOrdre("réponse inattendue du service vidéo")
+    for nom in noms:
+        declarer_secret(cles[nom])
+    points = await client.get_signaling_channel_endpoint(canal, cles, region=ident.region)
+    wss, https = points.get("WSS"), points.get("HTTPS")
+    # Les clés signent la requête suivante : elles ne partent que vers Kinesis Video.
+    if not _hote_video(wss, "wss", ident.region) or not _hote_video(https, "https", ident.region):
+        raise EchecOrdre("adresse de signalisation vidéo inattendue")
+    glace = await client.get_ice_server_config(canal, https, cles, region=ident.region)
+    url = client.presign_signaling_url(wss, canal, client.viewer_client_id(), cles, region=ident.region)
+    declarer_secret(url)
+    serveurs = []
+    for entree in glace if isinstance(glace, list) else []:
+        if not isinstance(entree, dict) or not isinstance(entree.get("Uris"), list):
+            continue
+        adresses = [a for a in entree["Uris"] if isinstance(a, str) and a.startswith(("turn:", "turns:", "stun:"))]
+        identifiant, secret = entree.get("Username"), entree.get("Password")
+        if adresses and isinstance(identifiant, str) and isinstance(secret, str):
+            declarer_secret(identifiant)
+            declarer_secret(secret)
+            serveurs.append({"urls": adresses, "username": identifiant, "credential": secret})
+    return {"wss": url, "iceServers": serveurs}
 
 
 class LienMqtt:

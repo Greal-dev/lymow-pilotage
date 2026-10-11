@@ -41,6 +41,7 @@ Python 3.12) ; il se régénère avec
 | `lymow stop` | Consigne nulle émise 3 fois, sans précondition, puis mise en pause de la tâche (userCtrl 3 ; 21 si le dernier état connu indique un retour à la base). |
 | `lymow sequence "plateau 90; tourner 45 --vitesse 0.2; reculer --duree 2 --vitesse 0.1"` | Enchaîne ; rien ne part si une étape est refusable ; s'arrête au premier refus, échec ou constat non confirmé. Étapes : `tourner`, `avancer`, `reculer`, `plateau`, `plateau-haut`, `stop`. `--reel` et `essai-arret-auto` y sont interdits. |
 | `lymow reprendre` / `base` / `annuler` | Reprise de tâche (4), retour base tâche conservée (33), annulation sur place (28). |
+| `lymow ui [--reel] [--port N]` | Interface web locale avec retour vidéo (voir « Interface web locale »). |
 | `lymow essai-arret-auto [--vitesse V] [--observation S]` | Calibration, robot à vue : une seule consigne avant, puis silence, puis arrêt (voir « Calibration »). |
 
 Options communes, avant ou après la commande : `--reel` (émettre vraiment),
@@ -68,6 +69,63 @@ d'émissions, cadence.
 demanderait 40 s et est refusé (au plus vitesse × 9 s). Avec `--duree`, la
 consigne est tenue telle quelle : les facteurs de `calibration.toml` ne
 s'appliquent pas.
+
+## Interface web locale
+
+`lymow ui [--reel] [--port N]` (port 8377 par défaut) démarre un serveur sur
+`127.0.0.1` uniquement — aucune option ne change cet hôte —, ouvre le
+navigateur et s'arrête sur Ctrl+C. `lancer-lymow.cmd` (double-clic) lance
+`lymow ui` en simulation.
+
+- La page passe par les mêmes fonctions que la ligne de commande : mêmes
+  validations, mêmes règles SEC-01 à SEC-07, même journal.
+- Sans `--reel` au lancement, le serveur refuse tout ordre réel quoi que
+  demande la page (et la session elle-même ne sait émettre que les requêtes
+  pures). Avec `--reel` : bandeau rouge « MODE RÉEL », et chaque ordre se fait
+  en deux temps, « Prévisualiser » puis « Émettre » ; le serveur n'accepte que
+  la dernière prévisualisation qu'il a produite, une seule fois, pendant 60 s.
+- STOP (bouton, Échap ou Espace) : sans prévisualisation ; il interrompt le
+  mouvement ou la séquence en cours, puis applique le `stop` de la commande.
+  Un seul ordre à la fois : tout autre ordre est refusé pendant un mouvement.
+- Le mouvement vit dans le serveur : fermer l'onglet ne supprime pas son arrêt
+  final. Ctrl+C pendant un mouvement arrête le robot, puis le serveur.
+- Sans compte enregistré, la page fonctionne en prévisualisation et affiche
+  « non connecté — lancez `lymow connexion` ». Aucun identifiant n'est jamais
+  saisi dans la page.
+
+Protection du serveur local : jeton aléatoire de 256 bits par lancement, exigé
+sur toutes les routes, échangé à la première requête contre un témoin
+`HttpOnly`, `SameSite=Strict` (l'adresse est aussitôt redirigée sans le jeton) ;
+en-tête `Host` limité à `127.0.0.1:port` et `localhost:port` ; `Origin` exigé
+et vérifié sur toute requête `POST` ; aucune règle CORS ; politique de contenu
+`default-src 'self'`, plus la seule signalisation vidéo
+`wss://*.kinesisvideo.<région>.amazonaws.com` une fois un compte connu ; aucune
+ressource externe (ni CDN, ni police, ni mesure d'audience).
+
+### Vidéo — non vérifiée en réel
+
+« Démarrer la vidéo » (jamais automatique) demande au serveur une session
+Amazon Kinesis Video (canal, serveurs ICE, adresse de signalisation présignée :
+secrets temporaires, jamais journalisés ni mis en cache), puis la page ouvre la
+signalisation, envoie l'offre WebRTC en réception seule et affiche le flux. La
+vidéo est une observation : elle est disponible aussi sans `--reel`.
+
+Seule la logique pure est testée (messages, base64, ligne
+`a=ice-options:trickle renomination` de l'offre ; ces tests demandent Node.js
+et sont sautés sans lui). Le reste n'a jamais tourné contre le robot. Au
+premier essai, ouvrir la console du navigateur (F12) et observer :
+
+1. La requête `video/demarrer` répond 200 (sinon : message affiché sous la vidéo).
+2. Le WebSocket vers `kinesisvideo` passe à l'état 101 ; un refus par la
+   politique de contenu apparaît en rouge dans la console.
+3. Un message `SDP_ANSWER` arrive après l'offre ; s'il n'arrive pas, le robot
+   n'a pas reconnu l'offre ou l'identifiant de spectateur.
+4. L'état affiché passe à « liaison vidéo : connected » ; « failed » indique un
+   échec ICE (serveurs TURN, pare-feu).
+5. L'image s'affiche ; sinon, `chrome://webrtc-internals` : images décodées,
+   paquets reçus.
+6. « Arrêter » ferme la signalisation et la liaison ; aucune commande d'arrêt
+   de canal n'est connue côté service.
 
 ## Calibration (robot à vue, zone dégagée, main sur le bouton STOP)
 

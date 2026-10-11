@@ -1,0 +1,416 @@
+/* Page de pilotage Lymow. Aucune règle de sécurité ne vit ici : le serveur local valide tout.
+ * Toute donnée affichée passe par textContent, jamais par innerHTML. */
+(function () {
+  "use strict";
+
+  var libelles = {};
+  var bornes = {};
+  var sequence = [];
+  var previsualisation = null;
+  var modeReel = false;
+  var dernierResultat = "";
+  var video = { pc: null, ws: null };
+  var CLES_ETAT = [
+    "en_ligne", "statut_libelle", "batterie_pct", "erreurs", "avertissements", "rtk", "rtk_satellites",
+    "signal_4g", "signal_wifi", "wifi_rssi_dbm", "position_est_m", "position_nord_m", "cap_deg",
+    "hauteur_coupe_mm", "micrologiciel", "age_etat_s"
+  ];
+
+  function $(id) { return document.getElementById(id); }
+
+  // Le jeton de lancement ne reste pas dans l'adresse (le serveur a déjà redirigé ; ceinture et bretelles).
+  if (window.location.search) {
+    window.history.replaceState(null, "", window.location.pathname);
+  }
+
+  function vider(noeud) {
+    while (noeud.firstChild) { noeud.removeChild(noeud.firstChild); }
+  }
+
+  function element(nom, texte, classe) {
+    var noeud = document.createElement(nom);
+    if (texte !== undefined) { noeud.textContent = texte; }
+    if (classe) { noeud.className = classe; }
+    return noeud;
+  }
+
+  function libelle(cle) {
+    return libelles[cle] || String(cle).replace(/_/g, " ");
+  }
+
+  function texteValeur(valeur) {
+    if (valeur === null || valeur === undefined) { return "inconnu"; }
+    if (valeur === true) { return "oui"; }
+    if (valeur === false) { return "non"; }
+    if (Array.isArray(valeur) && valeur.length === 0) { return "aucun"; }
+    return String(valeur);
+  }
+
+  function estCompose(valeur) {
+    return valeur !== null && typeof valeur === "object" && Object.keys(valeur).length > 0;
+  }
+
+  /* Rend un objet JSON en listes imbriquées, uniquement par textContent. */
+  function rendre(objet, conteneur) {
+    if (Array.isArray(objet)) {
+      var liste = element("ul");
+      objet.forEach(function (item) {
+        var ligne = element("li");
+        if (estCompose(item)) { rendre(item, ligne); } else { ligne.textContent = texteValeur(item); }
+        liste.appendChild(ligne);
+      });
+      conteneur.appendChild(liste);
+      return;
+    }
+    var definitions = element("dl", undefined, "grille");
+    Object.keys(objet).forEach(function (cle) {
+      definitions.appendChild(element("dt", libelle(cle)));
+      var valeur = element("dd");
+      if (estCompose(objet[cle])) { rendre(objet[cle], valeur); } else { valeur.textContent = texteValeur(objet[cle]); }
+      definitions.appendChild(valeur);
+    });
+    conteneur.appendChild(definitions);
+  }
+
+  async function appeler(chemin, corps) {
+    var reponse = await fetch(chemin, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(corps || {}),
+      credentials: "same-origin",
+      cache: "no-store"
+    });
+    var donnees = null;
+    try { donnees = await reponse.json(); } catch (erreur) { donnees = null; }
+    if (!reponse.ok) {
+      throw new Error(donnees && donnees.erreur ? donnees.erreur : "erreur " + reponse.status);
+    }
+    return donnees;
+  }
+
+  function signalerErreur(erreur) {
+    $("previsualisation-titre").textContent = "Refusé : " + erreur.message;
+    vider($("previsualisation-detail"));
+    oublierPrevisualisation("");
+  }
+
+  // --- état -----------------------------------------------------------------
+
+  function appliquer(image) {
+    modeReel = image.mode === "réel";
+    $("bandeau-reel").hidden = !modeReel;
+    $("mode").textContent = modeReel ? "MODE RÉEL" : "simulation";
+    $("mode").className = "pastille" + (modeReel ? " reel" : "");
+    $("liaison").textContent = image.liaison + (image.occupe ? " — ordre en cours" : "");
+    $("appareil").textContent = image.appareil || "";
+    var bloc = $("bloc-etat");
+    var liste = $("etat-liste");
+    vider(liste);
+    if (!image.etat) {
+      $("etat-absent").textContent = image.liaison;
+      bloc.classList.remove("perime");
+    } else {
+      $("etat-absent").textContent = image.etat.perime ? "État périmé ou jamais reçu : valeurs grisées." : "";
+      bloc.classList.toggle("perime", Boolean(image.etat.perime));
+      CLES_ETAT.forEach(function (cle) {
+        liste.appendChild(element("dt", libelle(cle)));
+        var valeur = element("dd");
+        if (estCompose(image.etat[cle])) { rendre(image.etat[cle], valeur); } else { valeur.textContent = texteValeur(image.etat[cle]); }
+        liste.appendChild(valeur);
+      });
+    }
+    var resultat = JSON.stringify(image.resultat);
+    if (resultat !== dernierResultat) {
+      dernierResultat = resultat;
+      vider($("resultat-detail"));
+      $("resultat-vide").hidden = Boolean(image.resultat);
+      if (image.resultat) { rendre(image.resultat, $("resultat-detail")); }
+    }
+    var journal = $("journal");
+    vider(journal);
+    (image.journal || []).slice().reverse().forEach(function (ligne) {
+      journal.appendChild(element("li", ligne.heure + " — " + ligne.texte));
+    });
+  }
+
+  function afficherBornes() {
+    var textes = {
+      "angle": "jusqu'à " + bornes.angle_max_deg + "°",
+      "distance": "jusqu'à " + bornes.distance_max_m + " m",
+      "duree": "jusqu'à " + bornes.duree_max_s + " s",
+      "vitesse-angulaire": bornes.vitesse_angulaire_min + " à " + bornes.vitesse_angulaire_max + " (défaut " + bornes.vitesse_angulaire_max + ")",
+      "vitesse-lineaire": bornes.vitesse_lineaire_min + " à " + bornes.vitesse_lineaire_max + " (défaut " + bornes.vitesse_lineaire_max + ")",
+      "hauteur": "entier de " + bornes.hauteur_min_mm + " à " + bornes.hauteur_max_mm,
+      "essai-vitesse": bornes.vitesse_lineaire_min + " à " + bornes.essai_vitesse_max + " (défaut " + bornes.essai_vitesse + ")",
+      "essai-fenetre": bornes.essai_observation_min + " à " + bornes.essai_observation_max + " (défaut " + bornes.essai_observation + ")"
+    };
+    document.querySelectorAll("[data-borne]").forEach(function (noeud) {
+      noeud.textContent = textes[noeud.dataset.borne] || "";
+    });
+    $("exposition-essai").textContent = "Exposition : " + bornes.exposition_essai + ".";
+  }
+
+  // --- ordres ---------------------------------------------------------------
+
+  function nombre(champ, entier) {
+    var texte = champ.value.trim();
+    if (texte === "") { return null; }
+    var motif = entier ? /^[0-9]+$/ : /^[+-]?[0-9]+([.,][0-9]+)?$/;
+    if (!motif.test(texte)) { throw new Error("nombre invalide : « " + texte + " »"); }
+    return Number(texte.replace(",", "."));
+  }
+
+  function ordreDe(formulaire) {
+    var type = formulaire.dataset.ordre;
+    var champs = formulaire.elements;
+    if (type === "plateau") {
+      return { nom: "plateau", valeur: nombre(champs.valeur, true) };
+    }
+    var vitesse = nombre(champs.vitesse);
+    var duree = nombre(champs.duree);
+    if (type === "essai-arret-auto") {
+      return { nom: type, vitesse: vitesse, duree: duree };
+    }
+    var valeur = nombre(champs.valeur);
+    if (type === "translation") {
+      return { nom: champs.nom.value, valeur: valeur, vitesse: vitesse, duree: duree };
+    }
+    // Tourner : le sens porte sur l'angle, ou sur la vitesse quand une durée est donnée.
+    var sens = Number(champs.sens.value) < 0 ? -1 : 1;
+    if (valeur !== null) { valeur = Math.abs(valeur) * sens; }
+    if (vitesse !== null) { vitesse = Math.abs(vitesse); }
+    if (duree !== null) {
+      vitesse = (vitesse === null ? bornes.vitesse_angulaire_max : vitesse) * sens;
+    }
+    return { nom: "tourner", valeur: valeur, vitesse: vitesse, duree: duree };
+  }
+
+  function texteOrdre(ordre) {
+    var mots = [ordre.nom];
+    if (ordre.valeur !== null && ordre.valeur !== undefined) { mots.push(String(ordre.valeur)); }
+    if (ordre.duree !== null && ordre.duree !== undefined) { mots.push("durée " + ordre.duree + " s"); }
+    if (ordre.vitesse !== null && ordre.vitesse !== undefined) { mots.push("vitesse " + ordre.vitesse); }
+    return mots.join(" ");
+  }
+
+  function oublierPrevisualisation(note) {
+    if (previsualisation && previsualisation.minuterie) { window.clearTimeout(previsualisation.minuterie); }
+    previsualisation = null;
+    $("emettre").disabled = true;
+    $("emettre-note").textContent = note;
+  }
+
+  async function previsualiser(ordres, estTache) {
+    oublierPrevisualisation("");
+    var reponse;
+    try {
+      reponse = await appeler("/api/previsualiser", { ordres: ordres });
+    } catch (erreur) {
+      signalerErreur(erreur);
+      return;
+    }
+    $("previsualisation-titre").textContent = reponse.ordres;
+    vider($("previsualisation-detail"));
+    rendre(reponse.bilan, $("previsualisation-detail"));
+    if (!reponse.identifiant) {
+      $("emettre-note").textContent = modeReel
+        ? "Refusée : rien à émettre."
+        : "Simulation : le serveur n'émet rien (relancez « lymow ui --reel » pour émettre).";
+      return;
+    }
+    previsualisation = {
+      identifiant: reponse.identifiant,
+      texte: reponse.ordres,
+      tache: Boolean(estTache),
+      minuterie: window.setTimeout(function () {
+        oublierPrevisualisation("Prévisualisation expirée : prévisualisez de nouveau.");
+      }, bornes.previsualisation_s * 1000)
+    };
+    $("emettre").disabled = false;
+    $("emettre-note").textContent = "Valable " + bornes.previsualisation_s + " s, pour cet ordre seulement.";
+  }
+
+  async function emettre() {
+    if (!previsualisation) { return; }
+    var courante = previsualisation;
+    if (courante.tache && !window.confirm("Émettre « " + courante.texte + " » vers le robot ?")) { return; }
+    oublierPrevisualisation("Émission demandée…");
+    try {
+      await appeler("/api/emettre", { identifiant: courante.identifiant });
+      $("emettre-note").textContent = "Ordre accepté : le résultat s'affiche plus bas.";
+    } catch (erreur) {
+      $("emettre-note").textContent = "Refusé : " + erreur.message;
+    }
+  }
+
+  async function stop() {
+    oublierPrevisualisation("");
+    try {
+      var reponse = await appeler("/api/stop");
+      if (reponse && reponse.bilan) {
+        $("previsualisation-titre").textContent = "STOP (simulation)";
+        vider($("previsualisation-detail"));
+        rendre(reponse.bilan, $("previsualisation-detail"));
+      } else {
+        $("emettre-note").textContent = "STOP envoyé.";
+      }
+    } catch (erreur) {
+      $("emettre-note").textContent = "STOP refusé : " + erreur.message;
+    }
+  }
+
+  // --- séquence -------------------------------------------------------------
+
+  function afficherSequence() {
+    var liste = $("sequence-liste");
+    vider(liste);
+    sequence.forEach(function (ordre, rang) {
+      var ligne = element("li", texteOrdre(ordre) + " ");
+      [["Monter", -1], ["Descendre", 1], ["Retirer", 0]].forEach(function (action) {
+        var bouton = element("button", action[0]);
+        bouton.type = "button";
+        bouton.addEventListener("click", function () {
+          var cible = rang + action[1];
+          sequence.splice(rang, 1);
+          if (action[1] !== 0 && cible >= 0 && cible <= sequence.length) { sequence.splice(cible, 0, ordre); }
+          else if (action[1] !== 0) { sequence.splice(rang, 0, ordre); }
+          afficherSequence();
+        });
+        ligne.appendChild(bouton);
+      });
+      liste.appendChild(ligne);
+    });
+    $("sequence-vide").hidden = sequence.length > 0;
+    $("sequence-previsualiser").disabled = sequence.length === 0;
+    $("sequence-vider").disabled = sequence.length === 0;
+  }
+
+  // --- vidéo (non vérifié en réel : voir le README) -------------------------
+
+  function etatVideo(texte) { $("video-etat").textContent = texte; }
+
+  function arreterVideo(texte) {
+    if (video.ws) { video.ws.onclose = null; video.ws.close(); }
+    if (video.pc) { video.pc.close(); }
+    video = { pc: null, ws: null };
+    $("video").srcObject = null;
+    $("video-demarrer").disabled = false;
+    $("video-arreter").disabled = true;
+    etatVideo(texte || "arrêtée");
+  }
+
+  async function demarrerVideo() {
+    $("video-demarrer").disabled = true;
+    etatVideo("ouverture de la session…");
+    var reglages;
+    try {
+      reglages = await appeler("/api/video/demarrer");
+    } catch (erreur) {
+      arreterVideo("indisponible : " + erreur.message);
+      return;
+    }
+    $("video-arreter").disabled = false;
+    var pc = new RTCPeerConnection({ iceServers: reglages.iceServers || [], bundlePolicy: "max-bundle" });
+    var ws = new WebSocket(reglages.wss);
+    var enAttente = [];
+    reglages = null; // secrets temporaires : rien n'est gardé au-delà de l'ouverture
+    video = { pc: pc, ws: ws };
+    pc.addTransceiver("video", { direction: "recvonly" });
+    pc.ontrack = function (evenement) {
+      $("video").srcObject = evenement.streams[0] || new MediaStream([evenement.track]);
+      $("video").play().catch(function () { return undefined; });
+    };
+    pc.onconnectionstatechange = function () { etatVideo("liaison vidéo : " + pc.connectionState); };
+    pc.onicecandidate = function (evenement) {
+      if (evenement.candidate && ws.readyState === WebSocket.OPEN) {
+        ws.send(Signalisation.messageCandidat(evenement.candidate.toJSON()));
+      }
+    };
+    ws.onopen = async function () {
+      etatVideo("signalisation ouverte, offre envoyée…");
+      try {
+        var offre = await pc.createOffer();
+        await pc.setLocalDescription(offre);
+        ws.send(Signalisation.messageOffre(offre.sdp));
+      } catch (erreur) {
+        arreterVideo("échec de l'offre vidéo");
+      }
+    };
+    ws.onmessage = async function (evenement) {
+      var message = Signalisation.decoderMessage(evenement.data);
+      if (!message) { return; }
+      try {
+        if (message.type === "SDP_ANSWER") {
+          await pc.setRemoteDescription(message.charge);
+          while (enAttente.length) { await pc.addIceCandidate(enAttente.shift()); }
+        } else if (!pc.remoteDescription) {
+          enAttente.push(message.charge);
+        } else {
+          await pc.addIceCandidate(message.charge);
+        }
+      } catch (erreur) {
+        etatVideo("message de signalisation refusé par le navigateur");
+      }
+    };
+    ws.onerror = function () { etatVideo("échec de la signalisation"); };
+    ws.onclose = function () { if (video.ws === ws && pc.connectionState !== "connected") { etatVideo("signalisation fermée"); } };
+  }
+
+  // --- branchements ---------------------------------------------------------
+
+  document.querySelectorAll("form.ordre").forEach(function (formulaire) {
+    formulaire.addEventListener("submit", function (evenement) {
+      evenement.preventDefault();
+      try { previsualiser([ordreDe(formulaire)], false); } catch (erreur) { signalerErreur(erreur); }
+    });
+    formulaire.querySelectorAll("[data-action]").forEach(function (bouton) {
+      bouton.addEventListener("click", function () {
+        try {
+          if (bouton.dataset.action === "plateau-haut") { previsualiser([{ nom: "plateau-haut" }], false); return; }
+          sequence.push(ordreDe(formulaire));
+          afficherSequence();
+        } catch (erreur) { signalerErreur(erreur); }
+      });
+    });
+  });
+  document.querySelectorAll("[data-tache]").forEach(function (bouton) {
+    bouton.addEventListener("click", function () { previsualiser([{ nom: bouton.dataset.tache }], true); });
+  });
+  $("sequence-previsualiser").addEventListener("click", function () { previsualiser(sequence.slice(), false); });
+  $("sequence-vider").addEventListener("click", function () { sequence = []; afficherSequence(); });
+  $("emettre").addEventListener("click", emettre);
+  $("stop").addEventListener("click", stop);
+  $("actualiser").addEventListener("click", function () {
+    appeler("/api/actualiser").then(appliquer).catch(function (erreur) { $("liaison").textContent = erreur.message; });
+  });
+  $("video-demarrer").addEventListener("click", demarrerVideo);
+  $("video-arreter").addEventListener("click", function () { arreterVideo(); });
+
+  // Échap et Espace = STOP, partout : Espace n'active donc jamais un autre bouton.
+  function estToucheStop(evenement) {
+    return evenement.key === "Escape" || evenement.key === " " || evenement.key === "Spacebar";
+  }
+  document.addEventListener("keydown", function (evenement) {
+    if (!estToucheStop(evenement)) { return; }
+    evenement.preventDefault();
+    evenement.stopPropagation();
+    if (!evenement.repeat) { stop(); }
+  }, true);
+  document.addEventListener("keyup", function (evenement) {
+    if (estToucheStop(evenement)) { evenement.preventDefault(); evenement.stopPropagation(); }
+  }, true);
+
+  fetch("/api/etat", { credentials: "same-origin", cache: "no-store" })
+    .then(function (reponse) { return reponse.json(); })
+    .then(function (image) {
+      libelles = image.libelles || {};
+      bornes = image.bornes || {};
+      afficherBornes();
+      appliquer(image);
+      var flux = new EventSource("/api/flux");
+      flux.onmessage = function (evenement) { appliquer(JSON.parse(evenement.data)); };
+      flux.onerror = function () { $("liaison").textContent = "page déconnectée du serveur local (est-il arrêté ?)"; };
+    })
+    .catch(function () { $("liaison").textContent = "serveur local injoignable"; });
+  afficherSequence();
+})();

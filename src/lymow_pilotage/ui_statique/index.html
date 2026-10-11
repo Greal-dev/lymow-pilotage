@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Lymow — pilotage</title>
+  <link rel="stylesheet" href="/statique/style.css">
+</head>
+<body>
+  <div id="bandeau-reel" class="bandeau-reel" hidden>MODE RÉEL — chaque ordre émis fait bouger le robot</div>
+
+  <header class="entete">
+    <h1>Lymow <small id="appareil"></small></h1>
+    <p><span id="mode" class="pastille">…</span> <span id="liaison"></span></p>
+    <button id="stop" type="button" class="stop">STOP <small>Échap ou Espace</small></button>
+  </header>
+
+  <main>
+    <section id="bloc-etat" aria-labelledby="titre-etat">
+      <h2 id="titre-etat">État du robot</h2>
+      <p id="etat-absent" class="note"></p>
+      <dl id="etat-liste" class="grille"></dl>
+      <button id="actualiser" type="button">Actualiser</button>
+    </section>
+
+    <section aria-labelledby="titre-video">
+      <h2 id="titre-video">Vidéo</h2>
+      <div class="cadre-video"><video id="video" muted playsinline></video></div>
+      <p>
+        <button id="video-demarrer" type="button">Démarrer la vidéo</button>
+        <button id="video-arreter" type="button" disabled>Arrêter</button>
+        <span id="video-etat" class="note">arrêtée</span>
+      </p>
+    </section>
+
+    <section aria-labelledby="titre-ordres">
+      <h2 id="titre-ordres">Ordres</h2>
+      <p class="note">Chaque ordre se prévisualise d'abord. Remplissez soit l'angle ou la distance, soit la durée.</p>
+
+      <form class="ordre" data-ordre="tourner">
+        <h3>Tourner</h3>
+        <label>Sens
+          <select name="sens"><option value="1">gauche</option><option value="-1">droite</option></select>
+        </label>
+        <label>Angle (°) <input name="valeur" inputmode="decimal" autocomplete="off"> <small data-borne="angle"></small></label>
+        <label>ou durée (s) <input name="duree" inputmode="decimal" autocomplete="off"> <small data-borne="duree"></small></label>
+        <label>Vitesse (rad/s) <input name="vitesse" inputmode="decimal" autocomplete="off"> <small data-borne="vitesse-angulaire"></small></label>
+        <p class="actions">
+          <button type="submit">Prévisualiser</button>
+          <button type="button" data-action="ajouter">Ajouter à la séquence</button>
+        </p>
+      </form>
+
+      <form class="ordre" data-ordre="translation">
+        <h3>Avancer / reculer</h3>
+        <label>Sens
+          <select name="nom"><option value="avancer">avancer</option><option value="reculer">reculer</option></select>
+        </label>
+        <label>Distance (m) <input name="valeur" inputmode="decimal" autocomplete="off"> <small data-borne="distance"></small></label>
+        <label>ou durée (s) <input name="duree" inputmode="decimal" autocomplete="off"> <small data-borne="duree"></small></label>
+        <label>Vitesse (m/s) <input name="vitesse" inputmode="decimal" autocomplete="off"> <small data-borne="vitesse-lineaire"></small></label>
+        <p class="actions">
+          <button type="submit">Prévisualiser</button>
+          <button type="button" data-action="ajouter">Ajouter à la séquence</button>
+        </p>
+      </form>
+
+      <form class="ordre" data-ordre="plateau">
+        <h3>Plateau de coupe</h3>
+        <label>Hauteur (mm) <input name="valeur" inputmode="numeric" autocomplete="off"> <small data-borne="hauteur"></small></label>
+        <p class="actions">
+          <button type="submit">Prévisualiser</button>
+          <button type="button" data-action="ajouter">Ajouter à la séquence</button>
+          <button type="button" data-action="plateau-haut">Plateau au plus haut</button>
+        </p>
+      </form>
+
+      <div class="ordre">
+        <h3>Tâche</h3>
+        <p class="note">Une confirmation est demandée avant l'émission. « Reprendre » peut relancer les lames.</p>
+        <p class="actions">
+          <button type="button" data-tache="reprendre">Reprendre</button>
+          <button type="button" data-tache="base">Retour à la base</button>
+          <button type="button" data-tache="annuler">Annuler la tâche</button>
+        </p>
+      </div>
+
+      <form class="ordre" data-ordre="essai-arret-auto">
+        <h3>Essai d'arrêt automatique</h3>
+        <p class="note">Calibration, robot à vue : une seule consigne avant, puis silence, puis arrêt.
+          <span id="exposition-essai"></span></p>
+        <label>Vitesse (m/s) <input name="vitesse" inputmode="decimal" autocomplete="off"> <small data-borne="essai-vitesse"></small></label>
+        <label>Fenêtre (s) <input name="duree" inputmode="decimal" autocomplete="off"> <small data-borne="essai-fenetre"></small></label>
+        <p class="actions"><button type="submit">Prévisualiser</button></p>
+      </form>
+    </section>
+
+    <section aria-labelledby="titre-sequence">
+      <h2 id="titre-sequence">Séquence</h2>
+      <p id="sequence-vide" class="note">Aucune étape. Utilisez « Ajouter à la séquence ».</p>
+      <ol id="sequence-liste"></ol>
+      <p class="actions">
+        <button id="sequence-previsualiser" type="button" disabled>Prévisualiser la séquence</button>
+        <button id="sequence-vider" type="button" disabled>Vider</button>
+      </p>
+    </section>
+
+    <section aria-labelledby="titre-previsualisation">
+      <h2 id="titre-previsualisation">Prévisualisation</h2>
+      <p id="previsualisation-titre" class="note">Aucune prévisualisation.</p>
+      <div id="previsualisation-detail"></div>
+      <p class="actions">
+        <button id="emettre" type="button" class="emettre" disabled>Émettre</button>
+        <span id="emettre-note" class="note"></span>
+      </p>
+    </section>
+
+    <section aria-labelledby="titre-resultat">
+      <h2 id="titre-resultat">Résultat du dernier ordre</h2>
+      <p id="resultat-vide" class="note">Aucun ordre émis.</p>
+      <div id="resultat-detail"></div>
+    </section>
+
+    <section aria-labelledby="titre-journal">
+      <h2 id="titre-journal">Journal de la session</h2>
+      <ol id="journal" class="journal"></ol>
+    </section>
+  </main>
+
+  <script src="/statique/signalisation.js"></script>
+  <script src="/statique/app.js"></script>
+</body>
+</html>

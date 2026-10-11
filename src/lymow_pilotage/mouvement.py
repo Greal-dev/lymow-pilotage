@@ -394,7 +394,10 @@ async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
         try:
             # SEC-03 : consigne republiée à cadence fixe ; toute publication manquée
             # ou liaison tombée lève (homme mort) et passe par l'arrêt ci-dessous.
-            while consigne.duree - (session.horloge() - debut) > 0.001:
+            # Double borne : le temps écoulé, et le nombre d'émissions (un réveil en avance
+            # de l'horloge ne doit pas ajouter une consigne).
+            maximum = math.ceil(round(consigne.duree * securite.CADENCE_HZ, 6))
+            while emissions < maximum and consigne.duree - (session.horloge() - debut) > 0.001:
                 _surveiller(session)
                 await session.publier(trame, securite.DELAI_CONSIGNE_S)
                 emissions += 1

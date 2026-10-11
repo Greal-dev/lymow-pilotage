@@ -24,6 +24,9 @@ lymow = "lymow_pilotage.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+lymow_pilotage = ["ui_statique/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

@@ -16,7 +16,8 @@ from typing import Any
 
 import aiohttp
 
-from . import auth, coffre, config, liaison, mouvement, securite
+from . import auth, coffre, conduite, config, liaison, mouvement, securite
+from .conduite import CODE_ARRET_NON_CONFIRME, CODE_REFUS
 from .journal import Journal, declarer_secret, masquer
 from .mouvement import ErreurSaisie, Ordre
 from .protocole import Categorie
@@ -27,11 +28,8 @@ from .vendor.ha_lymow.auth import LymowAuth
 _ORDRES_SIMPLES = ("plateau-haut", "stop", "reprendre", "base", "annuler")
 _AUTORISEES_ORDRES = frozenset(Categorie)
 _LECTURE = frozenset({Categorie.REQUETE_PURE})
-# Codes de sortie : 0 fait, 1 échec ou séquence interrompue, 2 refus ou saisie,
-# 3 arrêt non confirmé (le robot peut encore bouger), 130 interruption clavier.
-CODE_REFUS = 2
-CODE_ARRET_NON_CONFIRME = 3
-_ALERTE_ARRET = "ARRÊT NON CONFIRMÉ : arrêtez le robot par son bouton STOP ou par l'application."
+PORT_UI = 8377  # même valeur que ui.PORT_DEFAUT, sans charger le serveur web pour les autres commandes
+_ALERTE_ARRET ="ARRÊT NON CONFIRMÉ : arrêtez le robot par son bouton STOP ou par l'application."
 
 _MODE_D_EMPLOI = """\
 1. Ouvrez un navigateur, puis ses outils de développement (F12), onglet Réseau,
@@ -132,7 +130,22 @@ def construire_analyseur() -> argparse.ArgumentParser:
         "sequence", 'enchaîner : "plateau 90; tourner 45 --vitesse 0.2; reculer --duree 2 --vitesse 0.1"'
     )
     sequence.add_argument("etapes", metavar='"étape; étape; …"')
+    interface = ajouter(
+        "ui", "interface web locale (127.0.0.1 seulement) ; simulation sans --reel, quoi que demande la page"
+    )
+    interface.add_argument(
+        "--port", type=mouvement.lire_entier, default=PORT_UI, metavar="N", help=f"port local (défaut : {PORT_UI})"
+    )
     return analyseur
+
+
+async def _commande_ui(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
+    from . import ui  # import tardif : le serveur web ne sert qu'à cette commande
+
+    if not 1024 <= args.port <= 65535:
+        raise ErreurSaisie("port attendu entre 1024 et 65535")
+    await ui.servir(ctx.cal, ctx.journal, reel=args.reel, port=args.port)
+    return {"interface": "arrêtée"}, 0
 
 
 def _ordres(args: argparse.Namespace) -> list[Ordre]:
@@ -142,44 +155,17 @@ def _ordres(args: argparse.Namespace) -> list[Ordre]:
     return [Ordre(args.commande, lire("valeur"), lire("vitesse"), lire("duree"))]
 
 
-def _refuser(ordres: list[Ordre], ctx: Contexte, mode: str) -> dict[str, Any] | None:
-    """SEC-07 : un seul plafond dépassé et rien n'est simulé, ouvert ni émis."""
-    refus = mouvement.refus_prealable(ordres, ctx.cal)
-    if refus is None:
-        return None
-    ctx.journal.ecrire("ordre-refuse", mode=mode, **refus)
-    return {"mode": mode, "etapes": []} | refus
-
-
-def _simuler(ordres: list[Ordre], ctx: Contexte) -> tuple[dict[str, Any], int]:
-    # SEC-05 : ce chemin n'ouvre aucune liaison et ne publie rien.
-    refus = _refuser(ordres, ctx, "simulation")
-    if refus:
-        return refus, CODE_REFUS
-    appareil = coffre.appareil_connu()
-    etapes = [mouvement.simuler(ordre, ctx.cal, appareil) for ordre in ordres]
-    for etape in etapes:
-        ctx.journal.ecrire("ordre-simule", **etape)  # SEC-06
-    return {"mode": "simulation", "etapes": etapes, "interrompue": False}, 0
-
-
 async def _emettre(ordres: list[Ordre], ctx: Contexte) -> tuple[dict[str, Any], int]:
-    refus = _refuser(ordres, ctx, "réel")
+    refus = conduite.refuser(ordres, ctx.cal, ctx.journal, "réel")
     if refus:
         return refus, CODE_REFUS
-    ctx.journal.ecrire("session-reelle", strict=True, ordres=[str(ordre) for ordre in ordres])
     async with liaison.ouvrir_session(ctx.journal, ctx.cal, _AUTORISEES_ORDRES) as session:
-        bilan = await mouvement.executer_sequence(session, ordres)
-    for etape in bilan["etapes"]:
-        ctx.journal.ecrire("ordre-refuse" if "echec" in etape else "ordre-constate", **etape)
-    if bilan.get("arret_non_confirme"):
-        return bilan, CODE_ARRET_NON_CONFIRME
-    return bilan, 1 if bilan["interrompue"] else 0
+        return await conduite.emettre_ordres(session, ordres, ctx.journal)
 
 
 async def _commande_ordres(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
     ordres = _ordres(args)
-    bilan, code = await _emettre(ordres, ctx) if args.reel else _simuler(ordres, ctx)
+    bilan, code = await _emettre(ordres, ctx) if args.reel else conduite.simuler_ordres(ordres, ctx.cal, ctx.journal)
     if args.commande == "sequence":
         return {"sequence": args.etapes} | bilan, code
     if bilan["etapes"]:
@@ -289,41 +275,17 @@ async def _commande_connexion(args: argparse.Namespace, _ctx: Contexte) -> tuple
             "methode": methode, **appareils[choix]}, 0
 
 
-_COMMANDES = {"connexion": _commande_connexion, "diagnostic": _commande_diagnostic, "etat": _commande_etat}
-
-# Sortie lisible : les clés JSON restent en ASCII, l'affichage porte les accents.
-_LIBELLES = {
-    "duree_s": "durée (s)", "cadence_hz": "cadence (Hz)", "emissions_prevues": "émissions prévues",
-    "arret_final": "arrêt final", "categorie": "catégorie", "hexadecimal": "hexadécimal",
-    "vitesse_lineaire_m_s": "vitesse linéaire (m/s)", "vitesse_angulaire_rad_s": "vitesse angulaire (rad/s)",
-    "repetitions": "répétitions", "precede_si_telecommande": "précédé, si le robot est en télécommande, de",
-    "hauteur_coupe_mm": "hauteur de coupe (mm)", "hauteur_avant_mm": "hauteur avant (mm)",
-    "hauteur_apres_mm": "hauteur après (mm)", "emissions": "émissions", "etat_rafraichi": "état rafraîchi",
-    "apres": "après", "statut_apres": "statut après", "deplacement_m": "déplacement (m)",
-    "rotation_deg": "rotation (°)", "est_m": "est (m)", "nord_m": "nord (m)", "cap_deg": "cap (°)",
-    "arrets_acquittes": "arrêts acquittés", "codes_emis": "codes émis", "echec": "échec", "etapes": "étapes",
-    "sequence": "séquence", "en_ligne": "en ligne", "batterie_pct": "batterie (%)",
-    "statut_libelle": "statut (libellé)", "position_est_m": "position est (m)",
-    "position_nord_m": "position nord (m)", "age_position_s": "âge de la position (s)",
-    "rtk_satellites": "satellites RTK", "signal_4g": "signal 4G", "signal_wifi": "signal Wi-Fi",
-    "wifi_rssi_dbm": "Wi-Fi RSSI (dBm)", "age_etat_s": "âge de l'état (s)", "etape": "étape",
-    "reussi": "réussi", "detail": "détail", "region": "région", "methode": "méthode",
-    "vitesse_m_s": "vitesse (m/s)", "vitesse_rad_s": "vitesse (rad/s)",
-    "deplacement_commande_m": "déplacement commandé (m)", "deplacement_commande_deg": "déplacement commandé (°)",
-    "observation_s": "fenêtre d'observation (s)",
-    "deplacement_si_consigne_conservee_m": "déplacement si la consigne est conservée (m)",
-    "puis_pause": "puis mise en pause de la tâche", "acquittee": "acquittée",
-    "non_executees": "étapes non exécutées", "arret_non_confirme": "arrêt non confirmé",
-    "avance_m": "avance le long du cap (m)", "verifie": "ordre vérifié par le constat",
+_COMMANDES = {
+    "connexion": _commande_connexion, "diagnostic": _commande_diagnostic, "etat": _commande_etat,
+    "ui": _commande_ui,
 }
-
 
 def _lignes(objet: Any, retrait: int = 0) -> list[str]:
     marge = "  " * retrait
     if isinstance(objet, dict):
         lignes: list[str] = []
         for cle, valeur in objet.items():
-            titre = _LIBELLES.get(cle) or str(cle).replace("_", " ")
+            titre = conduite.LIBELLES.get(cle) or str(cle).replace("_", " ")
             if isinstance(valeur, (dict, list)) and valeur:
                 lignes += [f"{marge}{titre} :", *_lignes(valeur, retrait + 1)]
             else:
