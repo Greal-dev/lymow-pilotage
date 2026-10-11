@@ -17,6 +17,38 @@
   </header>
 
   <main>
+    <section id="bloc-compte" aria-labelledby="titre-compte">
+      <h2 id="titre-compte">Compte</h2>
+      <p id="compte-etat" class="note">…</p>
+      <p class="actions">
+        <label>Région <select id="compte-region"></select></label>
+        <button id="compte-connecter" type="button">Se connecter avec Google</button>
+        <button id="compte-deconnecter" type="button" hidden>Se déconnecter de ce poste</button>
+      </p>
+      <div id="compte-marche" hidden>
+        <ol>
+          <li>Dans l'onglet qui vient de s'ouvrir, ouvrez les outils de développement (F12), onglet « Réseau ».</li>
+          <li>Cochez « Conserver le journal » (« Preserve log ») <strong>avant</strong> de valider la connexion Google.</li>
+          <li>Connectez-vous avec le compte Google du robot. La page finale ne s'affiche pas : c'est normal.</li>
+          <li>Dans l'onglet Réseau, repérez la ligne qui commence par <code>myapp://callback/?code=</code> et copiez
+            son adresse complète.</li>
+          <li>Collez-la ci-dessous et validez sans attendre : le code expire en une minute environ.</li>
+        </ol>
+        <p><a id="compte-lien" target="_blank" rel="noopener noreferrer">Ouvrir de nouveau la page de connexion Google</a></p>
+        <form id="compte-formulaire">
+          <label>Adresse de rappel
+            <input id="compte-adresse" type="password" autocomplete="off" spellcheck="false" class="large">
+          </label>
+          <p class="actions"><button type="submit">Valider</button></p>
+        </form>
+      </div>
+      <div id="compte-choix" hidden>
+        <p class="note">Plusieurs appareils sur ce compte : choisissez celui à piloter.</p>
+        <ul id="compte-appareils"></ul>
+      </div>
+      <p id="compte-message" class="note" role="status"></p>
+    </section>
+
     <section id="bloc-etat" aria-labelledby="titre-etat">
       <h2 id="titre-etat">État du robot</h2>
       <p id="etat-absent" class="note"></p>

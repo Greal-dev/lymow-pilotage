@@ -30,7 +30,8 @@ Python 3.12) ; il se régénère avec
 
 | Commande | Effet |
 |---|---|
-| `lymow connexion` | Compte Google : affiche l'adresse à ouvrir, puis lit l'adresse de rappel `myapp://callback/?code=…&state=…` sans écho. `--mot-de-passe` : compte à adresse et mot de passe. |
+| `lymow connexion` | Compte Google : affiche l'adresse à ouvrir, puis lit l'adresse de rappel `myapp://callback/?code=…&state=…` sans écho. `--mot-de-passe` : compte à adresse et mot de passe. La connexion Google peut aussi se faire depuis la page de `lymow ui`. |
+| `lymow deconnexion` | Efface de ce poste l'accès au compte (les quatre entrées du coffre) ; rien n'est supprimé côté Lymow. |
 | `lymow diagnostic` | Jeton présent, rafraîchissement, appareils, MQTT, réception d'un état, micrologiciel. Ne publie rien. |
 | `lymow etat` | État du robot. `--passif` : n'émet aucune requête. `--attente S` : attente maximale (75 s). |
 | `lymow tourner (<degrés> \| --duree S) [--vitesse V]` | Pivote ; positif = gauche. 180° au plus. |
@@ -90,8 +91,23 @@ navigateur et s'arrête sur Ctrl+C. `lancer-lymow.cmd` (double-clic) lance
 - Le mouvement vit dans le serveur : fermer l'onglet ne supprime pas son arrêt
   final. Ctrl+C pendant un mouvement arrête le robot, puis le serveur.
 - Sans compte enregistré, la page fonctionne en prévisualisation et affiche
-  « non connecté — lancez `lymow connexion` » : aucune connexion au cloud.
-  Aucun identifiant n'est jamais saisi dans la page.
+  « non connecté » : aucune connexion au cloud tant qu'on ne se connecte pas.
+- **Connexion depuis la page** (panneau « Compte », compte Google uniquement) :
+  « Se connecter avec Google » ouvre la page de connexion dans un nouvel
+  onglet ; la marche à suivre s'affiche (F12, onglet Réseau, « Conserver le
+  journal » coché avant de valider, copier l'adresse `myapp://callback/?code=…`)
+  et l'adresse de rappel se colle dans un champ masqué. Le serveur garde seul
+  le vérificateur PKCE et le `state` (une tentative à la fois, 10 minutes,
+  usage unique), puis passe par les mêmes fonctions que `lymow connexion` :
+  `state` vérifié, échange, choix de l'appareil s'il y en a plusieurs,
+  écriture au coffre, ouverture de la liaison. Le code expire en une minute
+  environ : coller et valider sans attendre. « Se déconnecter de ce poste »
+  efface les entrées du coffre, comme `lymow deconnexion`. Ni l'adresse de
+  rappel, ni le code, ni aucun jeton n'apparaissent dans les journaux, dans la
+  console du serveur ou dans les messages renvoyés à la page. Aucun mot de
+  passe ne transite jamais par la page : la variante `--mot-de-passe` reste
+  réservée à la ligne de commande. Ces actions sont refusées pendant un
+  mouvement.
 - Avec un compte enregistré, l'interface ouvre la liaison même en simulation,
   pour afficher l'état : elle n'émet alors que les deux requêtes pures
   (présence et demande de configuration), jamais un ordre.

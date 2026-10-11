@@ -104,6 +104,7 @@
     $("mode").className = "pastille" + (modeReel ? " reel" : "");
     $("liaison").textContent = image.liaison + (image.occupe ? " — ordre en cours" : "");
     $("appareil").textContent = image.appareil || "";
+    afficherCompte(image.compte);
     var bloc = $("bloc-etat");
     var liste = $("etat-liste");
     vider(liste);
@@ -149,6 +150,98 @@
       noeud.textContent = textes[noeud.dataset.borne] || "";
     });
     $("exposition-essai").textContent = "Exposition : " + bornes.exposition_essai + ".";
+  }
+
+  // --- compte ---------------------------------------------------------------
+  // Aucun secret n'est gardé ici : le vérificateur et le « state » restent dans le serveur local.
+
+  function messageCompte(texte) { $("compte-message").textContent = texte; }
+
+  function afficherCompte(compte) {
+    if (!compte) { return; }
+    $("bloc-compte").classList.toggle("mise-en-avant", !compte.connecte);
+    $("compte-etat").textContent = compte.connecte
+      ? "Connecté — région " + compte.region + ", appareil " + compte.appareil + "."
+      : "Non connecté : aucun compte enregistré sur ce poste.";
+    $("compte-deconnecter").hidden = !compte.connecte;
+    $("compte-connecter").textContent = compte.connecte ? "Changer de compte Google" : "Se connecter avec Google";
+    if (!compte.tentative) { $("compte-marche").hidden = true; }
+    var choix = $("compte-choix");
+    choix.hidden = !compte.choix;
+    var liste = $("compte-appareils");
+    vider(liste);
+    (compte.choix || []).forEach(function (propose) {
+      var ligne = element("li");
+      var bouton = element("button", propose.nom + " (" + propose.appareil + ")");
+      bouton.type = "button";
+      bouton.addEventListener("click", function () {
+        appeler("/api/compte/choisir", { appareil: propose.appareil })
+          .then(function () { messageCompte("Connexion réussie."); })
+          .catch(function (erreur) { messageCompte(erreur.message); });
+      });
+      ligne.appendChild(bouton);
+      liste.appendChild(ligne);
+    });
+  }
+
+  function remplirRegions(regions, defaut) {
+    var choix = $("compte-region");
+    vider(choix);
+    (regions || []).forEach(function (region) {
+      var option = element("option", region);
+      option.value = region;
+      option.selected = region === defaut;
+      choix.appendChild(option);
+    });
+  }
+
+  async function commencerConnexion() {
+    messageCompte("");
+    var reponse;
+    try {
+      reponse = await appeler("/api/compte/commencer", { region: $("compte-region").value });
+    } catch (erreur) {
+      messageCompte(erreur.message);
+      return;
+    }
+    if (!/^https:/.test(reponse.url)) {
+      messageCompte("Adresse de connexion inattendue : rien n'a été ouvert.");
+      return;
+    }
+    $("compte-lien").href = reponse.url;
+    $("compte-adresse").value = "";
+    $("compte-marche").hidden = false;
+    // Navigation dans un nouvel onglet, sans lien de retour vers cette page.
+    window.open(reponse.url, "_blank", "noopener,noreferrer");
+    messageCompte("Si aucun onglet ne s'est ouvert, utilisez le lien ci-dessous. Tentative valable 10 minutes.");
+  }
+
+  async function validerConnexion(evenement) {
+    evenement.preventDefault();
+    var champ = $("compte-adresse");
+    var adresse = champ.value;
+    champ.value = ""; // l'adresse ne reste jamais dans la page, succès ou non
+    messageCompte("Vérification en cours…");
+    try {
+      var reponse = await appeler("/api/compte/valider", { adresse: adresse });
+      adresse = "";
+      $("compte-marche").hidden = true;
+      messageCompte(reponse.appareils ? "Choisissez l'appareil à piloter." : "Connexion réussie.");
+    } catch (erreur) {
+      adresse = "";
+      $("compte-marche").hidden = true;
+      messageCompte(erreur.message + " Recommencez avec « Se connecter avec Google ».");
+    }
+  }
+
+  async function deconnecter() {
+    if (!window.confirm("Effacer de ce poste l'accès au compte ? Il faudra se reconnecter avec Google.")) { return; }
+    try {
+      await appeler("/api/compte/deconnecter");
+      messageCompte("Compte effacé de ce poste.");
+    } catch (erreur) {
+      messageCompte(erreur.message);
+    }
   }
 
   // --- ordres ---------------------------------------------------------------
@@ -391,6 +484,9 @@
     appeler("/api/actualiser").then(appliquer).catch(function (erreur) { $("liaison").textContent = erreur.message; });
   });
   $("video-demarrer").addEventListener("click", demarrerVideo);
+  $("compte-connecter").addEventListener("click", commencerConnexion);
+  $("compte-formulaire").addEventListener("submit", validerConnexion);
+  $("compte-deconnecter").addEventListener("click", deconnecter);
   $("video-arreter").addEventListener("click", function () { arreterVideo(); });
 
   window.addEventListener("pagehide", function () {
@@ -417,6 +513,7 @@
       libelles = image.libelles || {};
       bornes = image.bornes || {};
       afficherBornes();
+      remplirRegions(image.regions, image.region_defaut);
       appliquer(image);
       var flux = new EventSource("/api/flux");
       flux.onmessage = function (evenement) { appliquer(JSON.parse(evenement.data)); };

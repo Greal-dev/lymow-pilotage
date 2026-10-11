@@ -59,7 +59,7 @@ def extraire_code(saisie: str, etat_attendu: str) -> str:
     declarer_secret(saisie)
     if not saisie.startswith(REDIRECTION):
         raise ErreurAuth(
-            "collez l'URL de rappel complète (myapp://callback/?code=…&state=…) : "
+            "collez l'adresse de rappel complète (elle commence par myapp et porte code et state) : "
             "un code seul ne permet pas de vérifier le paramètre state"
         )
     parametres = parse_qs(urlparse(saisie).query)

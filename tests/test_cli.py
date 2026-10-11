@@ -339,7 +339,7 @@ def test_diagnostic_complet_ne_publie_rien(capsys, tmp_path, monkeypatch, liaiso
 
 
 def test_connexion_google_ne_stocke_que_le_jeton_de_rafraichissement(capsys, tmp_path, monkeypatch):
-    from lymow_pilotage import auth, coffre
+    from lymow_pilotage import auth, coffre, compte
     from lymow_pilotage.vendor.ha_lymow.auth import LymowAuth
 
     stocke: dict[str, str] = {}
@@ -360,7 +360,7 @@ def test_connexion_google_ne_stocke_que_le_jeton_de_rafraichissement(capsys, tmp
     monkeypatch.setattr(cli.getpass, "getpass", saisie_masquee)
     monkeypatch.setattr(auth, "echanger_code", echange)
     monkeypatch.setattr(LymowAuth, "get_aws_credentials", cles_aws)
-    monkeypatch.setattr(cli, "LymowApiClient", FauxApi)
+    monkeypatch.setattr(compte, "LymowApiClient", FauxApi)
     monkeypatch.setattr(aiohttp, "ClientSession", FauxHttp)
     monkeypatch.setattr(coffre, "ecrire", stocke.__setitem__)
 
@@ -387,3 +387,15 @@ def test_etat_n_emet_que_des_requetes_pures_et_passif_rien(capsys, tmp_path, lia
     code, _sortie = lancer(capsys, tmp_path, "etat", "--passif")
     assert code == 0 and lien.publies == []
     assert liaison_factice[1] == frozenset()
+
+
+def test_deconnexion_efface_les_quatre_entrees_du_coffre_et_rien_d_autre(capsys, tmp_path, monkeypatch):
+    import keyring
+
+    from lymow_pilotage import coffre
+
+    effacees = []
+    monkeypatch.setattr(keyring, "delete_password", lambda service, cle: effacees.append((service, cle)))
+    code, sortie = lancer(capsys, tmp_path, "deconnexion")
+    assert code == 0 and "effacée" in sortie["connexion"]
+    assert effacees == [(coffre.SERVICE, cle) for cle in ("jeton-rafraichissement", "region", "appareil", "methode")]

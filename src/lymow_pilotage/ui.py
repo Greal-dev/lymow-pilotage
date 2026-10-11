@@ -25,7 +25,7 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
-from . import auth, conduite, liaison, mouvement, securite
+from . import auth, compte, conduite, liaison, mouvement, securite
 from .config import Calibration
 from .journal import Journal, assainir, declarer_secret, masquer
 from .mouvement import ErreurSaisie, Ordre
@@ -35,6 +35,7 @@ HOTE = "127.0.0.1"  # jamais 0.0.0.0 : aucune option ne change cette valeur
 PORT_DEFAUT = 8377
 COOKIE = "lymow_ui"
 DUREE_PREVISUALISATION_S = 60.0
+DUREE_TENTATIVE_S = 600.0  # connexion au compte : une tentative à la fois, dix minutes
 ETAPES_MAX = 20
 NOMBRE_MAX = 1_000_000  # au-delà, une valeur de la page est refusée sans calcul
 STATIQUE = Path(__file__).resolve().parent / "ui_statique"
@@ -124,6 +125,10 @@ class ServeurUI:
         self.fin = asyncio.Event()
         self.fournir_video = self._video
         self.video_ouverte = False
+        # Connexion au compte : vérificateur PKCE et `state` ne quittent jamais la mémoire du serveur.
+        self.tentative: tuple[auth.DemandeOAuth, float] | None = None
+        self.choix: dict[str, Any] | None = None
+        self.ouvrir_http = lambda: aiohttp.ClientSession(timeout=liaison.DELAI_HTTP)
         self._stop_demande = False
         self._verrou_stop = asyncio.Lock()
         # Un seul rafraîchissement de jeton à la fois : Cognito fait tourner le jeton stocké.
@@ -148,6 +153,10 @@ class ServeurUI:
                 web.post("/api/video/demarrer", self._video_demarrer),
                 web.post("/api/video/arreter", self._video_arreter),
                 web.get("/favicon.ico", self._sans_contenu),
+                web.post("/api/compte/commencer", self._compte_commencer),
+                web.post("/api/compte/valider", self._compte_valider),
+                web.post("/api/compte/choisir", self._compte_choisir),
+                web.post("/api/compte/deconnecter", self._compte_deconnecter),
             ]
         )
         # Pas de journal d'accès : la première requête porte le jeton dans son adresse.
@@ -306,12 +315,16 @@ class ServeurUI:
             "liaison": self.etat_liaison,
             "appareil": self.ident.appareil if self.ident else None,
             "occupe": self.occupe,
+            "compte": self._compte(),
             "etat": etat,
             "resultat": self.resultat,
             "journal": self.fil[-100:],
         }
         if complet:
-            image |= {"bornes": _bornes(), "libelles": conduite.LIBELLES}
+            image |= {
+                "bornes": _bornes(), "libelles": conduite.LIBELLES,
+                "regions": list(auth.REGIONS), "region_defaut": auth.REGION_DEFAUT,
+            }
         return image
 
     async def _etat(self, _requete: web.Request) -> web.StreamResponse:
@@ -347,9 +360,7 @@ class ServeurUI:
             return _refus(409, "un ordre est en cours")
         async with self._verrou_acces:  # deux actualisations ne rouvrent jamais deux liaisons
             if self.session is None or not self.session.lien.connecte:
-                await self._pile.aclose()
-                self._pile, self.session = AsyncExitStack(), None
-                await self._connecter_sans_verrou()
+                await self._rouvrir_liaison()
             else:
                 await self.session.solliciter()
         self._noter(f"actualisation : {self.etat_liaison}")
@@ -442,10 +453,115 @@ class ServeurUI:
                 self._stop_demande = False
             return web.json_response({"accepte": True}, status=202)
 
+    # --- compte : mêmes fonctions que `lymow connexion`, Google seulement ------
+
+    def _compte(self) -> dict[str, Any]:
+        """Jamais de jeton ici : seulement ce que la page a le droit d'afficher."""
+        ident = self.ident
+        return {
+            "connecte": ident is not None,
+            "region": ident.region if ident else None,
+            "appareil": ident.appareil if ident else None,
+            "tentative": self.tentative is not None and self.horloge() <= self.tentative[1],
+            "choix": self.choix["appareils"] if self.choix else None,
+        }
+
+    def _refuser_si_occupe(self) -> None:
+        if self.occupe or self._stop_demande:
+            raise web.HTTPConflict(reason="un ordre est en cours : attendez sa fin ou faites STOP")
+
+    def _connexion_refusee(self, motif: str) -> web.Response:
+        motif = masquer(motif)
+        self._noter(f"connexion refusée : {motif}")
+        return _refus(400, f"connexion refusée : {motif}")
+
+    async def _compte_commencer(self, requete: web.Request) -> web.StreamResponse:
+        self._refuser_si_occupe()
+        corps = await self._corps(requete)
+        region = corps.get("region") if isinstance(corps, dict) else None
+        if region not in auth.REGIONS:
+            raise ErreurSaisie("région inconnue")
+        demande = auth.preparer_connexion(region)
+        # Une seule tentative active : la nouvelle rend caduque la précédente.
+        self.tentative, self.choix = (demande, self.horloge() + DUREE_TENTATIVE_S), None
+        self._noter("connexion : tentative ouverte")  # l'adresse d'autorisation n'est pas journalisée
+        return web.json_response({"url": demande.url, "expire_s": DUREE_TENTATIVE_S})
+
+    async def _compte_valider(self, requete: web.Request) -> web.StreamResponse:
+        self._refuser_si_occupe()
+        corps = await self._corps(requete)
+        adresse = corps.get("adresse") if isinstance(corps, dict) else None
+        if isinstance(adresse, str):
+            declarer_secret(adresse.strip())  # avant tout : aucun refus ne doit la faire fuiter
+        tentative, self.tentative = self.tentative, None  # usage unique, même en cas de refus
+        if tentative is None:
+            return self._connexion_refusee("aucune tentative en cours : cliquez de nouveau sur « Se connecter avec Google »")
+        if self.horloge() > tentative[1]:
+            return self._connexion_refusee("tentative expirée : recommencez")
+        if not isinstance(adresse, str) or len(adresse) > 4096:
+            return self._connexion_refusee("adresse de rappel attendue")
+        demande = tentative[0]
+        try:
+            async with self._verrou_acces, self.ouvrir_http() as http:
+                jetons = await auth.echanger_code(http, demande, adresse)  # vérifie `state`, comme la commande
+                jeton = compte.jeton_durable(jetons)
+                appareils = await compte.appareils_du_compte(http, jetons, demande.region)
+        except auth.ErreurAuth as erreur:
+            return self._connexion_refusee(str(erreur))  # messages écrits par nous, sans secret
+        except Exception:  # noqa: BLE001 — jamais le texte d'origine : il peut citer une adresse
+            return self._connexion_refusee("échange refusé par le service (code expiré ou déjà utilisé ?) : recommencez")
+        if len(appareils) > 1:
+            self.choix = {
+                "jeton": jeton, "region": demande.region, "appareils": appareils,
+                "expire": self.horloge() + DUREE_TENTATIVE_S,
+            }
+            self._noter("connexion : plusieurs appareils, choix demandé")
+            return web.json_response({"appareils": appareils})
+        return await self._compte_enregistrer(jeton, demande.region, appareils[0]["appareil"])
+
+    async def _compte_choisir(self, requete: web.Request) -> web.StreamResponse:
+        self._refuser_si_occupe()
+        corps = await self._corps(requete)
+        appareil = corps.get("appareil") if isinstance(corps, dict) else None
+        choix = self.choix
+        if choix is None or self.horloge() > choix["expire"]:
+            self.choix = None
+            return self._connexion_refusee("aucun choix d'appareil en attente : recommencez")
+        if appareil not in [propose["appareil"] for propose in choix["appareils"]]:
+            raise ErreurSaisie("appareil hors de la liste proposée")
+        self.choix = None
+        return await self._compte_enregistrer(choix["jeton"], choix["region"], appareil)
+
+    async def _rouvrir_liaison(self) -> None:
+        await self._pile.aclose()
+        self._pile, self.session = AsyncExitStack(), None
+        await self._connecter_sans_verrou()
+
+    async def _compte_enregistrer(self, jeton: str, region: str, appareil: str) -> web.StreamResponse:
+        async with self._verrou_acces:
+            compte.enregistrer(jeton, region, appareil, auth.METHODE_GOOGLE)
+            await self._rouvrir_liaison()  # mêmes règles qu'au démarrage : session bridée en simulation
+        self.journal.ecrire("compte-enregistre", region=region)
+        self._noter("connexion réussie")
+        return web.json_response({"connecte": self.ident is not None, "liaison": self.etat_liaison})
+
+    async def _compte_deconnecter(self, _requete: web.Request) -> web.StreamResponse:
+        self._refuser_si_occupe()
+        async with self._verrou_acces:
+            await self._pile.aclose()
+            self._pile, self.session = AsyncExitStack(), None
+            compte.oublier()
+            self.ident, self.etat_liaison = None, NON_CONNECTE
+        self.tentative = self.choix = None
+        self.video_ouverte = False
+        self.journal.ecrire("compte-oublie")
+        self._noter("compte effacé de ce poste")
+        return web.json_response({"connecte": False})
+
     # --- vidéo ----------------------------------------------------------------
 
     async def _video(self) -> dict[str, Any]:
-        async with self._verrou_acces, aiohttp.ClientSession(timeout=liaison.DELAI_HTTP) as http:
+        async with self._verrou_acces, self.ouvrir_http() as http:
             # Relu à chaque fois : `obtenir_acces` fait tourner le jeton dans le coffre, et
             # présenter l'ancien pourrait révoquer la connexion du compte.
             self.ident = liaison.lire_identifiants()

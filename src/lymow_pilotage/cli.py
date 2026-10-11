@@ -16,14 +16,13 @@ from typing import Any
 
 import aiohttp
 
-from . import auth, coffre, conduite, config, liaison, mouvement, securite
+from . import auth, compte, conduite, config, liaison, mouvement, securite
 from .conduite import CODE_ARRET_NON_CONFIRME, CODE_REFUS
-from .journal import Journal, declarer_secret, masquer
+from .journal import Journal, masquer
 from .mouvement import ErreurSaisie, Ordre
 from .protocole import Categorie
 from .securite import RefusSecurite
 from .vendor.ha_lymow.api import LymowApiClient
-from .vendor.ha_lymow.auth import LymowAuth
 
 _ORDRES_SIMPLES = ("plateau-haut", "stop", "reprendre", "base", "annuler")
 _AUTORISEES_ORDRES = frozenset(Categorie)
@@ -73,8 +72,9 @@ def construire_analyseur() -> argparse.ArgumentParser:
     def ajouter(nom: str, aide: str) -> argparse.ArgumentParser:
         return commandes.add_parser(nom, parents=fils, help=aide, allow_abbrev=False)
 
-    connexion = ajouter("connexion", "enregistrer l'accès au compte (Google par défaut)")
+    connexion = ajouter("connexion", "enregistrer l'accès au compte (Google par défaut ; possible aussi depuis « lymow ui »)")
     connexion.add_argument("--mot-de-passe", action="store_true", help="compte Lymow à adresse et mot de passe")
+    ajouter("deconnexion", "effacer de ce poste l'accès au compte (rien n'est supprimé côté Lymow)")
     diagnostic = ajouter("diagnostic", "vérifier l'accès de bout en bout, sans rien publier")
     etat = ajouter("etat", "afficher l'état du robot (lecture seule)")
     etat.add_argument("--passif", action="store_true", help="écoute seule : aucune requête émise")
@@ -131,7 +131,8 @@ def construire_analyseur() -> argparse.ArgumentParser:
     )
     sequence.add_argument("etapes", metavar='"étape; étape; …"')
     interface = ajouter(
-        "ui", "interface web locale (127.0.0.1 seulement) ; simulation sans --reel, quoi que demande la page"
+        "ui", "interface web locale (127.0.0.1 seulement) ; simulation sans --reel, quoi que demande la page ; "
+        "la connexion au compte Google peut s'y faire"
     )
     interface.add_argument(
         "--port", type=mouvement.lire_entier, default=PORT_UI, metavar="N", help=f"port local (défaut : {PORT_UI})"
@@ -200,7 +201,7 @@ async def _commande_diagnostic(_args: argparse.Namespace, ctx: Contexte) -> tupl
             noter(en_cours, True)
             en_cours = "liste des appareils"
             client = LymowApiClient(http, acces.jeton_acces, ident.region, acces.identite)
-            appareils = _appareils(await client.get_devices())
+            appareils = compte.appareils_lisibles(await client.get_devices())
             noter(en_cours, bool(appareils), appareils)
             en_cours = "connexion MQTT"
             # Diagnostic : aucune catégorie autorisée, donc aucune publication possible.
@@ -222,16 +223,6 @@ async def _commande_diagnostic(_args: argparse.Namespace, ctx: Contexte) -> tupl
     return {"diagnostic": "complet" if reussi else "incomplet", "etapes": etapes}, 0 if reussi else 1
 
 
-def _appareils(brut: Any) -> list[dict[str, str]]:
-    """Réponse du nuage non fiable : on n'en garde que deux chaînes bornées."""
-    liste = brut if isinstance(brut, list) else []
-    return [
-        {"nom": str(a.get("deviceName") or "sans nom")[:60], "appareil": str(a["deviceThingName"])[:128]}
-        for a in liste
-        if isinstance(a, dict) and a.get("deviceThingName")
-    ]
-
-
 async def _commande_connexion(args: argparse.Namespace, _ctx: Contexte) -> tuple[Any, int]:
     region = input(f"Région du compte [{auth.REGION_DEFAUT}] : ").strip() or auth.REGION_DEFAUT
     async with aiohttp.ClientSession(timeout=liaison.DELAI_HTTP) as http:
@@ -249,15 +240,8 @@ async def _commande_connexion(args: argparse.Namespace, _ctx: Contexte) -> tuple
             saisie = getpass.getpass("Adresse de rappel myapp://callback/… (saisie invisible) : ")
             jetons = await auth.echanger_code(http, demande, saisie)
             methode = auth.METHODE_GOOGLE
-        jeton = jetons.get("RefreshToken")
-        if not isinstance(jeton, str) or not jeton:
-            raise auth.ErreurAuth("le service n'a pas fourni de jeton de rafraîchissement")
-        aws = await LymowAuth(http).get_aws_credentials(jetons["IdToken"], region)
-        declarer_secret(aws["identity_id"])
-        client = LymowApiClient(http, jetons["AccessToken"], region, aws["identity_id"])
-        appareils = _appareils(await client.get_devices())
-    if not appareils:
-        raise auth.ErreurAuth("aucun appareil sur ce compte")
+        jeton = compte.jeton_durable(jetons)
+        appareils = await compte.appareils_du_compte(http, jetons, region)
     choix = 0
     if len(appareils) > 1:
         for rang, appareil in enumerate(appareils, 1):
@@ -265,18 +249,20 @@ async def _commande_connexion(args: argparse.Namespace, _ctx: Contexte) -> tuple
         choix = int(input("Numéro de l'appareil à piloter : ")) - 1
         if not 0 <= choix < len(appareils):
             raise ErreurSaisie("numéro d'appareil hors liste")
-    # Seul le jeton de rafraîchissement est conservé ; les jetons courts sont jetés.
-    for cle, valeur in (
-        (coffre.JETON, jeton), (coffre.REGION, region),
-        (coffre.APPAREIL, appareils[choix]["appareil"]), (coffre.METHODE, methode),
-    ):
-        coffre.ecrire(cle, valeur)
+    compte.enregistrer(jeton, region, appareils[choix]["appareil"], methode)
     return {"connexion": "enregistrée dans le Gestionnaire d'identification Windows", "region": region,
             "methode": methode, **appareils[choix]}, 0
 
 
+async def _commande_deconnexion(_args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
+    compte.oublier()
+    ctx.journal.ecrire("compte-oublie")
+    return {"connexion": "effacée de ce poste (Gestionnaire d'identification Windows)"}, 0
+
+
 _COMMANDES = {
-    "connexion": _commande_connexion, "diagnostic": _commande_diagnostic, "etat": _commande_etat,
+    "connexion": _commande_connexion, "deconnexion": _commande_deconnexion,
+    "diagnostic": _commande_diagnostic, "etat": _commande_etat,
     "ui": _commande_ui,
 }
 

@@ -21,10 +21,11 @@ from lymow_pilotage.protocole import Categorie, est_requete_pure
 IDENT = liaison.Identifiants("eu-west-1", "robot-test", "google", "raf-secret-555")
 PAUSE = bytes.fromhex("10 31 28 03")
 AVANCER_1 = {"ordres": [{"nom": "avancer", "valeur": 1}]}
+COMPTE = ("/api/compte/commencer", "/api/compte/valider", "/api/compte/choisir", "/api/compte/deconnecter")
 
 
 @asynccontextmanager
-async def serveur_ui(tmp_path, monkeypatch, *, reel, session=None):
+async def serveur_ui(tmp_path, monkeypatch, *, reel, session=None, coffre_factice=None):
     """Serveur démarré sur un port libre ; `session=None` = aucun compte enregistré."""
     ouvertures = []
     simultanees = [0, 0]  # ouvertes maintenant, maximum observé
@@ -46,7 +47,14 @@ async def serveur_ui(tmp_path, monkeypatch, *, reel, session=None):
         finally:
             simultanees[0] -= 1
 
-    monkeypatch.setattr(liaison, "lire_identifiants", sans_compte if session is None else lambda: IDENT)
+    if coffre_factice is None:
+        monkeypatch.setattr(liaison, "lire_identifiants", sans_compte if session is None else lambda: IDENT)
+    else:  # le vrai `lire_identifiants`, sur un coffre en mémoire
+        from lymow_pilotage import coffre
+
+        monkeypatch.setattr(coffre, "lire", coffre_factice.get)
+        monkeypatch.setattr(coffre, "ecrire", coffre_factice.__setitem__)
+        monkeypatch.setattr(coffre, "effacer", coffre_factice.clear)
     monkeypatch.setattr(liaison, "ouvrir_session", ouvrir)
     serveur = ui.ServeurUI(Calibration(), Journal(tmp_path), reel=reel, port=0)
     serveur.ouvertures = ouvertures
@@ -168,7 +176,7 @@ def test_refus_sans_temoin_sur_toutes_les_routes(tmp_path, monkeypatch):
                 assert "default-src 'self'" in recus["Content-Security-Policy"]  # en-têtes aussi sur un refus
                 assert recus["X-Content-Type-Options"] == "nosniff" and recus["Cache-Control"] == "no-store"
             mauvais = (None, "lymow_ui=faux", f"lymow_ui={serveur.temoin[:-1]}", f"lymow_ui={serveur.jeton}")
-            for chemin in ("/api/previsualiser", "/api/emettre", "/api/stop", "/api/actualiser", "/api/video/demarrer"):
+            for chemin in ("/api/previsualiser", "/api/emettre", "/api/stop", "/api/actualiser", "/api/video/demarrer", *COMPTE):
                 for temoin in mauvais:  # le jeton d'adresse lui-même n'authentifie aucune route
                     statut, _corps, _recus = await poster(http, serveur, chemin, AVANCER_1, Cookie=temoin)
                     assert statut == 403, chemin
@@ -237,7 +245,7 @@ def test_refus_d_une_origine_etrangere_sur_toute_requete_modifiante(tmp_path, mo
     async def scenario():
         async with serveur_ui(tmp_path, monkeypatch, reel=True) as (serveur, http):
             valeur = origine.format(port=serveur.port) if origine else None
-            for chemin in ("/api/previsualiser", "/api/emettre", "/api/stop", "/api/actualiser"):
+            for chemin in ("/api/previsualiser", "/api/emettre", "/api/stop", "/api/actualiser", *COMPTE):
                 statut, _corps, _recus = await poster(http, serveur, chemin, AVANCER_1, Origin=valeur)
                 assert statut == 403, chemin
 
@@ -496,7 +504,9 @@ def test_corps_non_json_refuse_proprement(tmp_path, monkeypatch):
 
 # --- fichiers statiques -----------------------------------------------------
 
-EXTERNE = re.compile(r"(?:https?:|wss?:)?//[A-Za-z0-9]|@import|url\(", re.IGNORECASE)
+# Ressource externe : adresse absolue, ou relative au protocole. « myapp://callback » n'en est pas une :
+# c'est le texte de la marche à suivre, aucun navigateur ne sait le charger.
+EXTERNE = re.compile(r"(?:https?:|wss?:)//|(?<!:)//[A-Za-z0-9]|@import|url\(", re.IGNORECASE)
 # Toute forme d'insertion de HTML ou d'exécution de texte : affectation, « += », accès par crochets…
 HTML_DYNAMIQUE = re.compile(
     r"innerHTML|outerHTML|insertAdjacentHTML|document\s*\.\s*write|\beval\s*\(|new\s+Function|srcdoc"
@@ -526,7 +536,11 @@ def test_la_page_n_insere_jamais_de_html_ni_ne_demande_d_identifiants():
     assert "localStorage" not in script and "sessionStorage" not in script
     assert "history.replaceState" in script
     page = (ui.STATIQUE / "index.html").read_text(encoding="utf-8")
-    assert 'type="password"' not in page and "autoplay" not in page
+    # Un seul champ masqué : l'adresse de rappel. Ni mot de passe ni adresse de compte dans la page.
+    assert page.count('type="password"') == 1 and 'id="compte-adresse" type="password" autocomplete="off"' in page
+    assert "mot de passe" not in page.lower() and 'type="email"' not in page and "autoplay" not in page
+    assert 'target="_blank" rel="noopener noreferrer"' in page
+    assert 'window.open(reponse.url, "_blank", "noopener,noreferrer")' in script
     assert "muted playsinline" in page
 
 
@@ -660,8 +674,8 @@ def test_video_relit_le_coffre_a_chaque_acces_et_ne_rafraichit_jamais_en_paralle
     monkeypatch.setattr(auth, "rafraichir", rafraichir)
     monkeypatch.setattr(LymowAuth, "get_aws_credentials", cles_aws)
     monkeypatch.setattr(liaison, "demarrer_video", video)
-    monkeypatch.setattr(aiohttp, "ClientSession", FauxHttp)
     serveur = ui.ServeurUI(Calibration(), Journal(tmp_path), reel=False, port=0)
+    serveur.ouvrir_http = FauxHttp
 
     async def scenario():
         await serveur._video()  # le vrai chemin : coffre, rafraîchissement, vidéo
@@ -832,3 +846,287 @@ def test_resultat_et_signalements_filtres_comme_le_journal(tmp_path, monkeypatch
     ecran = executer(scenario())
     assert "valeur-secrete-424242" not in ecran and "valeur-secrete-424242" not in capsys.readouterr().err
     assert "[SECRET]" in ecran
+
+
+# --- sixième avenant : connexion au compte depuis la page --------------------
+
+JETONS = {"access_token": "acces-court-aaa111", "id_token": "identite-courte-bbb222", "refresh_token": "raf-durable-ccc333"}
+
+
+class ReponseOAuth:
+    def __init__(self, statut=200, donnees=None):
+        self.status, self.ok, self._donnees = statut, statut < 400, JETONS if donnees is None else donnees
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+    async def json(self, content_type=None):
+        return self._donnees
+
+    async def read(self):
+        return b'{"error":"invalid_grant","detail":"fuite-corps-ddd444"}'
+
+
+class HttpOAuth(FauxHttp):
+    """Double du service de jetons : enregistre ce que le serveur local lui envoie."""
+
+    envois: list = []
+    statut = 200
+
+    def post(self, adresse, **kwargs):
+        HttpOAuth.envois.append((adresse, kwargs))
+        return ReponseOAuth(HttpOAuth.statut)
+
+
+class ApiAppareils:
+    appareils = [{"deviceThingName": "robot-test", "deviceName": "Tondeuse"}]
+
+    def __init__(self, *_args):
+        pass
+
+    async def get_devices(self):
+        return ApiAppareils.appareils
+
+
+@pytest.fixture
+def service_compte(monkeypatch):
+    """Doubles de tout ce qui parlerait au nuage pendant une connexion."""
+    from lymow_pilotage import compte
+    from lymow_pilotage.vendor.ha_lymow.auth import LymowAuth
+
+    async def cles_aws(_self, _id_token, _region):
+        return {"identity_id": "identite-aws-eee555", "credentials": {}}
+
+    HttpOAuth.envois, HttpOAuth.statut = [], 200
+    ApiAppareils.appareils = [{"deviceThingName": "robot-test", "deviceName": "Tondeuse"}]
+    monkeypatch.setattr(LymowAuth, "get_aws_credentials", cles_aws)
+    monkeypatch.setattr(compte, "LymowApiClient", ApiAppareils)
+    return HttpOAuth
+
+
+def rappel(serveur, code="CODE-OAUTH-fff666", etat=None):
+    etat = serveur.tentative[0].etat if etat is None else etat
+    return {"adresse": f"myapp://callback/?code={code}&state={etat}"}
+
+
+def test_compte_tentative_pkce_et_state_gardes_dans_le_serveur(tmp_path, monkeypatch, capsys):
+    from urllib.parse import parse_qs, urlparse
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False, coffre_factice={}) as (serveur, http):
+            statut, texte, _recus = await lire(http, serveur, "/api/etat")
+            image = json.loads(texte)
+            assert image["compte"] == {"connecte": False, "region": None, "appareil": None, "tentative": False, "choix": None}
+            assert image["regions"] == list(auth.REGIONS) and image["region_defaut"] == "eu-west-1"
+            statut, erreur, _recus = await poster(http, serveur, "/api/compte/commencer", {"region": "mars-1"})
+            assert statut == 400 and serveur.tentative is None
+            statut, corps, recus = await poster(http, serveur, "/api/compte/commencer", {"region": "eu-west-1"})
+            assert statut == 200 and recus["Cache-Control"] == "no-store"
+            demande = serveur.tentative[0]
+            q = {cle: v[0] for cle, v in parse_qs(urlparse(corps["url"]).query).items()}
+            assert corps["url"].startswith("https://eu-auth.lymow.com/oauth2/authorize?")
+            assert q["code_challenge_method"] == "S256" and q["state"] == demande.etat and len(q["state"]) >= 32
+            assert q["redirect_uri"] == "myapp://callback/" and q["identity_provider"] == "Google"
+            assert demande.verificateur not in json.dumps(corps)
+            premier = demande.etat
+            await poster(http, serveur, "/api/compte/commencer", {"region": "eu-west-1"})
+            assert serveur.tentative[0].etat != premier  # une seule tentative active
+            image = serveur.instantane()
+            assert image["compte"]["tentative"] is True
+            return corps["url"], demande.verificateur, json.dumps(image, ensure_ascii=False)
+
+    url, verificateur, ecran = executer(scenario())
+    disque = json.dumps(lignes_journal(tmp_path), ensure_ascii=False)
+    sortie = capsys.readouterr()
+    for secret in (url, verificateur, "oauth2/authorize"):
+        assert secret not in disque and secret not in ecran and secret not in sortie.out + sortie.err
+
+
+@pytest.mark.parametrize(
+    ("adresse", "motif"),
+    [
+        ("myapp://callback/?code=CODE-OAUTH-fff666&state=un-autre-etat", "state"),
+        ("myapp://callback/?code=CODE-OAUTH-fff666", "state"),
+        ("CODE-OAUTH-fff666", "adresse de rappel complète"),
+        ("https://evil.example/?code=CODE-OAUTH-fff666&state=x", "adresse de rappel complète"),
+        ("myapp://callback/?error=access_denied&state=x", "erreur"),
+        (12, "adresse de rappel attendue"),
+    ],
+)
+def test_compte_adresse_au_state_different_ou_absent_refusee_et_tentative_consommee(
+    tmp_path, monkeypatch, service_compte, adresse, motif
+):
+    coffre_factice = {}
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False, coffre_factice=coffre_factice) as (serveur, http):
+            serveur.ouvrir_http = service_compte
+            await poster(http, serveur, "/api/compte/commencer", {"region": "eu-west-1"})
+            bonne = rappel(serveur)
+            statut, corps, _recus = await poster(http, serveur, "/api/compte/valider", {"adresse": adresse})
+            assert statut == 400 and corps["erreur"].startswith("connexion refusée") and motif in corps["erreur"]
+            assert "CODE-OAUTH" not in corps["erreur"] and serveur.tentative is None
+            statut, corps, _recus = await poster(http, serveur, "/api/compte/valider", bonne)
+            assert statut == 400 and "aucune tentative" in corps["erreur"]  # usage unique, même après un refus
+            return json.dumps(serveur.instantane(), ensure_ascii=False)
+
+    ecran = executer(scenario())
+    assert coffre_factice == {} and service_compte.envois == []  # rien écrit, service jamais contacté
+    assert "CODE-OAUTH" not in ecran and "CODE-OAUTH" not in json.dumps(lignes_journal(tmp_path))
+
+
+def test_compte_refus_sans_tentative_ou_tentative_expiree(tmp_path, monkeypatch, service_compte):
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False, coffre_factice={}) as (serveur, http):
+            serveur.ouvrir_http = service_compte
+            statut, corps, _recus = await poster(http, serveur, "/api/compte/valider", {"adresse": "myapp://callback/?code=a&state=b"})
+            assert statut == 400 and "aucune tentative" in corps["erreur"]
+            await poster(http, serveur, "/api/compte/commencer", {"region": "eu-west-1"})
+            bonne = rappel(serveur)
+            maintenant = serveur.horloge()
+            serveur.horloge = lambda: maintenant + ui.DUREE_TENTATIVE_S + 1
+            assert serveur.instantane()["compte"]["tentative"] is False
+            statut, corps, _recus = await poster(http, serveur, "/api/compte/valider", bonne)
+            assert statut == 400 and "expirée" in corps["erreur"]
+            statut, corps, _recus = await poster(http, serveur, "/api/compte/choisir", {"appareil": "robot-test"})
+            assert statut == 400 and "aucun choix" in corps["erreur"]
+
+    executer(scenario())
+    assert service_compte.envois == []
+
+
+def test_compte_echange_reussi_coffre_ecrit_liaison_rouverte_et_aucun_secret_ne_sort(
+    tmp_path, monkeypatch, service_compte, session_reelle, capsys
+):
+    coffre_factice = {}
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False, session=session_reelle, coffre_factice=coffre_factice) as (serveur, http):
+            serveur.ouvrir_http = service_compte
+            assert serveur.ouvertures == [] and serveur.ident is None  # démarré sans compte : aucune liaison
+            await poster(http, serveur, "/api/compte/commencer", {"region": "eu-west-1"})
+            demande = serveur.tentative[0]
+            envoi = rappel(serveur)
+            statut, corps, recus = await poster(http, serveur, "/api/compte/valider", envoi)
+            assert statut == 200 and corps == {"connecte": True, "liaison": "connecté"}
+            assert recus["Cache-Control"] == "no-store"
+            assert serveur.tentative is None and serveur.choix is None
+            assert serveur.ouvertures == [frozenset({Categorie.REQUETE_PURE})]  # liaison rouverte, bridée (simulation)
+            image = serveur.instantane()
+            assert image["compte"]["connecte"] is True and image["compte"]["appareil"] == "robot-test"
+            assert image["connecte"] is True
+            statut, corps2, _recus = await poster(http, serveur, "/api/compte/valider", envoi)
+            assert statut == 400  # adresse rejouée
+            return demande, envoi["adresse"], json.dumps([corps, corps2, image], ensure_ascii=False)
+
+    demande, adresse, reponses = executer(scenario())
+    assert coffre_factice == {
+        "jeton-rafraichissement": "raf-durable-ccc333", "region": "eu-west-1", "appareil": "robot-test", "methode": "google",
+    }
+    (envoi,) = service_compte.envois  # un seul échange, avec le vérificateur gardé par le serveur
+    assert envoi[0] == "https://eu-auth.lymow.com/oauth2/token"
+    assert envoi[1]["data"]["code"] == "CODE-OAUTH-fff666" and envoi[1]["data"]["code_verifier"] == demande.verificateur
+    disque = json.dumps(lignes_journal(tmp_path), ensure_ascii=False)
+    sortie = capsys.readouterr()
+    secrets_ = (
+        adresse, "CODE-OAUTH-fff666", demande.verificateur, demande.etat, "acces-court-aaa111",
+        "identite-courte-bbb222", "raf-durable-ccc333", "identite-aws-eee555",
+    )
+    for secret in secrets_:
+        assert secret not in disque and secret not in reponses and secret not in sortie.out + sortie.err
+    assert "connexion réussie" in reponses and "compte-enregistre" in disque
+
+
+def test_compte_echec_de_l_echange_message_generique_et_nouvelle_tentative_possible(tmp_path, monkeypatch, service_compte):
+    coffre_factice = {}
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False, coffre_factice=coffre_factice) as (serveur, http):
+            serveur.ouvrir_http = service_compte
+            service_compte.statut = 400  # code expiré côté service
+            await poster(http, serveur, "/api/compte/commencer", {"region": "eu-west-1"})
+            statut, corps, _recus = await poster(http, serveur, "/api/compte/valider", rappel(serveur))
+            assert statut == 400 and "recommencez" in corps["erreur"]
+            assert "fuite-corps" not in corps["erreur"] and "CODE-OAUTH" not in corps["erreur"]
+            statut, _corps, _recus = await poster(http, serveur, "/api/compte/commencer", {"region": "eu-west-1"})
+            assert statut == 200 and serveur.tentative is not None
+            return json.dumps(serveur.instantane(), ensure_ascii=False)
+
+    ecran = executer(scenario())
+    assert coffre_factice == {} and "connexion refusée" in ecran and "fuite-corps" not in ecran
+
+
+def test_compte_plusieurs_appareils_meme_liste_que_la_commande(tmp_path, monkeypatch, service_compte, session_reelle):
+    coffre_factice = {}
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False, session=session_reelle, coffre_factice=coffre_factice) as (serveur, http):
+            serveur.ouvrir_http = service_compte
+            ApiAppareils.appareils = [
+                {"deviceThingName": "robot-jardin", "deviceName": "Jardin"},
+                {"deviceThingName": "robot-test", "deviceName": "Verger", "sn": "ne-sort-pas"},
+            ]
+            await poster(http, serveur, "/api/compte/commencer", {"region": "eu-west-1"})
+            statut, corps, _recus = await poster(http, serveur, "/api/compte/valider", rappel(serveur))
+            attendus = [{"nom": "Jardin", "appareil": "robot-jardin"}, {"nom": "Verger", "appareil": "robot-test"}]
+            assert statut == 200 and corps == {"appareils": attendus}
+            assert coffre_factice == {} and serveur.instantane()["compte"]["choix"] == attendus
+            assert "raf-durable" not in json.dumps(serveur.instantane())
+            statut, _corps, _recus = await poster(http, serveur, "/api/compte/choisir", {"appareil": "robot-inconnu"})
+            assert statut == 400 and coffre_factice == {}
+            statut, corps, _recus = await poster(http, serveur, "/api/compte/choisir", {"appareil": "robot-test"})
+            assert statut == 200 and corps["connecte"] is True and serveur.choix is None
+
+    executer(scenario())
+    assert coffre_factice["appareil"] == "robot-test" and coffre_factice["jeton-rafraichissement"] == "raf-durable-ccc333"
+
+
+def test_compte_deconnexion_efface_le_coffre_et_ferme_la_liaison(tmp_path, monkeypatch, session_reelle):
+    coffre_factice = {"jeton-rafraichissement": "raf-durable-ccc333", "region": "eu-west-1", "appareil": "robot-test", "methode": "google"}
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False, session=session_reelle, coffre_factice=coffre_factice) as (serveur, http):
+            assert serveur.instantane()["compte"]["connecte"] is True and len(serveur.ouvertures) == 1
+            statut, corps, _recus = await poster(http, serveur, "/api/compte/deconnecter")
+            assert statut == 200 and corps == {"connecte": False}
+            image = serveur.instantane()
+            assert image["compte"]["connecte"] is False and image["connecte"] is False and image["etat"] is None
+            assert image["liaison"] == ui.NON_CONNECTE and serveur.simultanees[0] == 0  # liaison fermée
+
+    executer(scenario())
+    assert coffre_factice == {}
+    assert "compte-oublie" in [ligne["evenement"] for ligne in lignes_journal(tmp_path)]
+
+
+def test_compte_routes_refusees_pendant_un_mouvement(tmp_path, monkeypatch, session_reelle, lien, service_compte):
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=True, session=session_reelle) as (serveur, http):
+            serveur.ouvrir_http = service_compte
+            await poster(http, serveur, "/api/compte/commencer", {"region": "eu-west-1"})
+            envoi = rappel(serveur)
+            await _lancer_avancer(http, serveur, lien)
+            for chemin, corps in (
+                ("/api/compte/commencer", {"region": "eu-west-1"}), ("/api/compte/valider", envoi),
+                ("/api/compte/choisir", {"appareil": "robot-test"}), ("/api/compte/deconnecter", {}),
+            ):
+                statut, erreur, _recus = await poster(http, serveur, chemin, corps)
+                assert statut == 409 and "ordre est en cours" in erreur["erreur"], chemin
+            assert serveur.tentative is not None and serveur.occupe  # tentative intacte, mouvement intact
+
+    executer(scenario())
+    assert service_compte.envois == []
+
+
+def test_csp_inchangee_par_la_connexion_et_sans_entrave_a_un_nouvel_onglet(tmp_path, monkeypatch):
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False, coffre_factice={}) as (serveur, http):
+            _statut, _corps, recus = await poster(http, serveur, "/api/compte/commencer", {"region": "eu-west-1"})
+            return recus["Content-Security-Policy"]
+
+    regles = executer(scenario())
+    assert "connect-src 'self';" in regles and "lymow.com" not in regles and "google" not in regles.lower()
+    # Rien qui bloquerait l'ouverture d'un onglet : ni bac à sable, ni restriction de navigation.
+    assert "sandbox" not in regles and "navigate-to" not in regles

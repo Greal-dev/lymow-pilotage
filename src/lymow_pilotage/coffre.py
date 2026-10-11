@@ -33,6 +33,17 @@ def ecrire(cle: str, valeur: str) -> None:
     keyring.set_password(SERVICE, cle, valeur)
 
 
+def effacer() -> None:
+    import keyring
+    import keyring.errors
+
+    for cle in _CLES:
+        try:
+            keyring.delete_password(SERVICE, cle)
+        except keyring.errors.PasswordDeleteError:
+            pass  # entrée déjà absente
+
+
 def appareil_connu() -> str | None:
     """Identifiant d'appareil pour l'affichage en simulation ; jamais bloquant."""
     try:

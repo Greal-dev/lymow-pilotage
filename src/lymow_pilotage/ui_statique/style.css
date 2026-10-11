@@ -103,6 +103,9 @@ section, .ordre {
 .grille dd { margin: 0; overflow-wrap: anywhere; }
 .grille ul { margin: 0; padding-left: 1.1rem; }
 .perime .grille { opacity: 0.45; }
+.mise-en-avant { border: 2px solid var(--accent); }
+input.large { width: 100%; }
+code { font-family: ui-monospace, Consolas, monospace; font-size: 0.9em; }
 label { display: block; margin: 0.35rem 0; }
 label small { color: var(--discret); }
 input, select {
