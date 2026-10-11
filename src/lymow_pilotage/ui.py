@@ -27,16 +27,16 @@ from aiohttp import web
 
 from . import auth, conduite, liaison, mouvement, securite
 from .config import Calibration
-from .journal import Journal, declarer_secret, masquer
+from .journal import Journal, assainir, declarer_secret, masquer
 from .mouvement import ErreurSaisie, Ordre
 from .protocole import Categorie
 
 HOTE = "127.0.0.1"  # jamais 0.0.0.0 : aucune option ne change cette valeur
 PORT_DEFAUT = 8377
 COOKIE = "lymow_ui"
-ENTETE_JETON = "X-Lymow-Jeton"
 DUREE_PREVISUALISATION_S = 60.0
 ETAPES_MAX = 20
+NOMBRE_MAX = 1_000_000  # au-delà, une valeur de la page est refusée sans calcul
 STATIQUE = Path(__file__).resolve().parent / "ui_statique"
 FICHIERS = {
     "app.js": "text/javascript",
@@ -67,7 +67,9 @@ def _nombre(valeur: Any, entier: bool = False) -> float | int | None:
         return None
     if isinstance(valeur, bool) or not isinstance(valeur, int if entier else (int, float)):
         raise ErreurSaisie("valeur numérique attendue")
-    if not math.isfinite(valeur):
+    if isinstance(valeur, int) and abs(valeur) > NOMBRE_MAX:  # 10**400 ferait déborder isfinite
+        raise ErreurSaisie("valeur numérique démesurée")
+    if not math.isfinite(valeur) or abs(valeur) > NOMBRE_MAX:
         raise ErreurSaisie("valeur numérique finie attendue")
     return valeur
 
@@ -103,8 +105,12 @@ def ordres_depuis(corps: Any) -> list[Ordre]:
 class ServeurUI:
     def __init__(self, cal: Calibration, journal: Journal, *, reel: bool, port: int = PORT_DEFAUT) -> None:
         self.cal, self.journal, self.reel, self.port = cal, journal, reel, port
-        self.jeton = secrets.token_urlsafe(32)  # 256 bits, neuf à chaque lancement
+        # Deux secrets de 256 bits, neufs à chaque lancement : le jeton d'adresse sert UNE fois,
+        # puis seul le témoin (valeur distincte, jamais dans une adresse) authentifie la page.
+        self.jeton: str | None = secrets.token_urlsafe(32)
+        self.temoin = secrets.token_urlsafe(32)
         declarer_secret(self.jeton)
+        declarer_secret(self.temoin)
         self.horloge = time.monotonic
         self.session: Any = None
         self.ident: liaison.Identifiants | None = None
@@ -117,8 +123,11 @@ class ServeurUI:
         self.ferme = False
         self.fin = asyncio.Event()
         self.fournir_video = self._video
+        self.video_ouverte = False
         self._stop_demande = False
         self._verrou_stop = asyncio.Lock()
+        # Un seul rafraîchissement de jeton à la fois : Cognito fait tourner le jeton stocké.
+        self._verrou_acces = asyncio.Lock()
         self._pile = AsyncExitStack()
         self._lanceur: web.AppRunner | None = None
 
@@ -137,6 +146,8 @@ class ServeurUI:
                 web.post("/api/emettre", self._emettre),
                 web.post("/api/stop", self._stop),
                 web.post("/api/video/demarrer", self._video_demarrer),
+                web.post("/api/video/arreter", self._video_arreter),
+                web.get("/favicon.ico", self._sans_contenu),
             ]
         )
         # Pas de journal d'accès : la première requête porte le jeton dans son adresse.
@@ -174,6 +185,11 @@ class ServeurUI:
             await asyncio.gather(self.tache, return_exceptions=True)
 
     async def _connecter(self) -> None:
+        async with self._verrou_acces:
+            await self._connecter_sans_verrou()
+
+    async def _connecter_sans_verrou(self) -> None:
+        # Identifiants relus dans le coffre à chaque connexion : le jeton stocké a pu tourner.
         try:
             self.ident = liaison.lire_identifiants()
         except auth.ErreurAuth:
@@ -213,8 +229,11 @@ class ServeurUI:
             "Cache-Control": "no-store",
         }
 
-    def _jeton_valide(self, propose: str | None) -> bool:
-        return bool(propose) and hmac.compare_digest(propose.encode(), self.jeton.encode())  # type: ignore[union-attr]
+    @staticmethod
+    def _egaux(propose: str | None, attendu: str | None) -> bool:
+        if not propose or not attendu or not propose.isascii():
+            return False
+        return hmac.compare_digest(propose.encode(), attendu.encode())
 
     @web.middleware
     async def _garde(self, request: web.Request, handler: Any) -> web.StreamResponse:  # noms imposés par aiohttp
@@ -224,6 +243,9 @@ class ServeurUI:
         return reponse
 
     async def _filtrer(self, requete: web.Request, suite: Any) -> web.StreamResponse:
+        for nom in ("Host", "Origin", "Cookie"):
+            if not requete.headers.get(nom, "").isascii():
+                return _refus(400, "en-tête non ASCII refusé")
         # Anti « DNS rebinding » : un nom étranger pointant sur 127.0.0.1 est refusé.
         if requete.headers.get("Host") not in (f"{HOTE}:{self.port}", f"localhost:{self.port}"):
             return _refus(403, "hôte refusé")
@@ -233,8 +255,7 @@ class ServeurUI:
         if requete.method == "POST" and requete.headers.get("Origin") not in origines:
             return _refus(403, "origine refusée")
         echange_initial = requete.path == "/" and "jeton" in requete.query
-        propose = requete.cookies.get(COOKIE) or requete.headers.get(ENTETE_JETON)
-        if not echange_initial and not self._jeton_valide(propose):
+        if not echange_initial and not self._egaux(requete.cookies.get(COOKIE), self.temoin):
             return _refus(403, "jeton absent ou invalide : ouvrez l'adresse affichée par « lymow ui »")
         try:
             return await suite(requete)
@@ -242,17 +263,21 @@ class ServeurUI:
             return _refus(exception.status, exception.reason or "refusé")
         except ErreurSaisie as erreur:
             return _refus(400, str(erreur))
+        except Exception as erreur:  # noqa: BLE001 — jamais de réponse brute sans nos en-têtes
+            return _refus(500, f"erreur interne ({type(erreur).__name__})")
 
     # --- page et état ---------------------------------------------------------
 
     async def _page(self, requete: web.Request) -> web.StreamResponse:
         if "jeton" in requete.query:
-            if not self._jeton_valide(requete.query.get("jeton")):
-                return _refus(403, "jeton invalide")
+            if not self._egaux(requete.query.get("jeton"), self.jeton):
+                return _refus(403, "jeton invalide ou déjà utilisé : relancez « lymow ui »")
+            self.jeton = None  # usage unique : une adresse recopiée ou rejouée ne vaut plus rien
             # Le jeton quitte l'adresse aussitôt : redirection, puis témoin inaccessible aux scripts.
             reponse = web.Response(status=303, headers={"Location": "/"})
-            reponse.set_cookie(COOKIE, self.jeton, httponly=True, samesite="Strict", path="/")
+            reponse.set_cookie(COOKIE, self.temoin, httponly=True, samesite="Strict", path="/")
             return reponse
+        self.video_ouverte = False  # page (re)chargée : l'ancienne session vidéo n'existe plus
         return web.Response(text=(STATIQUE / "index.html").read_text(encoding="utf-8"), content_type="text/html")
 
     async def _statique(self, requete: web.Request) -> web.StreamResponse:
@@ -260,6 +285,9 @@ class ServeurUI:
         if nom not in FICHIERS:
             return _refus(404, "fichier inconnu")
         return web.Response(text=(STATIQUE / nom).read_text(encoding="utf-8"), content_type=FICHIERS[nom])
+
+    async def _sans_contenu(self, _requete: web.Request) -> web.StreamResponse:
+        return web.Response(status=204)
 
     @property
     def occupe(self) -> bool:
@@ -311,18 +339,19 @@ class ServeurUI:
         self.version += 1
 
     def _signaler(self, texte: str) -> None:
-        print(texte, file=sys.stderr, flush=True)
+        print(masquer(texte), file=sys.stderr, flush=True)
         self._noter(texte)
 
     async def _actualiser(self, _requete: web.Request) -> web.StreamResponse:
         if self.occupe:
             return _refus(409, "un ordre est en cours")
-        if self.session is None or not self.session.lien.connecte:
-            await self._pile.aclose()
-            self._pile, self.session = AsyncExitStack(), None
-            await self._connecter()
-        else:
-            await self.session.solliciter()
+        async with self._verrou_acces:  # deux actualisations ne rouvrent jamais deux liaisons
+            if self.session is None or not self.session.lien.connecte:
+                await self._pile.aclose()
+                self._pile, self.session = AsyncExitStack(), None
+                await self._connecter_sans_verrou()
+            else:
+                await self.session.solliciter()
         self._noter(f"actualisation : {self.etat_liaison}")
         return web.json_response(self.instantane())
 
@@ -331,7 +360,7 @@ class ServeurUI:
     async def _corps(self, requete: web.Request) -> Any:
         try:
             return await requete.json()
-        except ValueError:
+        except (ValueError, RecursionError):
             raise ErreurSaisie("corps JSON attendu") from None
 
     async def _previsualiser(self, requete: web.Request) -> web.StreamResponse:
@@ -363,12 +392,15 @@ class ServeurUI:
             return _refus(409, "prévisualisation expirée : prévisualisez de nouveau")
         if self.session is None or not self.session.lien.connecte:
             return _refus(503, f"robot injoignable : {self.etat_liaison}")
-        if self.occupe:
-            return _refus(409, "un ordre est déjà en cours : seul STOP est accepté")
+        if self.occupe or self._stop_demande:
+            return _refus(409, "un ordre ou un STOP est déjà en cours : seul STOP est accepté")
         self._lancer(attendue[1])
         return web.json_response({"accepte": True}, status=202)
 
     def _lancer(self, ordres: list[Ordre]) -> None:
+        # Jamais deux tâches : l'appelant a vérifié, ceci interdit toute tâche orpheline.
+        if self.occupe:
+            raise web.HTTPConflict(reason="un ordre est déjà en cours")
         self._noter("émission : " + " ; ".join(str(ordre) for ordre in ordres))
         self.tache = asyncio.create_task(self._conduire(ordres))
 
@@ -376,17 +408,17 @@ class ServeurUI:
         """Le mouvement vit ici : aucune requête de la page n'est nécessaire pour qu'il s'arrête."""
         try:
             bilan, code = await conduite.emettre_ordres(self.session, ordres, self.journal)
-            self.resultat = bilan | {"code": code}
+            self.resultat = assainir(bilan | {"code_sortie": code})  # filtré comme le journal
             if code == conduite.CODE_ARRET_NON_CONFIRME:
                 self._signaler("ARRÊT NON CONFIRMÉ : arrêtez le robot par son bouton STOP ou par l'application.")
             self._noter("ordre terminé" if code == 0 else f"ordre non abouti : {bilan.get('motif', 'voir le résultat')}")
         except asyncio.CancelledError:
-            self.resultat = {"echec": "ordre interrompu ; l'arrêt a été émis", "code": 130}
+            self.resultat = {"echec": "ordre interrompu ; l'arrêt a été émis", "code_sortie": 130}
             self._noter("ordre interrompu : arrêt émis")
             if not self._stop_demande:
                 self.fin.set()  # Ctrl+C pendant un mouvement : robot arrêté, puis serveur arrêté
         except Exception as erreur:  # noqa: BLE001 — une tâche de fond ne doit jamais mourir en silence
-            self.resultat = {"echec": masquer(str(erreur)) or type(erreur).__name__, "code": 1}
+            self.resultat = {"echec": masquer(str(erreur)) or type(erreur).__name__, "code_sortie": 1}
             self._noter(f"ordre en échec : {self.resultat['echec']}")
         finally:
             self.version += 1
@@ -405,28 +437,41 @@ class ServeurUI:
             self._stop_demande = True
             try:
                 await self._interrompre()  # l'arrêt de fin de mouvement part d'abord
+                self._lancer([Ordre("stop")])  # puis le `stop` de la commande : consignes nulles ×3, pause
             finally:
                 self._stop_demande = False
-            self._lancer([Ordre("stop")])  # puis le `stop` de la commande : consignes nulles ×3, pause
             return web.json_response({"accepte": True}, status=202)
 
     # --- vidéo ----------------------------------------------------------------
 
     async def _video(self) -> dict[str, Any]:
-        assert self.ident is not None
-        async with aiohttp.ClientSession(timeout=liaison.DELAI_HTTP) as http:
+        async with self._verrou_acces, aiohttp.ClientSession(timeout=liaison.DELAI_HTTP) as http:
+            # Relu à chaque fois : `obtenir_acces` fait tourner le jeton dans le coffre, et
+            # présenter l'ancien pourrait révoquer la connexion du compte.
+            self.ident = liaison.lire_identifiants()
             acces = await liaison.obtenir_acces(http, self.ident)
             return await liaison.demarrer_video(http, self.ident, acces)
 
     async def _video_demarrer(self, _requete: web.Request) -> web.StreamResponse:
         if self.ident is None:
             return _refus(503, NON_CONNECTE)
+        if self.video_ouverte:
+            return _refus(409, "une session vidéo est déjà ouverte : arrêtez-la d'abord")
+        self.video_ouverte = True  # posé avant l'attente : deux démarrages simultanés n'en font qu'un
         try:
             reglages = await self.fournir_video()
         except Exception as erreur:  # noqa: BLE001
+            self.video_ouverte = False
             return _refus(502, f"vidéo indisponible : {masquer(str(erreur)) or type(erreur).__name__}")
         self._noter("vidéo : session ouverte")  # jamais les valeurs : ce sont des secrets temporaires
         return web.json_response(reglages)
+
+    async def _video_arreter(self, _requete: web.Request) -> web.StreamResponse:
+        """La page a fermé sa session : aucun arrêt de canal n'est connu côté service."""
+        if self.video_ouverte:
+            self._noter("vidéo : session fermée par la page")
+        self.video_ouverte = False
+        return web.json_response({"video": "arrêtée"})
 
 
 def _refus(statut: int, message: str) -> web.Response:

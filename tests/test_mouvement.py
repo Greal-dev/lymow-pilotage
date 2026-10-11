@@ -367,6 +367,52 @@ def test_sec03_seconde_interruption_pendant_l_arret_les_arrets_partent_quand_mem
     assert messages[-1] == "Arrêt émis et acquitté 3/3."
 
 
+def test_sec03_fermeture_de_la_console_pendant_un_mouvement_arret_publie_avant_la_fin(session, lien, monkeypatch):
+    import threading
+
+    gardes, retours, fils = [], [], []
+
+    class Espion(mouvement._Garde):
+        def __enter__(self):
+            gardes.append(self)
+            return super().__enter__()
+
+    def fermeture():  # ce que fait Windows : un autre fil appelle le rappel, puis détruit le processus
+        retours.append((gardes[0]._console_fermee(2), len(lien.arrets)))
+
+    def declencher(_lien):
+        fils.append(threading.Thread(target=fermeture))
+        fils[0].start()
+
+    monkeypatch.setattr(mouvement, "_Garde", Espion)
+    lien.sur_publication = a_la_consigne(5, declencher)
+    with pytest.raises(asyncio.CancelledError):
+        lancer(mouvement.executer_mouvement(session, AVANCER_1))
+    fils[0].join(5.0)
+    assert retours == [(1, 3)]  # le rappel ne rend la main qu'une fois les trois arrêts partis
+    assert len(lien.consignes) < 40 and lien.arrets == [ARRET] * 3
+
+
+def test_sec03_rappel_de_console_laisse_ctrl_c_aux_signaux_et_borne_son_attente(session, monkeypatch):
+    monkeypatch.setattr(mouvement, "DELAI_FERMETURE_CONSOLE_S", 0.05)
+    garde = mouvement._Garde(session, en_arret=True)
+    assert garde._console_fermee(0) == 0 and garde._console_fermee(1) == 0  # Ctrl+C, Ctrl+Break
+    debut = time.monotonic()
+    for evenement in mouvement.EVENEMENTS_FERMETURE_CONSOLE:  # fermeture, fin de session, extinction
+        assert garde._console_fermee(evenement) == 1
+    assert time.monotonic() - debut < 1.0
+    assert mouvement.EVENEMENTS_FERMETURE_CONSOLE == (2, 5, 6) and mouvement.DELAI_FERMETURE_CONSOLE_S < 5
+
+
+def test_sec03_garde_posee_et_retiree_sans_erreur_sur_toute_plateforme(session):
+    async def scenario():
+        with mouvement._Garde(session, en_arret=True) as garde:
+            assert not garde._termine.is_set()
+        return garde._termine.is_set()
+
+    assert lancer(scenario())  # hors Windows ou sans console : rien de posé, rien de cassé
+
+
 def test_sec03_journal_en_panne_ou_etat_recu_pendant_l_arret_ne_le_retardent_pas(session, lien, tmp_path):
     differes = []
 

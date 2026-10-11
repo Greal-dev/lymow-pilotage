@@ -12,6 +12,8 @@ import asyncio
 import math
 import re
 import signal
+import sys
+import threading
 from collections.abc import Coroutine
 from dataclasses import dataclass
 from typing import Any
@@ -231,8 +233,22 @@ def _dire(session: Session, message: str) -> None:
         pass
 
 
+# CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT : Windows laisse environ 5 s.
+EVENEMENTS_FERMETURE_CONSOLE = (2, 5, 6)
+DELAI_FERMETURE_CONSOLE_S = 4.5
+
+
+def _noyau_windows() -> Any:
+    import ctypes
+
+    return ctypes.windll.kernel32  # type: ignore[attr-defined]
+
+
 class _Garde:
     """SEC-03 : Ctrl+C et Ctrl+Break mènent à l'arrêt, puis sont ignorés tant qu'il dure.
+
+    Sous Windows, la fermeture de la console, de la session ou de la machine mène
+    aussi à l'arrêt, dans le délai que le système accorde.
 
     Hors phase d'arrêt, le signal annule la tâche (donc passe par le `finally`
     du mouvement) ; sans cela Ctrl+Break tuerait le processus robot en marche.
@@ -242,6 +258,8 @@ class _Garde:
         self._session = session
         self.en_arret = en_arret
         self._anciens: dict[int, Any] = {}
+        self._termine = threading.Event()
+        self._rappel_console: Any = None
 
     def __enter__(self) -> _Garde:
         self._tache = asyncio.current_task()
@@ -254,11 +272,44 @@ class _Garde:
                 self._anciens[numero] = signal.signal(numero, self._recu)
             except (ValueError, OSError):
                 pass  # hors du fil principal : aucun signal n'y est livré
+        self._poser_rappel_console()
         return self
 
     def __exit__(self, *_exc: object) -> None:
         for numero, ancien in self._anciens.items():
             signal.signal(numero, signal.SIG_DFL if ancien is None else ancien)
+        if self._rappel_console is not None:
+            try:
+                _noyau_windows().SetConsoleCtrlHandler(self._rappel_console, 0)
+            except Exception:  # noqa: BLE001
+                pass
+        self._termine.set()  # libère le fil de fermeture de console : l'arrêt est parti
+
+    def _poser_rappel_console(self) -> None:
+        """Windows : fermer la fenêtre, fermer la session ou éteindre tue le processus sans signal.
+
+        Le système accorde quelques secondes au rappel ci-dessous ; hors Windows, rien à poser.
+        """
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+
+            prototype = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_uint)  # BOOL HandlerRoutine(DWORD)
+            rappel = prototype(self._console_fermee)
+            if _noyau_windows().SetConsoleCtrlHandler(rappel, 1):
+                self._rappel_console = rappel  # référence gardée : le système l'appellera plus tard
+        except Exception:  # noqa: BLE001 — sans console ni ctypes, la garde par signaux reste en place
+            self._rappel_console = None
+
+    def _console_fermee(self, evenement: int) -> int:
+        """Appelé par Windows sur un autre fil ; au retour, le processus est détruit."""
+        if evenement not in EVENEMENTS_FERMETURE_CONSOLE:
+            return 0  # Ctrl+C et Ctrl+Break suivent la voie des signaux
+        if not self.en_arret and self._tache is not None:
+            self._boucle.call_soon_threadsafe(self._tache.cancel)  # passe par le `finally` du mouvement
+        self._termine.wait(DELAI_FERMETURE_CONSOLE_S)
+        return 1
 
     def _recu(self, *_args: object) -> None:
         if self.en_arret:

@@ -1,5 +1,5 @@
 /* Page de pilotage Lymow. Aucune règle de sécurité ne vit ici : le serveur local valide tout.
- * Toute donnée affichée passe par textContent, jamais par innerHTML. */
+ * Toute donnée affichée passe par textContent : aucune insertion de HTML, sous aucune forme. */
 (function () {
   "use strict";
 
@@ -10,6 +10,7 @@
   var modeReel = false;
   var dernierResultat = "";
   var video = { pc: null, ws: null };
+  var videoOuverte = false;
   var CLES_ETAT = [
     "en_ligne", "statut_libelle", "batterie_pct", "erreurs", "avertissements", "rtk", "rtk_satellites",
     "signal_4g", "signal_wifi", "wifi_rssi_dbm", "position_est_m", "position_nord_m", "cap_deg",
@@ -293,6 +294,11 @@
     if (video.ws) { video.ws.onclose = null; video.ws.close(); }
     if (video.pc) { video.pc.close(); }
     video = { pc: null, ws: null };
+    if (videoOuverte) {
+      // Le serveur refuse un second démarrage tant que la page n'a pas rendu la session.
+      videoOuverte = false;
+      appeler("/api/video/arreter").catch(function () { return undefined; });
+    }
     $("video").srcObject = null;
     $("video-demarrer").disabled = false;
     $("video-arreter").disabled = true;
@@ -309,6 +315,7 @@
       arreterVideo("indisponible : " + erreur.message);
       return;
     }
+    videoOuverte = true;
     $("video-arreter").disabled = false;
     var pc = new RTCPeerConnection({ iceServers: reglages.iceServers || [], bundlePolicy: "max-bundle" });
     var ws = new WebSocket(reglages.wss);
@@ -385,6 +392,10 @@
   });
   $("video-demarrer").addEventListener("click", demarrerVideo);
   $("video-arreter").addEventListener("click", function () { arreterVideo(); });
+
+  window.addEventListener("pagehide", function () {
+    if (videoOuverte && navigator.sendBeacon) { navigator.sendBeacon("/api/video/arreter"); }
+  });
 
   // Échap et Espace = STOP, partout : Espace n'active donc jamais un autre bouton.
   function estToucheStop(evenement) {

@@ -8,5 +8,7 @@ if not exist ".venv\Scripts\lymow.exe" (
   pause
   exit /b 1
 )
+echo Interface Lymow en SIMULATION. Fermez cette fenêtre ou faites Ctrl+C pour l'arrêter.
+echo En mode réel (lymow ui --reel) : ne fermez jamais la fenêtre pendant un mouvement.
 ".venv\Scripts\lymow.exe" ui
 if errorlevel 1 pause

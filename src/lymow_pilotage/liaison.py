@@ -1,7 +1,13 @@
 """Liaison réelle : coffre, jetons de courte durée, MQTT AWS IoT.
 
-Rôle : seul module qui ouvre le réseau vers le nuage Lymow. Jamais appelé en
-simulation (SEC-05). Aucun secret ne sort d'ici : tout est déclaré au filtre.
+Rôle : seul module qui ouvre le réseau vers le nuage Lymow. Un ORDRE simulé ne
+passe jamais par ici (SEC-05). Les lectures, elles, l'ouvrent sans `--reel` :
+`etat`, `diagnostic`, et l'interface web quand un compte est enregistré — avec
+une session qui ne sait émettre que les deux requêtes pures (ou rien du tout),
+plus la vidéo sur demande explicite. Aucun secret ne sort d'ici : tout est
+déclaré au filtre. Chaque appel à `obtenir_acces` peut faire tourner le jeton
+stocké : l'appelant relit `lire_identifiants()` avant chaque appel et ne lance
+jamais deux obtentions en parallèle.
 """
 
 from __future__ import annotations
@@ -10,8 +16,8 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+import re
 from typing import Any
-from urllib.parse import urlparse
 
 import aiohttp
 
@@ -66,16 +72,14 @@ async def obtenir_acces(http: aiohttp.ClientSession, ident: Identifiants) -> Acc
 
 def _hote_video(url: object, schema: str, region: str) -> bool:
     """Réponse du nuage non fiable : seul un hôte Kinesis Video de la région est accepté."""
-    if not isinstance(url, str):
+    if not isinstance(url, str) or region not in REGION_CONFIG:
         return False
-    morceaux = urlparse(url)
-    hote = morceaux.hostname or ""
-    return (
-        morceaux.scheme == schema
-        and hote.endswith(f".kinesisvideo.{region}.amazonaws.com")
-        and not morceaux.username
-        and morceaux.port in (None, 443)
+    # Expression ancrée, caractères autorisés seulement : ni « \ », ni « @ », ni requête, ni fragment.
+    motif = (
+        rf"{schema}://(?:[a-z0-9](?:[a-z0-9-]{{0,61}}[a-z0-9])?\.)+"
+        rf"kinesisvideo\.{re.escape(region)}\.amazonaws\.com(?::443)?(?:/[A-Za-z0-9._/-]*)?"
     )
+    return re.fullmatch(motif, url) is not None
 
 
 async def demarrer_video(http: aiohttp.ClientSession, ident: Identifiants, acces: Acces) -> dict[str, Any]:

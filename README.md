@@ -90,13 +90,19 @@ navigateur et s'arrête sur Ctrl+C. `lancer-lymow.cmd` (double-clic) lance
 - Le mouvement vit dans le serveur : fermer l'onglet ne supprime pas son arrêt
   final. Ctrl+C pendant un mouvement arrête le robot, puis le serveur.
 - Sans compte enregistré, la page fonctionne en prévisualisation et affiche
-  « non connecté — lancez `lymow connexion` ». Aucun identifiant n'est jamais
-  saisi dans la page.
+  « non connecté — lancez `lymow connexion` » : aucune connexion au cloud.
+  Aucun identifiant n'est jamais saisi dans la page.
+- Avec un compte enregistré, l'interface ouvre la liaison même en simulation,
+  pour afficher l'état : elle n'émet alors que les deux requêtes pures
+  (présence et demande de configuration), jamais un ordre.
+- En mode réel, ne fermez pas la fenêtre du terminal pendant un mouvement
+  (voir « Ce que l'arrêt garanti ne couvre pas »).
 
-Protection du serveur local : jeton aléatoire de 256 bits par lancement, exigé
-sur toutes les routes, échangé à la première requête contre un témoin
-`HttpOnly`, `SameSite=Strict` (l'adresse est aussitôt redirigée sans le jeton) ;
-en-tête `Host` limité à `127.0.0.1:port` et `localhost:port` ; `Origin` exigé
+Protection du serveur local : jeton d'adresse aléatoire de 256 bits par
+lancement, à usage unique, échangé à la première requête contre un témoin
+distinct, lui aussi aléatoire, `HttpOnly`, `SameSite=Strict` (l'adresse est
+aussitôt redirigée sans le jeton, qui ne vaut plus rien ensuite) ; le témoin
+est exigé sur toutes les routes ; en-tête `Host` limité à `127.0.0.1:port` et `localhost:port` ; `Origin` exigé
 et vérifié sur toute requête `POST` ; aucune règle CORS ; politique de contenu
 `default-src 'self'`, plus la seule signalisation vidéo
 `wss://*.kinesisvideo.<région>.amazonaws.com` une fois un compte connu ; aucune
@@ -108,7 +114,10 @@ ressource externe (ni CDN, ni police, ni mesure d'audience).
 Amazon Kinesis Video (canal, serveurs ICE, adresse de signalisation présignée :
 secrets temporaires, jamais journalisés ni mis en cache), puis la page ouvre la
 signalisation, envoie l'offre WebRTC en réception seule et affiche le flux. La
-vidéo est une observation : elle est disponible aussi sans `--reel`.
+vidéo est une observation : elle est disponible aussi sans `--reel`. Attention :
+« Démarrer la vidéo » contacte le cloud Lymow et active la caméra du robot,
+même en simulation. Une seule session à la fois : un second démarrage est
+refusé tant que la page n'a pas arrêté la première (ou n'a pas été rechargée).
 
 Seule la logique pure est testée (messages, base64, ligne
 `a=ice-options:trickle renomination` de l'offre ; ces tests demandent Node.js
@@ -195,12 +204,19 @@ invalide ; 3 arrêt non confirmé ; 130 interruption au clavier (arrêt émis).
 
 ### Ce que l'arrêt garanti ne couvre pas
 
-L'arrêt part du poste. Il ne peut donc rien si le programme disparaît en plein
-mouvement : fermeture de la fenêtre du terminal, fin de tâche forcée, mise en
-veille ou coupure de courant du poste, perte du réseau côté poste. Dans ces
-cas aucun arrêt n'est émis, et rien dans les sources ne prouve que le robot
-s'arrête seul quand les consignes cessent : l'exposition n'est alors bornée
-que par le robot lui-même.
+L'arrêt part du poste. Sous Windows, fermer la fenêtre du terminal, fermer la
+session ou éteindre la machine pendant un mouvement déclenche encore l'arrêt :
+l'outil intercepte l'événement (commande comme interface) et publie les trois
+arrêts dans les quelques secondes que le système accorde (environ 5 s). Ce
+filet est court — une liaison lente peut le dépasser — : ne fermez pas la
+fenêtre pendant un mouvement.
+
+Restent non couverts : processus tué (Gestionnaire des tâches, `taskkill /F`),
+plantage de l'interpréteur, mise en veille, coupure de courant du poste, perte
+du réseau côté poste. Dans ces cas aucun arrêt n'est émis, et rien dans les
+sources ne prouve que le robot s'arrête seul quand les consignes cessent :
+l'exposition n'est alors bornée que par le robot lui-même (c'est ce que mesure
+`essai-arret-auto`).
 
 Tant que le programme vit, l'exposition maximale est : 9 s de mouvement, 1 s
 d'attente d'une consigne non acquittée, puis 20 s d'essais d'arrêt, soit 30 s.

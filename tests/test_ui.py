@@ -27,6 +27,7 @@ AVANCER_1 = {"ordres": [{"nom": "avancer", "valeur": 1}]}
 async def serveur_ui(tmp_path, monkeypatch, *, reel, session=None):
     """Serveur démarré sur un port libre ; `session=None` = aucun compte enregistré."""
     ouvertures = []
+    simultanees = [0, 0]  # ouvertes maintenant, maximum observé
 
     def sans_compte():
         raise auth.ErreurAuth("aucune connexion enregistrée")
@@ -37,12 +38,19 @@ async def serveur_ui(tmp_path, monkeypatch, *, reel, session=None):
             raise AssertionError("liaison au nuage ouverte sans compte")
         ouvertures.append(autorisees)
         session.autorisees = autorisees
-        yield session
+        simultanees[0] += 1
+        simultanees[1] = max(simultanees)
+        await asyncio.sleep(0.02)  # laisse à une ouverture concurrente le temps de se montrer
+        try:
+            yield session
+        finally:
+            simultanees[0] -= 1
 
     monkeypatch.setattr(liaison, "lire_identifiants", sans_compte if session is None else lambda: IDENT)
     monkeypatch.setattr(liaison, "ouvrir_session", ouvrir)
     serveur = ui.ServeurUI(Calibration(), Journal(tmp_path), reel=reel, port=0)
     serveur.ouvertures = ouvertures
+    serveur.simultanees = simultanees
     await serveur.demarrer()
     try:
         async with aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar(unsafe=True)) as http:
@@ -52,7 +60,7 @@ async def serveur_ui(tmp_path, monkeypatch, *, reel, session=None):
 
 
 def entetes(serveur, **remplace):
-    base = {"X-Lymow-Jeton": serveur.jeton, "Origin": f"http://127.0.0.1:{serveur.port}"}
+    base = {"Cookie": f"lymow_ui={serveur.temoin}", "Origin": f"http://127.0.0.1:{serveur.port}"}
     base.update(remplace)
     return {cle: valeur for cle, valeur in base.items() if valeur is not None}
 
@@ -151,40 +159,55 @@ def test_servir_demarre_annonce_l_adresse_et_s_arrete_proprement(tmp_path, monke
 # --- jeton, Host, Origin, en-têtes ------------------------------------------
 
 
-def test_refus_sans_jeton_sur_toutes_les_routes(tmp_path, monkeypatch):
+def test_refus_sans_temoin_sur_toutes_les_routes(tmp_path, monkeypatch):
     async def scenario():
         async with serveur_ui(tmp_path, monkeypatch, reel=True) as (serveur, http):
-            for chemin in ("/", "/api/etat", "/api/flux", "/statique/app.js", "/?jeton=faux", "/inconnu"):
-                statut, _texte, _entetes = await lire(http, serveur, chemin, **{"X-Lymow-Jeton": None})
+            for chemin in ("/", "/api/etat", "/api/flux", "/statique/app.js", "/?jeton=faux", "/inconnu", "/favicon.ico"):
+                statut, _texte, recus = await lire(http, serveur, chemin, Cookie=None)
                 assert statut == 403, chemin
+                assert "default-src 'self'" in recus["Content-Security-Policy"]  # en-têtes aussi sur un refus
+                assert recus["X-Content-Type-Options"] == "nosniff" and recus["Cache-Control"] == "no-store"
+            mauvais = (None, "lymow_ui=faux", f"lymow_ui={serveur.temoin[:-1]}", f"lymow_ui={serveur.jeton}")
             for chemin in ("/api/previsualiser", "/api/emettre", "/api/stop", "/api/actualiser", "/api/video/demarrer"):
-                for jeton in (None, "faux", serveur.jeton[:-1]):
-                    statut, _corps, _entetes = await poster(http, serveur, chemin, AVANCER_1, **{"X-Lymow-Jeton": jeton})
+                for temoin in mauvais:  # le jeton d'adresse lui-même n'authentifie aucune route
+                    statut, _corps, _recus = await poster(http, serveur, chemin, AVANCER_1, Cookie=temoin)
                     assert statut == 403, chemin
+            statut, _corps, _recus = await poster(http, serveur, "/api/previsualiser", AVANCER_1, **{"X-Lymow-Jeton": serveur.temoin, "Cookie": None})
+            assert statut == 403  # aucun en-tête ne remplace le témoin
 
     executer(scenario())
 
 
-def test_echange_initial_du_jeton_contre_un_temoin_puis_page_servie(tmp_path, monkeypatch):
+def test_jeton_d_adresse_a_usage_unique_echange_contre_un_temoin_distinct(tmp_path, monkeypatch):
     async def scenario():
         async with serveur_ui(tmp_path, monkeypatch, reel=False) as (serveur, http):
-            statut, _texte, recus = await lire(http, serveur, f"/?jeton={serveur.jeton}", **{"X-Lymow-Jeton": None})
+            jeton = serveur.jeton
+            assert jeton and jeton != serveur.temoin and len(jeton) >= 43 and len(serveur.temoin) >= 43
+            statut, _texte, recus = await lire(http, serveur, f"/?jeton={jeton}", Cookie=None)
             temoin = recus["Set-Cookie"]
             assert statut == 303 and recus["Location"] == "/"
             assert "HttpOnly" in temoin and "SameSite=Strict" in temoin
-            statut, page, recus = await lire(http, serveur, "/", **{"X-Lymow-Jeton": None})  # témoin seul
-            assert statut == 200 and "<title>Lymow" in page and serveur.jeton not in page
+            assert f"lymow_ui={serveur.temoin}" in temoin and jeton not in temoin
+            assert serveur.jeton is None
+            async with aiohttp.ClientSession() as autre:  # adresse rejouée, par exemple depuis l'historique
+                statut, _texte, _recus = await lire(autre, serveur, f"/?jeton={jeton}", Cookie=None)
+                assert statut == 403
+            statut, page, recus = await lire(http, serveur, "/", Cookie=None)  # témoin du navigateur seul
+            assert statut == 200 and "<title>Lymow" in page and jeton not in page and serveur.temoin not in page
             assert recus["Cache-Control"] == "no-store" and recus["X-Content-Type-Options"] == "nosniff"
             assert recus["Referrer-Policy"] == "no-referrer" and "Access-Control-Allow-Origin" not in recus
             regles = recus["Content-Security-Policy"]
             assert "default-src 'self'" in regles and "connect-src 'self';" in regles  # sans compte : aucun hôte externe
             assert "unsafe" not in regles and "*" not in regles
-            statut, _corps, _recus = await poster(http, serveur, "/api/previsualiser", AVANCER_1, **{"X-Lymow-Jeton": None})
+            statut, _corps, _recus = await poster(http, serveur, "/api/previsualiser", AVANCER_1, Cookie=None)
             assert statut == 200  # le témoin suffit ensuite
-            return serveur.jeton
+            statut, _texte, _recus = await lire(http, serveur, "/favicon.ico", Cookie=None)
+            assert statut == 204
+            return jeton, serveur.temoin
 
-    jeton = executer(scenario())
-    assert jeton not in json.dumps(lignes_journal(tmp_path))
+    jeton, temoin = executer(scenario())
+    disque = json.dumps(lignes_journal(tmp_path))
+    assert jeton not in disque and temoin not in disque
 
 
 def test_csp_n_ouvre_que_la_signalisation_video_de_la_region(tmp_path, monkeypatch, session_reelle):
@@ -309,7 +332,7 @@ def test_emission_refusee_sans_previsualisation_valide_rejouee_ou_expiree(tmp_pa
             statut, _corps, _recus = await poster(http, serveur, "/api/emettre", {"identifiant": corps["identifiant"]})
             assert statut == 409  # identifiant rejoué
             await attendre(lambda: not serveur.occupe)
-            assert 10 <= serveur.resultat["etapes"][0]["emissions"] <= 12 and serveur.resultat["code"] == 0
+            assert 10 <= serveur.resultat["etapes"][0]["emissions"] <= 12 and serveur.resultat["code_sortie"] == 0
 
     executer(scenario())
     assert 10 <= len(lien.consignes) <= 12 and lien.arrets == [ARRET] * 3  # horloge réelle
@@ -474,6 +497,12 @@ def test_corps_non_json_refuse_proprement(tmp_path, monkeypatch):
 # --- fichiers statiques -----------------------------------------------------
 
 EXTERNE = re.compile(r"(?:https?:|wss?:)?//[A-Za-z0-9]|@import|url\(", re.IGNORECASE)
+# Toute forme d'insertion de HTML ou d'exécution de texte : affectation, « += », accès par crochets…
+HTML_DYNAMIQUE = re.compile(
+    r"innerHTML|outerHTML|insertAdjacentHTML|document\s*\.\s*write|\beval\s*\(|new\s+Function|srcdoc"
+    r"|DOMParser|createContextualFragment|setTimeout\s*\(\s*[\"']|javascript:",
+    re.IGNORECASE,
+)
 
 
 def test_la_page_ne_reference_aucune_ressource_externe():
@@ -490,8 +519,11 @@ def test_la_page_ne_reference_aucune_ressource_externe():
 
 def test_la_page_n_insere_jamais_de_html_ni_ne_demande_d_identifiants():
     script = (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
-    for interdit in ("innerHTML =", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "localStorage"):
-        assert interdit not in script
+    for fichier in ui.STATIQUE.iterdir():
+        assert not HTML_DYNAMIQUE.search(fichier.read_text(encoding="utf-8")), fichier.name
+    for forme in ('x.innerHTML += y', 'x["innerHTML"] = y', "x['outerHTML']", 'x.insertAdjacentHTML(a, b)', 'x.innerHTML=y'):
+        assert HTML_DYNAMIQUE.search(forme), forme  # le détecteur voit bien toutes les formes
+    assert "localStorage" not in script and "sessionStorage" not in script
     assert "history.replaceState" in script
     page = (ui.STATIQUE / "index.html").read_text(encoding="utf-8")
     assert 'type="password"' not in page and "autoplay" not in page
@@ -550,6 +582,11 @@ def test_demarrer_video_filtre_et_declare_les_secrets(monkeypatch):
         {"WSS": "wss://m-abc.kinesisvideo.us-east-2.amazonaws.com", "HTTPS": FauxApiVideo.points["HTTPS"]},
         {"WSS": "wss://u@m-abc.kinesisvideo.eu-west-1.amazonaws.com", "HTTPS": FauxApiVideo.points["HTTPS"]},
         {"HTTPS": FauxApiVideo.points["HTTPS"]},
+        {"WSS": "wss://evil.com\\.kinesisvideo.eu-west-1.amazonaws.com", "HTTPS": FauxApiVideo.points["HTTPS"]},
+        {"WSS": FauxApiVideo.points["WSS"], "HTTPS": "https://evil.com\\.kinesisvideo.eu-west-1.amazonaws.com"},
+        {"WSS": FauxApiVideo.points["WSS"] + "/?x=1", "HTTPS": FauxApiVideo.points["HTTPS"]},
+        {"WSS": "wss://evil.com#.kinesisvideo.eu-west-1.amazonaws.com", "HTTPS": FauxApiVideo.points["HTTPS"]},
+        {"WSS": "wss://M-ABC.kinesisvideo.eu-west-1.amazonaws.com:8443", "HTTPS": FauxApiVideo.points["HTTPS"]},
     ],
 )
 def test_demarrer_video_refuse_une_adresse_hors_kinesis_video_de_la_region(monkeypatch, points):
@@ -560,3 +597,238 @@ def test_demarrer_video_refuse_une_adresse_hors_kinesis_video_de_la_region(monke
     monkeypatch.setattr(liaison, "LymowApiClient", Detourne)
     with pytest.raises(liaison.EchecOrdre, match="inattendue"):
         asyncio.run(liaison.demarrer_video(None, IDENT, liaison.Acces("identite", "acces", {})))
+
+
+@pytest.mark.parametrize(
+    "adresse",
+    [
+        "wss://evil.com\\.kinesisvideo.eu-west-1.amazonaws.com", "wss://kinesisvideo.eu-west-1.amazonaws.com",
+        "wss://a..kinesisvideo.eu-west-1.amazonaws.com", "wss://-a.kinesisvideo.eu-west-1.amazonaws.com",
+        "wss://a.kinesisvideo.eu-west-1.amazonaws.com.", "wss://a.kinesisvideo.eu-west-1.amazonaws.com\n",
+        "wss://a b.kinesisvideo.eu-west-1.amazonaws.com", "wss://é.kinesisvideo.eu-west-1.amazonaws.com",
+        " wss://a.kinesisvideo.eu-west-1.amazonaws.com", "wss://a.kinesisvideo.eu-west-1xamazonaws.com", None, 12,
+    ],
+)
+def test_hote_video_expression_stricte(adresse):
+    assert liaison._hote_video(adresse, "wss", "eu-west-1") is False
+
+
+def test_hote_video_accepte_les_formes_attendues():
+    for adresse in ("wss://m-abc123.kinesisvideo.eu-west-1.amazonaws.com", "wss://a.b.kinesisvideo.eu-west-1.amazonaws.com:443/"):
+        assert liaison._hote_video(adresse, "wss", "eu-west-1") is True
+    assert liaison._hote_video("wss://a.kinesisvideo.mars-1.amazonaws.com", "wss", "mars-1") is False  # région inconnue
+
+
+# --- cinquième avenant : jeton tournant, concurrence, entrées hostiles -------
+
+
+class FauxHttp:
+    def __init__(self, **_kwargs) -> None:
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+
+def test_video_relit_le_coffre_a_chaque_acces_et_ne_rafraichit_jamais_en_parallele(tmp_path, monkeypatch):
+    from lymow_pilotage import coffre
+    from lymow_pilotage.vendor.ha_lymow.auth import LymowAuth
+
+    coffre_factice = {"jeton-rafraichissement": "jeton-tour-1", "region": "eu-west-1", "appareil": "robot-test", "methode": "google"}
+    presentes, vus, en_cours = [], [], [0, 0]
+
+    async def rafraichir(_http, jeton, _region, _methode):
+        en_cours[0] += 1
+        en_cours[1] = max(en_cours)
+        presentes.append(jeton)
+        await asyncio.sleep(0.03)
+        en_cours[0] -= 1
+        return {"AccessToken": "acces-court-1", "IdToken": "identite-courte-1", "RefreshToken": f"jeton-tour-{len(presentes) + 1}"}
+
+    async def cles_aws(_self, _id_token, _region):
+        return {"identity_id": "identite-aws-1", "credentials": {"AccessKeyId": "ASIAEXEMPLE1234", "SecretKey": "cle-1", "SessionToken": "s-1"}}
+
+    async def video(_http, ident, _acces):
+        vus.append(ident.jeton)
+        return {"wss": "wss://m.kinesisvideo.eu-west-1.amazonaws.com", "iceServers": []}
+
+    monkeypatch.setattr(coffre, "lire", coffre_factice.get)
+    monkeypatch.setattr(coffre, "ecrire", coffre_factice.__setitem__)
+    monkeypatch.setattr(auth, "rafraichir", rafraichir)
+    monkeypatch.setattr(LymowAuth, "get_aws_credentials", cles_aws)
+    monkeypatch.setattr(liaison, "demarrer_video", video)
+    monkeypatch.setattr(aiohttp, "ClientSession", FauxHttp)
+    serveur = ui.ServeurUI(Calibration(), Journal(tmp_path), reel=False, port=0)
+
+    async def scenario():
+        await serveur._video()  # le vrai chemin : coffre, rafraîchissement, vidéo
+        await asyncio.gather(serveur._video(), serveur._video())
+
+    executer(scenario())
+    assert presentes == ["jeton-tour-1", "jeton-tour-2", "jeton-tour-3"]  # jamais deux fois le même jeton
+    assert vus == presentes and en_cours[1] == 1
+    assert coffre_factice["jeton-rafraichissement"] == "jeton-tour-4"
+
+
+def test_video_second_demarrage_refuse_tant_que_la_page_tient_la_session(tmp_path, monkeypatch, session_reelle):
+    appels = []
+
+    async def fournir():
+        appels.append(True)
+        await asyncio.sleep(0.02)
+        return {"wss": "wss://m.kinesisvideo.eu-west-1.amazonaws.com", "iceServers": []}
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False, session=session_reelle) as (serveur, http):
+            serveur.fournir_video = fournir
+            premiers = await asyncio.gather(*(poster(http, serveur, "/api/video/demarrer") for _ in range(2)))
+            assert sorted(statut for statut, _corps, _recus in premiers) == [200, 409]
+            statut, corps, _recus = await poster(http, serveur, "/api/video/demarrer")
+            assert statut == 409 and "déjà ouverte" in corps["erreur"]
+            statut, _corps, _recus = await poster(http, serveur, "/api/video/arreter")
+            assert statut == 200
+            statut, _corps, _recus = await poster(http, serveur, "/api/video/demarrer")
+            assert statut == 200
+            await lire(http, serveur, "/")  # page rechargée : l'ancienne session n'existe plus
+            statut, _corps, _recus = await poster(http, serveur, "/api/video/demarrer")
+            assert statut == 200
+
+    executer(scenario())
+    assert len(appels) == 3  # le cloud n'a été contacté qu'une fois par démarrage accepté
+
+
+def test_video_echec_ne_bloque_pas_le_demarrage_suivant(tmp_path, monkeypatch, session_reelle):
+    async def panne():
+        raise ConnectionError("wss://hote/?X-Amz-Signature=fuite")
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False, session=session_reelle) as (serveur, http):
+            serveur.fournir_video = panne
+            for _ in range(2):
+                statut, corps, recus = await poster(http, serveur, "/api/video/demarrer")
+                assert statut == 502 and "X-Amz" not in corps["erreur"]
+                assert "default-src 'self'" in recus["Content-Security-Policy"]
+
+    executer(scenario())
+
+
+def test_stop_contre_emission_simultanee_une_seule_tache_et_pas_de_second_mouvement(tmp_path, monkeypatch, session_reelle, lien):
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=True, session=session_reelle) as (serveur, http):
+            await _lancer_avancer(http, serveur, lien)
+            _statut, corps, _recus = await poster(http, serveur, "/api/previsualiser", {"ordres": [{"nom": "tourner", "valeur": 90}]})
+            stop, emission = await asyncio.gather(
+                poster(http, serveur, "/api/stop"),
+                poster(http, serveur, "/api/emettre", {"identifiant": corps["identifiant"]}),
+            )
+            assert stop[0] == 202 and emission[0] == 409
+            await attendre(lambda: not serveur.occupe)
+            assert serveur.resultat["etapes"][0]["ordre"] == "stop"
+            taches = [t for t in asyncio.all_tasks() if t.get_coro().__qualname__.endswith("_conduire")]
+            assert taches == []  # aucune tâche orpheline
+
+    executer(scenario())
+    assert len(set(lien.consignes)) == 1 and len(lien.arrets) == 6  # aucune consigne de rotation
+
+
+def test_double_emission_simultanee_un_seul_ordre_part(tmp_path, monkeypatch, session_reelle, lien):
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=True, session=session_reelle) as (serveur, http):
+            _statut, corps, _recus = await poster(http, serveur, "/api/previsualiser", {"ordres": [{"nom": "avancer", "valeur": 0.3}]})
+            reponses = await asyncio.gather(
+                *(poster(http, serveur, "/api/emettre", {"identifiant": corps["identifiant"]}) for _ in range(3))
+            )
+            assert sorted(statut for statut, _corps, _recus in reponses) == [202, 409, 409]
+            await attendre(lambda: not serveur.occupe)
+
+    executer(scenario())
+    assert 10 <= len(lien.consignes) <= 12 and lien.arrets == [ARRET] * 3  # horloge réelle
+
+
+def test_double_actualisation_ne_rouvre_jamais_deux_liaisons_a_la_fois(tmp_path, monkeypatch, session_reelle, lien):
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False, session=session_reelle) as (serveur, http):
+            lien.connecte = False  # liaison tombée : chaque actualisation tente une reconnexion
+            reponses = await asyncio.gather(*(poster(http, serveur, "/api/actualiser") for _ in range(3)))
+            assert [statut for statut, _corps, _recus in reponses] == [200, 200, 200]
+            assert len(serveur.ouvertures) == 4 and serveur.simultanees[1] == 1
+
+    executer(scenario())
+
+
+def test_lancer_refuse_une_seconde_tache(tmp_path, monkeypatch, session_reelle, lien):
+    from aiohttp import web
+
+    from lymow_pilotage.mouvement import Ordre
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=True, session=session_reelle) as (serveur, http):
+            await _lancer_avancer(http, serveur, lien)
+            premiere = serveur.tache
+            with pytest.raises(web.HTTPConflict):
+                serveur._lancer([Ordre("tourner", 90.0)])
+            assert serveur.tache is premiere
+
+    executer(scenario())
+
+
+@pytest.mark.parametrize(
+    "corps",
+    [
+        '{"ordres":[{"nom":"avancer","valeur":1' + "0" * 400 + "}]}",
+        '{"ordres":[{"nom":"avancer","valeur":' + "9" * 5000 + "}]}",
+        '{"ordres":[{"nom":"avancer","valeur":1e400}]}',
+        '{"ordres":[{"nom":"avancer","valeur":-1e999}]}',
+        '{"ordres":[{"nom":"avancer","duree":1' + "0" * 400 + "}]}",
+        '{"ordres":[{"nom":"plateau","valeur":9' + "0" * 400 + "}]}",
+        '{"ordres":[{"nom":"avancer","valeur":NaN}]}',
+        "[" * 5000 + "]" * 5000,
+    ],
+)
+def test_entrees_numeriques_demesurees_refusees_proprement(tmp_path, monkeypatch, corps):
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False) as (serveur, http):
+            adresse = serveur.adresse + "api/previsualiser"
+            async with http.post(adresse, data=corps.encode(), headers=entetes(serveur)) as reponse:
+                assert reponse.status == 400, await reponse.text()
+                assert "erreur" in await reponse.json()
+                assert "default-src 'self'" in reponse.headers["Content-Security-Policy"]
+
+    executer(scenario())
+
+
+@pytest.mark.parametrize("nom", ["Host", "Origin", "Cookie"])
+def test_entete_non_ascii_refuse_proprement(tmp_path, monkeypatch, nom):
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False) as (serveur, http):
+            statut, corps, recus = await poster(http, serveur, "/api/previsualiser", AVANCER_1, **{nom: "éèà-ü"})
+            assert statut == 400 and "erreur" in corps
+            assert recus["X-Content-Type-Options"] == "nosniff"
+
+    executer(scenario())
+
+
+def test_resultat_et_signalements_filtres_comme_le_journal(tmp_path, monkeypatch, session_reelle, capsys):
+    from lymow_pilotage import conduite, journal
+    from lymow_pilotage.mouvement import Ordre
+
+    journal.declarer_secret("valeur-secrete-424242")
+
+    async def emettre(_session, _ordres, _journal):
+        return {"etapes": [{"ordre": "avancer 1", "constat": "fuite valeur-secrete-424242"}], "interrompue": False}, 0
+
+    monkeypatch.setattr(conduite, "emettre_ordres", emettre)
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=True, session=session_reelle) as (serveur, _http):
+            serveur._lancer([Ordre("avancer", 1.0)])
+            await attendre(lambda: not serveur.occupe)
+            serveur._signaler("alerte avec valeur-secrete-424242")
+            return json.dumps(serveur.instantane(), ensure_ascii=False)
+
+    ecran = executer(scenario())
+    assert "valeur-secrete-424242" not in ecran and "valeur-secrete-424242" not in capsys.readouterr().err
+    assert "[SECRET]" in ecran

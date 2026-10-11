@@ -45,7 +45,7 @@ LIBELLES = {
     "non_executees": "étapes non exécutées", "arret_non_confirme": "arrêt non confirmé",
     "avance_m": "avance le long du cap (m)", "verifie": "ordre vérifié par le constat",
     "lecture": "lecture de l'essai", "exposition": "exposition maximale",
-    "etat_recu": "état reçu", "perime": "état périmé",
+    "etat_recu": "état reçu", "perime": "état périmé", "code_sortie": "code de sortie",
 }
 
 

@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/statique/style.css">
 </head>
 <body>
-  <div id="bandeau-reel" class="bandeau-reel" hidden>MODE RÉEL — chaque ordre émis fait bouger le robot</div>
+  <div id="bandeau-reel" class="bandeau-reel" hidden>MODE RÉEL — chaque ordre émis fait bouger le robot. Ne fermez pas la fenêtre du terminal pendant un mouvement.</div>
 
   <header class="entete">
     <h1>Lymow <small id="appareil"></small></h1>
@@ -26,6 +26,8 @@
 
     <section aria-labelledby="titre-video">
       <h2 id="titre-video">Vidéo</h2>
+      <p class="note">« Démarrer la vidéo » contacte le cloud Lymow et active la caméra du robot,
+        même en simulation. Rien ne démarre tout seul.</p>
       <div class="cadre-video"><video id="video" muted playsinline></video></div>
       <p>
         <button id="video-demarrer" type="button">Démarrer la vidéo</button>
