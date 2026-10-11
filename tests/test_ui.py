@@ -290,7 +290,7 @@ def test_simulation_sans_compte_n_ouvre_jamais_la_liaison(tmp_path, monkeypatch)
             statut, texte, _recus = await lire(http, serveur, "/api/etat")
             image = json.loads(texte)
             assert image["connecte"] is False and image["etat"] is None
-            assert image["liaison"] == "non connecté — lancez « lymow connexion »"
+            assert image["liaison"] == ui.NON_CONNECTE and "Compte" in ui.NON_CONNECTE
             assert image["bornes"]["distance_max_m"] == 2.0 and image["libelles"]["duree_s"] == "durée (s)"
             statut, corps, _recus = await poster(http, serveur, "/api/previsualiser", AVANCER_1)
             assert statut == 200 and corps["bilan"]["etapes"][0]["deplacement_commande_m"] == 1.0
@@ -1130,3 +1130,207 @@ def test_csp_inchangee_par_la_connexion_et_sans_entrave_a_un_nouvel_onglet(tmp_p
     assert "connect-src 'self';" in regles and "lymow.com" not in regles and "google" not in regles.lower()
     # Rien qui bloquerait l'ouverture d'un onglet : ni bac à sable, ni restriction de navigation.
     assert "sandbox" not in regles and "navigate-to" not in regles
+
+
+# --- septième avenant : instance unique et réouverture de la page ------------
+
+
+async def rouvrir(http, serveur, mode="simulation", **entetes_en_plus):
+    adresse = serveur.adresse.rstrip("/") + ui.ROUTE_REOUVERTURE
+    async with http.post(adresse, json={"mode": mode}, headers=entetes_en_plus) as reponse:
+        return reponse.status, await reponse.json(), reponse.headers
+
+
+def test_second_lancement_du_meme_mode_fait_rouvrir_la_page_par_l_instance_en_place(tmp_path, monkeypatch, capsys):
+    ouvertes = []
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False) as (serveur, http):
+            serveur.ouvrir_navigateur = lambda adresse: ouvertes.append(adresse) or True
+            ancien_jeton, temoin = serveur.jeton, serveur.temoin
+            message = await ui.servir(Calibration(), Journal(tmp_path), reel=False, port=serveur.port, navigateur=False)
+            assert message == "interface déjà ouverte : page rouverte dans le navigateur"
+            (adresse,) = ouvertes  # c'est l'instance en place qui a appelé le navigateur
+            assert adresse.startswith(serveur.adresse + "?jeton=") and ancien_jeton not in adresse
+            assert serveur.temoin == temoin  # la session existante reste valable
+            statut, _texte, recus = await lire(http, serveur, adresse.removeprefix(serveur.adresse.rstrip("/")), Cookie=None)
+            assert statut == 303 and f"lymow_ui={temoin}" in recus["Set-Cookie"]  # le nouveau jeton ouvre bien la page
+            statut, _texte, _recus = await lire(http, serveur, "/api/etat")
+            assert statut == 200
+            return adresse
+
+    adresse = executer(scenario())
+    sortie = capsys.readouterr()
+    assert adresse not in sortie.out + sortie.err  # le jeton ne passe ni par la réponse ni par la console
+    assert cli.main(["ui", "--donnees", str(tmp_path), "--port", "1"]) == 2  # garde de port intacte
+
+
+def test_second_lancement_par_la_commande_code_zero(tmp_path, monkeypatch, capsys):
+    ouvertes = []
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False) as (serveur, _http):
+            serveur.ouvrir_navigateur = lambda adresse: ouvertes.append(adresse) or True
+            from lymow_pilotage import config
+
+            cal = config.charger_calibration(tmp_path)
+            return await cli._commande_ui(
+                cli.construire_analyseur().parse_args(["ui", "--port", str(serveur.port)]),
+                cli.Contexte(cal, Journal(tmp_path), 75.0),
+            )
+
+    resultat, code = executer(scenario())
+    assert code == 0 and resultat == {"interface": "interface déjà ouverte : page rouverte dans le navigateur"}
+    assert len(ouvertes) == 1
+
+
+@pytest.mark.parametrize(("en_place", "demande", "noms"), [(True, False, ("réel", "simulation")), (False, True, ("simulation", "réel"))])
+def test_second_lancement_d_un_autre_mode_refuse_sans_rouvrir(tmp_path, monkeypatch, en_place, demande, noms):
+    ouvertes = []
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=en_place) as (serveur, _http):
+            serveur.ouvrir_navigateur = lambda adresse: ouvertes.append(adresse) or True
+            with pytest.raises(ui.EchecDemarrage) as erreur:
+                await ui.servir(Calibration(), Journal(tmp_path), reel=demande, port=serveur.port, navigateur=False)
+            return str(erreur.value)
+
+    message = executer(scenario())
+    assert message == f"une interface en mode {noms[0]} tourne déjà ; fermez sa fenêtre avant de lancer le mode {noms[1]}"
+    assert ouvertes == []
+
+
+def test_port_occupe_par_un_autre_programme_message_dedie(tmp_path, monkeypatch):
+    from aiohttp import web
+
+    async def tiers(_requete):
+        return web.json_response({"interface": "autre chose", "mode": "simulation", "ok": True})
+
+    async def scenario():
+        application = web.Application()
+        application.router.add_route("*", "/{reste:.*}", tiers)
+        lanceur = web.AppRunner(application, access_log=None)
+        await lanceur.setup()
+        site = web.TCPSite(lanceur, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        try:
+            with pytest.raises(ui.EchecDemarrage) as erreur:
+                await ui.servir(Calibration(), Journal(tmp_path), reel=False, port=port, navigateur=False)
+        finally:
+            await lanceur.cleanup()
+        return port, str(erreur.value)
+
+    port, message = executer(scenario())
+    assert f"le port {port} est occupé par un autre programme" in message and "--port" in message
+
+
+def test_route_de_reouverture_fermee_aux_sites_web_et_limitee_en_frequence(tmp_path, monkeypatch):
+    ouvertes = []
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False) as (serveur, http):
+            serveur.ouvrir_navigateur = lambda adresse: ouvertes.append(adresse) or True
+            base = f"http://127.0.0.1:{serveur.port}"
+            for en_plus in ({"Origin": base}, {"Origin": "http://evil.example"}, {"Referer": base + "/"}, {"Origin": "null"}):
+                statut, _corps, recus = await rouvrir(http, serveur, **en_plus)
+                assert statut == 403, en_plus  # un navigateur joint toujours l'un des deux à un POST
+                assert "default-src 'self'" in recus["Content-Security-Policy"]
+            for hote in ("evil.example", f"evil.example:{serveur.port}", "127.0.0.1:1"):
+                statut, _corps, _recus = await rouvrir(http, serveur, Host=hote)
+                assert statut == 403
+            async with http.get(serveur.adresse.rstrip("/") + ui.ROUTE_REOUVERTURE) as reponse:
+                assert reponse.status == 405
+            assert ouvertes == []
+
+            statut, corps, _recus = await rouvrir(http, serveur, mode="réel")
+            assert statut == 409 and corps == {"interface": "lymow", "mode": "simulation", "ok": False}
+            for inattendu in (None, 12, "RÉEL", ["simulation"]):
+                statut, _corps, _recus = await rouvrir(http, serveur, mode=inattendu)
+                assert statut == 409
+            assert ouvertes == []
+
+            statut, corps, _recus = await rouvrir(http, serveur)
+            assert statut == 200 and corps == {"interface": "lymow", "mode": "simulation", "ok": True}  # rien de sensible
+            statut, corps, _recus = await rouvrir(http, serveur)
+            assert statut == 429 and corps["ok"] is False and len(ouvertes) == 1  # moins de 3 s après
+            with pytest.raises(ui.EchecDemarrage, match="réessayez"):
+                await ui.rejoindre(serveur.port, False)
+            maintenant = serveur.horloge()
+            serveur.horloge = lambda: maintenant + ui.DELAI_REOUVERTURE_S + 0.1
+            statut, _corps, _recus = await rouvrir(http, serveur)
+            assert statut == 200 and len(ouvertes) == 2 and ouvertes[0] != ouvertes[1]
+            jeton_perime = ouvertes[0].split("jeton=")[1]
+            statut, _texte, _recus = await lire(http, serveur, f"/?jeton={jeton_perime}", Cookie=None)
+            assert statut == 403  # seul le dernier jeton d'adresse vaut, et une seule fois
+
+    executer(scenario())
+    assert ui.DELAI_REOUVERTURE_S >= 3
+
+
+def test_reouverture_pendant_un_mouvement_ne_le_touche_pas(tmp_path, monkeypatch, session_reelle, lien):
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=True, session=session_reelle) as (serveur, http):
+            serveur.ouvrir_navigateur = lambda _adresse: True
+            await _lancer_avancer(http, serveur, lien)
+            tache, temoin = serveur.tache, serveur.temoin
+            statut, corps, _recus = await rouvrir(http, serveur, mode="réel")
+            assert statut == 200 and corps["ok"] is True
+            assert serveur.tache is tache and serveur.occupe and serveur.temoin == temoin
+            statut, _corps, _recus = await poster(http, serveur, "/api/stop")  # l'ancienne page pilote toujours
+            assert statut == 202
+
+    executer(scenario())
+
+
+def test_navigateur_introuvable_adresse_affichee_et_serveur_maintenu(tmp_path, monkeypatch, capsys):
+    def sans_navigateur(_adresse):
+        raise OSError("aucun navigateur")
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False) as (serveur, http):
+            serveur.ouvrir_navigateur = sans_navigateur
+            assert serveur.ouvrir_page() is False
+            statut, _texte, _recus = await lire(http, serveur, "/api/etat")
+            assert statut == 200  # le serveur tourne toujours
+            with pytest.raises(ui.EchecDemarrage, match="navigateur n'a pas pu être lancé"):
+                await ui.rejoindre(serveur.port, False)
+            return serveur.jeton
+
+    jeton = executer(scenario())
+    sortie = capsys.readouterr().out
+    assert "Le navigateur n'a pas pu être ouvert automatiquement." in sortie and f"?jeton={jeton}" in sortie
+
+
+@pytest.mark.parametrize(("interactif", "attendu"), [(True, 1), (False, 0)])
+def test_erreur_de_demarrage_fenetre_retenue_seulement_en_console_interactive(tmp_path, monkeypatch, capsys, interactif, attendu):
+    import sys
+
+    invites = []
+
+    async def servir(_cal, _journal, *, reel, port):
+        raise ui.EchecDemarrage("le port 8377 est occupé par un autre programme")
+
+    monkeypatch.setattr(ui, "servir", servir)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: interactif, raising=False)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: interactif, raising=False)
+    monkeypatch.setattr("builtins.input", lambda invite="": invites.append(invite) or "")
+    assert cli.main(["ui", "--donnees", str(tmp_path)]) == 1
+    assert "le port 8377 est occupé" in capsys.readouterr().err
+    assert len(invites) == attendu and (not invites or invites[0] == "Appuyez sur Entrée pour fermer.")
+
+
+def test_aucune_pause_pour_les_autres_commandes_meme_en_console_interactive(tmp_path, monkeypatch):
+    import sys
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr("builtins.input", lambda invite="": (_ for _ in ()).throw(AssertionError("pause inattendue")))
+    assert cli.main(["sequence", "voler 3", "--donnees", str(tmp_path)]) == 2
+
+
+def test_la_page_renvoie_au_panneau_compte_et_donne_l_astuce_de_la_console():
+    page = (ui.STATIQUE / "index.html").read_text(encoding="utf-8")
+    script = (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
+    assert "lymow connexion" not in page + script
+    assert "onglet « Console »" in page and "Failed to launch" in page

@@ -78,6 +78,19 @@ s'appliquent pas.
 navigateur et s'arrête sur Ctrl+C. `lancer-lymow.cmd` (double-clic) lance
 `lymow ui` en simulation.
 
+- Une seule instance par port. Relancer `lymow ui` (ou le raccourci) alors
+  qu'une interface du même mode tourne déjà ne démarre rien : l'instance en
+  place rouvre elle-même la page dans le navigateur, avec un nouveau jeton à
+  usage unique, et la seconde commande se termine (« interface déjà ouverte :
+  page rouverte dans le navigateur », code 0). Si l'instance en place est dans
+  l'autre mode, le lancement est refusé : fermez d'abord sa fenêtre. Si le port
+  est pris par un autre programme : `lymow ui --port N`. La demande de
+  réouverture est une route locale que les sites web ne peuvent pas atteindre
+  (refusée dès qu'un en-tête `Origin` ou `Referer` est présent), limitée à une
+  fois toutes les 3 s, et elle ne touche ni la session ni un mouvement en cours.
+- Au double-clic, une erreur de démarrage reste affichée jusqu'à l'appui sur
+  Entrée. Si le navigateur ne s'ouvre pas, l'adresse à ouvrir est affichée
+  dans la fenêtre, qui reste ouverte.
 - La page passe par les mêmes fonctions que la ligne de commande : mêmes
   validations, mêmes règles SEC-01 à SEC-07, même journal.
 - Sans `--reel` au lancement, le serveur refuse tout ordre réel quoi que

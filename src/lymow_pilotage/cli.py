@@ -135,9 +135,16 @@ def construire_analyseur() -> argparse.ArgumentParser:
         "la connexion au compte Google peut s'y faire"
     )
     interface.add_argument(
-        "--port", type=mouvement.lire_entier, default=PORT_UI, metavar="N", help=f"port local (défaut : {PORT_UI})"
+        "--port", type=_lire_port, default=PORT_UI, metavar="N", help=f"port local (défaut : {PORT_UI})"
     )
     return analyseur
+
+
+def _lire_port(texte: str) -> int:
+    # `lire_entier` s'arrête à quatre chiffres (millimètres) : un port en compte jusqu'à cinq.
+    if not (texte.isascii() and texte.isdigit() and len(texte) <= 5):
+        raise ValueError("numéro de port attendu")
+    return int(texte)
 
 
 async def _commande_ui(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
@@ -145,8 +152,7 @@ async def _commande_ui(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, in
 
     if not 1024 <= args.port <= 65535:
         raise ErreurSaisie("port attendu entre 1024 et 65535")
-    await ui.servir(ctx.cal, ctx.journal, reel=args.reel, port=args.port)
-    return {"interface": "arrêtée"}, 0
+    return {"interface": await ui.servir(ctx.cal, ctx.journal, reel=args.reel, port=args.port)}, 0
 
 
 def _ordres(args: argparse.Namespace) -> list[Ordre]:
@@ -294,6 +300,15 @@ def _valeur(valeur: Any) -> str:
     return str(valeur)
 
 
+def _retenir_la_fenetre() -> None:
+    """Double-clic : sans cette pause, la fenêtre se ferme avant qu'on ait lu l'erreur."""
+    try:
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            input("Appuyez sur Entrée pour fermer.")
+    except (EOFError, OSError, ValueError):
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     for flux in (sys.stdout, sys.stderr):
         if hasattr(flux, "reconfigure"):
@@ -313,6 +328,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Erreur : {masquer(str(erreur)) or type(erreur).__name__}", file=sys.stderr)
         if isinstance(erreur, mouvement.ArretNonConfirme):
             return CODE_ARRET_NON_CONFIRME
+        if args.commande == "ui":
+            _retenir_la_fenetre()
         refus = (RefusSecurite, ErreurSaisie, config.ErreurConfiguration)
         return CODE_REFUS if isinstance(erreur, refus) else 1
     if code == CODE_ARRET_NON_CONFIRME:

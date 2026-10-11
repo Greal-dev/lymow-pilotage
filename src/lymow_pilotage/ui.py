@@ -45,7 +45,14 @@ FICHIERS = {
     "style.css": "text/css",
 }
 NOMS_ORDRES = (*mouvement.ETAPES_SEQUENCE, mouvement.ESSAI, *mouvement.TACHES)
-NON_CONNECTE = "non connecté — lancez « lymow connexion »"
+NON_CONNECTE = "non connecté — utilisez le panneau « Compte » de cette page"
+ROUTE_REOUVERTURE = "/api/instance/rouvrir"
+DELAI_REOUVERTURE_S = 3.0  # au plus une réouverture de page toutes les trois secondes
+MODES = ("simulation", "réel")
+
+
+class EchecDemarrage(Exception):
+    """L'interface n'a pas pu démarrer ; le message dit quoi faire."""
 
 
 def _bornes() -> dict[str, Any]:
@@ -124,6 +131,8 @@ class ServeurUI:
         self.ferme = False
         self.fin = asyncio.Event()
         self.fournir_video = self._video
+        self.ouvrir_navigateur = webbrowser.open
+        self._derniere_reouverture: float | None = None
         self.video_ouverte = False
         # Connexion au compte : vérificateur PKCE et `state` ne quittent jamais la mémoire du serveur.
         self.tentative: tuple[auth.DemandeOAuth, float] | None = None
@@ -153,6 +162,7 @@ class ServeurUI:
                 web.post("/api/video/demarrer", self._video_demarrer),
                 web.post("/api/video/arreter", self._video_arreter),
                 web.get("/favicon.ico", self._sans_contenu),
+                web.post(ROUTE_REOUVERTURE, self._rouvrir),
                 web.post("/api/compte/commencer", self._compte_commencer),
                 web.post("/api/compte/valider", self._compte_valider),
                 web.post("/api/compte/choisir", self._compte_choisir),
@@ -175,6 +185,24 @@ class ServeurUI:
     @property
     def adresse(self) -> str:
         return f"http://{HOTE}:{self.port}/"
+
+    @property
+    def mode(self) -> str:
+        return MODES[1] if self.reel else MODES[0]
+
+    def ouvrir_page(self) -> bool:
+        """Nouveau jeton d'adresse à usage unique, donné au navigateur par CE processus seulement."""
+        self.jeton = secrets.token_urlsafe(32)
+        declarer_secret(self.jeton)
+        adresse = f"{self.adresse}?jeton={self.jeton}"
+        try:
+            ouvert = bool(self.ouvrir_navigateur(adresse))
+        except Exception:  # noqa: BLE001 — aucun navigateur utilisable
+            ouvert = False
+        if not ouvert:
+            print("Le navigateur n'a pas pu être ouvert automatiquement.")
+            print(f"Ouvrez cette adresse (elle ne sert qu'une fois) : {adresse}", flush=True)
+        return ouvert
 
     async def arreter(self) -> None:
         """SEC-03 : un mouvement en cours reçoit son arrêt AVANT la fermeture de la liaison."""
@@ -260,6 +288,14 @@ class ServeurUI:
             return _refus(403, "hôte refusé")
         if requete.method not in ("GET", "POST"):
             return _refus(405, "méthode refusée")
+        if requete.path == ROUTE_REOUVERTURE:
+            # Réservée à un second « lymow ui » sur ce poste : un navigateur joint toujours
+            # Origin ou Referer à un POST, donc aucun site web ne peut la déclencher.
+            if requete.method != "POST":
+                return _refus(405, "méthode refusée")
+            if "Origin" in requete.headers or "Referer" in requete.headers:
+                return _refus(403, "origine refusée")
+            return await self._rouvrir(requete)
         origines = (f"http://{HOTE}:{self.port}", f"http://localhost:{self.port}")
         if requete.method == "POST" and requete.headers.get("Origin") not in origines:
             return _refus(403, "origine refusée")
@@ -274,6 +310,25 @@ class ServeurUI:
             return _refus(400, str(erreur))
         except Exception as erreur:  # noqa: BLE001 — jamais de réponse brute sans nos en-têtes
             return _refus(500, f"erreur interne ({type(erreur).__name__})")
+
+    async def _rouvrir(self, requete: web.Request) -> web.StreamResponse:
+        """Un second lancement demande de rouvrir la page ; la réponse ne porte ni jeton ni adresse."""
+        try:
+            corps = await requete.json()
+        except (ValueError, RecursionError):
+            corps = None
+        demande = corps.get("mode") if isinstance(corps, dict) else None
+        reponse = {"interface": "lymow", "mode": self.mode, "ok": False}
+        if demande != self.mode:
+            return web.json_response(reponse, status=409)
+        maintenant = self.horloge()
+        if self._derniere_reouverture is not None and maintenant - self._derniere_reouverture < DELAI_REOUVERTURE_S:
+            return web.json_response(reponse, status=429)
+        self._derniere_reouverture = maintenant
+        # Le témoin de session ne change pas : un mouvement en cours et sa page restent valides.
+        reponse["ok"] = self.ouvrir_page()
+        self._noter("page rouverte à la demande d'un second lancement")
+        return web.json_response(reponse)
 
     # --- page et état ---------------------------------------------------------
 
@@ -594,14 +649,51 @@ def _refus(statut: int, message: str) -> web.Response:
     return web.json_response({"erreur": message}, status=statut)
 
 
-async def servir(cal: Calibration, journal: Journal, *, reel: bool, port: int, navigateur: bool = True) -> None:
+async def rejoindre(port: int, reel: bool) -> str:
+    """Port occupé : si c'est une interface lymow du même mode, lui faire rouvrir sa page."""
+    mode = MODES[1] if reel else MODES[0]
+    corps: Any = None
+    statut = 0
+    try:
+        delai = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=delai) as http:
+            adresse = f"http://{HOTE}:{port}{ROUTE_REOUVERTURE}"
+            async with http.post(adresse, json={"mode": mode}, allow_redirects=False) as reponse:
+                statut = reponse.status
+                corps = await reponse.json(content_type=None)
+    except Exception:  # noqa: BLE001 — tout autre programme répond autrement, ou pas du tout
+        corps = None
+    if not isinstance(corps, dict) or corps.get("interface") != "lymow" or corps.get("mode") not in MODES:
+        raise EchecDemarrage(
+            f"le port {port} est occupé par un autre programme : fermez-le, ou choisissez un autre port "
+            f"avec « lymow ui --port N »"
+        )
+    if corps["mode"] != mode:
+        raise EchecDemarrage(
+            f"une interface en mode {corps['mode']} tourne déjà ; fermez sa fenêtre avant de lancer le mode {mode}"
+        )
+    if corps.get("ok") is True:
+        return "interface déjà ouverte : page rouverte dans le navigateur"
+    if statut == 429:
+        raise EchecDemarrage("interface déjà ouverte, page rouverte à l'instant : réessayez dans quelques secondes")
+    raise EchecDemarrage(
+        "interface déjà ouverte, mais son navigateur n'a pas pu être lancé : l'adresse à ouvrir est dans sa fenêtre"
+    )
+
+
+async def servir(cal: Calibration, journal: Journal, *, reel: bool, port: int, navigateur: bool = True) -> str:
     serveur = ServeurUI(cal, journal, reel=reel, port=port)
-    await serveur.demarrer()
+    if not navigateur:
+        serveur.ouvrir_navigateur = lambda _adresse: False
+    try:
+        await serveur.demarrer()
+    except OSError:  # port déjà pris (WinError 10048) : une interface tourne peut-être déjà
+        await serveur.arreter()
+        return await rejoindre(port, reel)
     try:
         print(f"Interface en mode {'RÉEL' if reel else 'simulation'} sur {serveur.adresse} — Ctrl+C pour arrêter.")
-        adresse = f"{serveur.adresse}?jeton={serveur.jeton}"
-        if not (navigateur and webbrowser.open(adresse)):
-            print(f"Ouvrez cette adresse (valable pour ce lancement seulement) : {adresse}")
+        serveur.ouvrir_page()  # en cas d'échec : adresse affichée, et la fenêtre reste ouverte
         await serveur.fin.wait()
     finally:
         await serveur.arreter()
+    return "interface arrêtée"
