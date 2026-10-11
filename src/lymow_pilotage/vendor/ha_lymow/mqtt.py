@@ -15,7 +15,10 @@ Modifications par rapport à l'original :
   d'écoute s'interrompt ;
 - journaux : type de l'erreur seulement, jamais son texte ;
 - décodage des cartes et des chemins retiré de la réception ;
-- ``reconnect`` retiré.
+- ``reconnect`` retiré ; ``connect`` accepte ``subscribe=False`` (reconnexion
+  de secours pour publier un arrêt sans attendre les abonnements) ;
+- les deux fonctions de rappel reçoivent en plus l'indicateur ``retain`` du
+  message (un message conservé par le serveur n'a pas d'âge connu).
 """
 
 from __future__ import annotations
@@ -115,8 +118,8 @@ def build_presigned_ws_path(
 # MQTT client
 # ---------------------------------------------------------------------------
 
-StateCallback = Callable[[str, dict[str, Any]], None]  # (thing_name, state_patch)
-OnlineCallback = Callable[[str, bool], None]  # (thing_name, is_online)
+StateCallback = Callable[[str, dict[str, Any], bool], None]  # (thing_name, state_patch, retained)
+OnlineCallback = Callable[[str, bool, bool], None]  # (thing_name, is_online, retained)
 
 
 class MqttNotConnectedError(RuntimeError):
@@ -153,6 +156,7 @@ class LymowMqttClient:
         access_key: str,
         secret_key: str,
         session_token: str | None,
+        subscribe: bool = True,
     ) -> None:
         """Connect to AWS IoT and start the async message listener."""
         self._things = things
@@ -175,7 +179,7 @@ class LymowMqttClient:
 
         try:
             await client.__aenter__()
-            for thing in things:
+            for thing in things if subscribe else ():
                 await client.subscribe(f"/device/{thing}/pboutput", qos=1)
                 await client.subscribe(f"/device/{thing}/notify-app", qos=1)
         except (aiomqtt.MqttError, asyncio.TimeoutError, OSError) as err:
@@ -231,18 +235,19 @@ class LymowMqttClient:
         if thing_name is None:
             return
 
+        retained = bool(getattr(message, "retain", False))
         try:
             if topic.endswith("/pboutput"):
-                self._on_state(thing_name, decode_pboutput(unwrap_envelope(payload)))
+                self._on_state(thing_name, decode_pboutput(unwrap_envelope(payload)), retained)
             elif topic.endswith("/notify-app"):
-                self._handle_notify(thing_name, payload)
+                self._handle_notify(thing_name, payload, retained)
         except Exception as err:  # noqa: BLE001 — charge non fiable : ne jamais tuer l'écoute
             _LOGGER.warning("MQTT message ignored (%s)", type(err).__name__)
 
-    def _handle_notify(self, thing_name: str, payload: bytes | str) -> None:
+    def _handle_notify(self, thing_name: str, payload: bytes | str, retained: bool) -> None:
         try:
             data = json.loads(payload)
             is_online = str(data.get("robotState", "")).lower() == "online"
         except Exception:  # noqa: BLE001
             return
-        self._on_online(thing_name, is_online)
+        self._on_online(thing_name, is_online, retained)

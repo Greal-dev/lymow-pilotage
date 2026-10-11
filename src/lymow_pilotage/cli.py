@@ -27,6 +27,11 @@ from .vendor.ha_lymow.auth import LymowAuth
 _ORDRES_SIMPLES = ("plateau-haut", "stop", "reprendre", "base", "annuler")
 _AUTORISEES_ORDRES = frozenset(Categorie)
 _LECTURE = frozenset({Categorie.REQUETE_PURE})
+# Codes de sortie : 0 fait, 1 échec ou séquence interrompue, 2 refus ou saisie,
+# 3 arrêt non confirmé (le robot peut encore bouger), 130 interruption clavier.
+CODE_REFUS = 2
+CODE_ARRET_NON_CONFIRME = 3
+_ALERTE_ARRET = "ARRÊT NON CONFIRMÉ : arrêtez le robot par son bouton STOP ou par l'application."
 
 _MODE_D_EMPLOI = """\
 1. Ouvrez un navigateur, puis ses outils de développement (F12), onglet Réseau,
@@ -50,7 +55,7 @@ def _communs(defauts: bool) -> argparse.ArgumentParser:
     """Options acceptées avant ou après la commande (`lymow stop --reel`)."""
     absent: Any = None if defauts else argparse.SUPPRESS
     faux: Any = False if defauts else argparse.SUPPRESS
-    analyseur = argparse.ArgumentParser(add_help=False)
+    analyseur = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     analyseur.add_argument("--reel", action="store_true", default=faux, help="émettre réellement (sinon : simulation)")
     analyseur.add_argument("--json", action="store_true", default=faux, help="sortie JSON")
     analyseur.add_argument("--donnees", default=absent, metavar="DOSSIER", help="dossier des journaux et de calibration.toml")
@@ -62,21 +67,28 @@ def construire_analyseur() -> argparse.ArgumentParser:
         prog="lymow",
         description="Pilotage prudent d'un robot Lymow One Plus. Simulation par défaut.",
         parents=[_communs(True)],
+        allow_abbrev=False,  # « --re » ne doit jamais valoir « --reel »
     )
     commandes = analyseur.add_subparsers(dest="commande", required=True, metavar="commande")
     fils = [_communs(False)]
 
-    connexion = commandes.add_parser("connexion", parents=fils, help="enregistrer l'accès au compte (Google par défaut)")
-    connexion.add_argument("--mot-de-passe", action="store_true", help="compte Lymow à adresse et mot de passe")
-    commandes.add_parser("diagnostic", parents=fils, help="vérifier l'accès de bout en bout, sans rien publier")
-    etat = commandes.add_parser("etat", parents=fils, help="afficher l'état du robot (lecture seule)")
-    etat.add_argument("--passif", action="store_true", help="écoute seule : aucune requête émise")
-    for nom in ("etat", "diagnostic"):
-        commandes.choices[nom].add_argument("--attente", type=float, default=75.0, metavar="S", help="attente maximale d'un état")
+    def ajouter(nom: str, aide: str) -> argparse.ArgumentParser:
+        return commandes.add_parser(nom, parents=fils, help=aide, allow_abbrev=False)
 
-    commandes.add_parser("tourner", parents=fils, help="pivoter (positif = gauche)").add_argument("valeur", type=float, metavar="degrés")
-    commandes.add_parser("avancer", parents=fils, help="avancer").add_argument("valeur", type=float, metavar="mètres")
-    commandes.add_parser("reculer", parents=fils, help="reculer").add_argument("valeur", type=float, metavar="mètres")
+    connexion = ajouter("connexion", "enregistrer l'accès au compte (Google par défaut)")
+    connexion.add_argument("--mot-de-passe", action="store_true", help="compte Lymow à adresse et mot de passe")
+    diagnostic = ajouter("diagnostic", "vérifier l'accès de bout en bout, sans rien publier")
+    etat = ajouter("etat", "afficher l'état du robot (lecture seule)")
+    etat.add_argument("--passif", action="store_true", help="écoute seule : aucune requête émise")
+    for lecture in (etat, diagnostic):
+        lecture.add_argument(
+            "--attente", type=mouvement.lire_nombre, default=75.0, metavar="S", help="attente maximale d'un état"
+        )
+
+    nombre = mouvement.lire_nombre
+    ajouter("tourner", "pivoter (positif = gauche)").add_argument("valeur", type=nombre, metavar="degrés")
+    ajouter("avancer", "avancer").add_argument("valeur", type=nombre, metavar="mètres")
+    ajouter("reculer", "reculer").add_argument("valeur", type=nombre, metavar="mètres")
     aides = {
         "plateau-haut": "lever le plateau de coupe au maximum",
         "stop": "arrêt du pilotage manuel (sans précondition avec --reel)",
@@ -85,8 +97,8 @@ def construire_analyseur() -> argparse.ArgumentParser:
         "annuler": "annuler la tâche, arrêt sur place",
     }
     for nom in _ORDRES_SIMPLES:
-        commandes.add_parser(nom, parents=fils, help=aides[nom])
-    sequence = commandes.add_parser("sequence", parents=fils, help='enchaîner : "plateau-haut; tourner 90; avancer 1"')
+        ajouter(nom, aides[nom])
+    sequence = ajouter("sequence", 'enchaîner : "plateau-haut; tourner 90; avancer 1"')
     sequence.add_argument("etapes", metavar='"étape; étape; …"')
     return analyseur
 
@@ -97,37 +109,49 @@ def _ordres(args: argparse.Namespace) -> list[Ordre]:
     return [Ordre(args.commande, getattr(args, "valeur", None))]
 
 
-def _simuler(ordres: list[Ordre], ctx: Contexte) -> tuple[list[dict[str, Any]], int]:
+def _refuser(ordres: list[Ordre], ctx: Contexte, mode: str) -> dict[str, Any] | None:
+    """SEC-07 : un seul plafond dépassé et rien n'est simulé, ouvert ni émis."""
+    refus = mouvement.refus_prealable(ordres, ctx.cal)
+    if refus is None:
+        return None
+    ctx.journal.ecrire("ordre-refuse", mode=mode, **refus)
+    return {"mode": mode, "etapes": []} | refus
+
+
+def _simuler(ordres: list[Ordre], ctx: Contexte) -> tuple[dict[str, Any], int]:
     # SEC-05 : ce chemin n'ouvre aucune liaison et ne publie rien.
+    refus = _refuser(ordres, ctx, "simulation")
+    if refus:
+        return refus, CODE_REFUS
     appareil = coffre.appareil_connu()
-    etapes: list[dict[str, Any]] = []
-    for ordre in ordres:
-        try:
-            etape = mouvement.simuler(ordre, ctx.cal, appareil)
-        except RefusSecurite as refus:  # SEC-07 : arrêt au premier refus
-            ctx.journal.ecrire("ordre-refuse", mode="simulation", ordre=str(ordre), motif=str(refus))
-            etapes.append({"mode": "simulation", "ordre": str(ordre), "echec": str(refus)})
-            return etapes, 2
+    etapes = [mouvement.simuler(ordre, ctx.cal, appareil) for ordre in ordres]
+    for etape in etapes:
         ctx.journal.ecrire("ordre-simule", **etape)  # SEC-06
-        etapes.append(etape)
-    return etapes, 0
+    return {"mode": "simulation", "etapes": etapes, "interrompue": False}, 0
 
 
-async def _emettre(ordres: list[Ordre], ctx: Contexte) -> tuple[list[dict[str, Any]], int]:
+async def _emettre(ordres: list[Ordre], ctx: Contexte) -> tuple[dict[str, Any], int]:
+    refus = _refuser(ordres, ctx, "réel")
+    if refus:
+        return refus, CODE_REFUS
     ctx.journal.ecrire("session-reelle", strict=True, ordres=[str(ordre) for ordre in ordres])
     async with liaison.ouvrir_session(ctx.journal, ctx.cal, _AUTORISEES_ORDRES) as session:
         bilan = await mouvement.executer_sequence(session, ordres)
     for etape in bilan["etapes"]:
         ctx.journal.ecrire("ordre-refuse" if "echec" in etape else "ordre-constate", **etape)
-    return bilan["etapes"], 1 if bilan["interrompue"] else 0
+    if bilan.get("arret_non_confirme"):
+        return bilan, CODE_ARRET_NON_CONFIRME
+    return bilan, 1 if bilan["interrompue"] else 0
 
 
 async def _commande_ordres(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
     ordres = _ordres(args)
-    etapes, code = await _emettre(ordres, ctx) if args.reel else _simuler(ordres, ctx)
-    if args.commande != "sequence":
-        return etapes[0], code
-    return {"sequence": args.etapes, "etapes": etapes, "interrompue": code != 0}, code
+    bilan, code = await _emettre(ordres, ctx) if args.reel else _simuler(ordres, ctx)
+    if args.commande == "sequence":
+        return {"sequence": args.etapes} | bilan, code
+    if bilan["etapes"]:
+        return bilan["etapes"][0], code
+    return {"mode": bilan["mode"], "ordre": str(ordres[0]), "echec": bilan["motif"]}, code
 
 
 async def _commande_etat(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
@@ -251,6 +275,8 @@ _LIBELLES = {
     "rtk_satellites": "satellites RTK", "signal_4g": "signal 4G", "signal_wifi": "signal Wi-Fi",
     "wifi_rssi_dbm": "Wi-Fi RSSI (dBm)", "age_etat_s": "âge de l'état (s)", "etape": "étape",
     "reussi": "réussi", "detail": "détail", "region": "région", "methode": "méthode",
+    "non_executees": "étapes non exécutées", "arret_non_confirme": "arrêt non confirmé",
+    "avance_m": "avance le long du cap (m)", "verifie": "ordre vérifié par le constat",
 }
 
 
@@ -294,12 +320,17 @@ def main(argv: list[str] | None = None) -> int:
         ctx = Contexte(config.charger_calibration(dossier), Journal(dossier), getattr(args, "attente", 75.0))
         commande = _COMMANDES.get(args.commande, _commande_ordres)
         resultat, code = asyncio.run(commande(args, ctx), loop_factory=fabrique)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         print("Interrompu.", file=sys.stderr)
         return 130
     except Exception as erreur:  # noqa: BLE001 — sortie unique, filtrée (SEC-06)
         print(f"Erreur : {masquer(str(erreur)) or type(erreur).__name__}", file=sys.stderr)
-        return 2 if isinstance(erreur, (RefusSecurite, ErreurSaisie, config.ErreurConfiguration)) else 1
+        if isinstance(erreur, mouvement.ArretNonConfirme):
+            return CODE_ARRET_NON_CONFIRME
+        refus = (RefusSecurite, ErreurSaisie, config.ErreurConfiguration)
+        return CODE_REFUS if isinstance(erreur, refus) else 1
+    if code == CODE_ARRET_NON_CONFIRME:
+        print(_ALERTE_ARRET, file=sys.stderr, flush=True)  # en tête, avant tout compte rendu
     if args.json:
         print(json.dumps(resultat, ensure_ascii=False, indent=2))
     else:

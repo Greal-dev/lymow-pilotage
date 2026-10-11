@@ -67,7 +67,8 @@ def extraire_code(saisie: str, etat_attendu: str) -> str:
         raise ErreurAuth("le service de connexion a renvoyé une erreur au lieu d'un code")
     etat_recu = parametres.get("state", [""])[0]
     code = parametres.get("code", [""])[0]
-    if not etat_recu or not hmac.compare_digest(etat_recu, etat_attendu):
+    # Sur des octets : `compare_digest` refuse les chaînes non ASCII.
+    if not etat_recu or not hmac.compare_digest(etat_recu.encode(), etat_attendu.encode()):
         raise ErreurAuth("paramètre state absent ou différent : connexion abandonnée")
     if not code:
         raise ErreurAuth("aucun code dans l'URL de rappel")

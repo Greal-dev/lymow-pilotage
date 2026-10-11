@@ -71,15 +71,18 @@ class Journal:
 
     def ecrire(self, evenement: str, *, strict: bool = False, **champs: Any) -> None:
         """Ajoute une ligne. `strict` : lève si l'écriture échoue (avant un ordre réel)."""
-        instant = self._horloge()
-        ligne = {"horodatage": instant.isoformat(timespec="milliseconds"), "evenement": evenement}
-        ligne.update(assainir(champs))
         try:
+            instant = self._horloge()
+            ligne = {"horodatage": instant.isoformat(timespec="milliseconds"), "evenement": evenement}
+            ligne.update(assainir(champs))
             self._dossier.mkdir(parents=True, exist_ok=True)
             with (self._dossier / f"{instant:%Y-%m-%d}.jsonl").open("a", encoding="utf-8") as fichier:
                 fichier.write(json.dumps(ligne, ensure_ascii=False) + "\n")
-        except OSError as erreur:
+        except Exception as erreur:  # noqa: BLE001 — garde large voulue (SEC-03)
             if strict:
                 raise
-            # Un journal en panne ne doit jamais empêcher un arrêt de partir.
-            print(f"Journal indisponible ({type(erreur).__name__}).", file=sys.stderr)
+            # Un journal en panne, quelle qu'en soit la cause, ne doit jamais gêner un arrêt.
+            try:
+                print(f"Journal indisponible ({type(erreur).__name__}).", file=sys.stderr)
+            except Exception:  # noqa: BLE001
+                pass

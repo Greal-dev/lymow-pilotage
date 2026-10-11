@@ -7,13 +7,15 @@ Licence    : MIT (voir LICENSES-TIERS.md à la racine du projet)
 Modifications par rapport à l'original :
 - sous-ensemble uniquement : primitives varint/champs, enveloppe JSON base64,
   décodeur générique, ``decode_pboutput`` réduit à l'état utile au pilotage,
-  ``encode_userctrl``, battement de présence, demande de configuration ;
+  battement de présence, demande de configuration ;
 - ``decode_pboutput`` : cartes, chemins, planifications, rapports de tonte et
   diagnostics RTK retirés ; du profil d'appareil seules les versions logicielles
   sont lues (adresse IP, adresse MAC, numéro de série, SSID jamais décodés) ;
   de la configuration robot seule la hauteur de coupe (``rcCutHeight``) est lue ;
-- ``encode_userctrl`` et ``encode_query_robot_config`` : version de protocole en
-  paramètre (défaut inchangé : 49) ;
+- ``encode_query_robot_config`` : version de protocole en paramètre (défaut
+  inchangé : 49) ;
+- ``encode_userctrl`` (générique, tout code) non recopié : les seuls codes
+  émissibles passent par la liste fermée de ``lymow_pilotage.protocole`` ;
 - ``unwrap_envelope`` : le message d'erreur ne cite plus les clés reçues ;
 - encodeurs de carte, de zones, de réglages, de Wi-Fi, de code PIN et trame de
   pilotage Bluetooth : non recopiés.
@@ -305,13 +307,6 @@ def decode_pboutput(pb_bytes: bytes) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # PbInput encoders — commands sent to the robot
 # ---------------------------------------------------------------------------
-
-
-def encode_userctrl(command: int, version: int = PB_VERSION) -> bytes:
-    """Encode a simple user control command."""
-    pb = _field_i32(2, version)
-    pb += _field_i32(5, command)
-    return pb
 
 
 def encode_app_connect_heartbeat(session_id: str) -> bytes:

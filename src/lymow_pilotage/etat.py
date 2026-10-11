@@ -48,6 +48,14 @@ class Pose:
         rotation = (autre.cap_deg - self.cap_deg + 180.0) % 360.0 - 180.0
         return distance, rotation
 
+    def avance(self, autre: Pose) -> float:
+        """Déplacement signé le long du cap de départ (positif = vers l'avant).
+
+        Suppose le cap mesuré depuis l'est, sens trigonométrique (repère ENU du socle).
+        """
+        cap = math.radians(self.cap_deg)
+        return (autre.est_m - self.est_m) * math.cos(cap) + (autre.nord_m - self.nord_m) * math.sin(cap)
+
 
 @dataclass
 class Etat:

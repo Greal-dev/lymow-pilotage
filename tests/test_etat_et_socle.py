@@ -68,6 +68,12 @@ def test_ecart_de_cap_passe_par_le_plus_court():
     assert Pose(0, 0, 0.0).vers(Pose(3, 4, -90.0)) == (5.0, -90.0)
 
 
+def test_avance_signee_le_long_du_cap_de_depart():
+    assert Pose(0, 0, 90.0).avance(Pose(0, 2, 90.0)) == pytest.approx(2.0)  # cap au nord, parti au nord
+    assert Pose(0, 0, 90.0).avance(Pose(0, -2, 90.0)) == pytest.approx(-2.0)
+    assert Pose(0, 0, 0.0).avance(Pose(0, 2, 0.0)) == pytest.approx(0.0)  # glissé de côté
+
+
 # --- calibration ------------------------------------------------------------
 
 
@@ -85,7 +91,8 @@ def test_calibration_absente_valeurs_par_defaut(tmp_path):
     "contenu",
     [
         "facteur_distance = 0.1", "facteur_angle = 5.0", "signe_angulaire = 0", "version_protocole = 12",
-        'variante_trame = "usb"', "vitesse = 3.0", 'facteur_distance = "1"', "signe_angulaire = true", "= cassé",
+        'variante_trame = "usb"', "vitesse = 3.0", "plateau_haut_mm = 79", "plateau_haut_mm = 101",
+        "plateau_haut_mm = 20", 'facteur_distance = "1"', "signe_angulaire = true", "= cassé",
     ],
 )
 def test_calibration_hors_borne_ou_inconnue_refusee(tmp_path, contenu):
@@ -107,7 +114,7 @@ def test_dossier_de_donnees_option_puis_variable_puis_racine(tmp_path, monkeypat
 
 def _client(etats: list, presences: list) -> socle_mqtt.LymowMqttClient:
     client = socle_mqtt.LymowMqttClient(
-        "hote", "eu-west-1", lambda a, f: etats.append((a, f)), lambda a, e: presences.append((a, e))
+        "hote", "eu-west-1", lambda a, f, r: etats.append((a, f, r)), lambda a, e, r: presences.append((a, e, r))
     )
     client._things = ["robot-test"]
     return client
@@ -121,8 +128,50 @@ def test_socle_reception_decode_l_etat_et_la_presence():
     client._dispatch(SimpleNamespace(topic="/device/robot-test/notify-app", payload=b'{"robotState":"online"}'))
     client._dispatch(SimpleNamespace(topic="/device/robot-test/pboutput", payload=b"pas du json"))
     client._dispatch(SimpleNamespace(topic="/device/autre/pboutput", payload=enveloppe.encode()))
-    assert len(etats) == 1 and etats[0][1]["workStatus"] == 1
-    assert presences == [("robot-test", True)]
+    assert len(etats) == 1 and etats[0][1]["workStatus"] == 1 and etats[0][2] is False
+    assert presences == [("robot-test", True, False)]
+
+
+def test_socle_transmet_l_indicateur_retain():
+    etats, presences = [], []
+    client = _client(etats, presences)
+    enveloppe = json.dumps({"message": base64.b64encode(PBOUTPUT).decode()})
+    client._dispatch(SimpleNamespace(topic="/device/robot-test/pboutput", payload=enveloppe, retain=True))
+    client._dispatch(
+        SimpleNamespace(topic="/device/robot-test/notify-app", payload=b'{"robotState":"online"}', retain=True)
+    )
+    assert etats[0][2] is True and presences == [("robot-test", True, True)]
+
+
+def test_socle_reconnexion_de_secours_sans_abonnement(monkeypatch):
+    abonnements = []
+
+    class FauxClientMqtt:
+        messages = None
+
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def subscribe(self, sujet, qos):
+            abonnements.append(sujet)
+
+    async def scenario(abonner):
+        client = _client([], [])
+        monkeypatch.setattr(client, "_listen_loop", lambda: asyncio.sleep(0))
+        await client.connect(["robot-test"], "AKIAEXEMPLE", "cle", None, subscribe=abonner)
+        await client.disconnect()
+
+    monkeypatch.setattr(socle_mqtt.aiomqtt, "Client", FauxClientMqtt)
+    asyncio.run(scenario(False))
+    assert abonnements == []
+    asyncio.run(scenario(True))
+    assert abonnements == ["/device/robot-test/pboutput", "/device/robot-test/notify-app"]
 
 
 def test_socle_publication_sans_connexion_leve_au_lieu_d_abandonner():
@@ -150,7 +199,7 @@ def test_echec_de_connexion_mqtt_sans_url_presignee_dans_l_erreur():
     class ClientEnPanne:
         is_connected = False
 
-        async def connect(self, *_args):
+        async def connect(self, *_args, **_kwargs):
             raise ConnectionError("wss://hote/mqtt?X-Amz-Signature=deadbeef&X-Amz-Security-Token=zzz")
 
     ident = liaison.Identifiants("eu-west-1", "robot-test", "google", "raf-secret-555")

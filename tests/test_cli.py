@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 import aiohttp
 import pytest
-from conftest import ARRET, lignes_journal
+from conftest import ARRET, est_consigne, fragment, lignes_journal
 
 from lymow_pilotage import cli, liaison
 from lymow_pilotage.protocole import est_requete_pure
@@ -88,7 +88,54 @@ def test_simulation_sequence(capsys, tmp_path, reseau_interdit):
 def test_sec07_sequence_simulee_s_arrete_au_premier_refus(capsys, tmp_path, reseau_interdit):
     code, sortie = lancer(capsys, tmp_path, "sequence", "tourner 90; avancer 9; avancer 1")
     assert code == 2 and sortie["interrompue"] is True
-    assert len(sortie["etapes"]) == 2 and "SEC-02" in sortie["etapes"][1]["echec"]
+    assert sortie["etapes"] == []  # aucune étape n'est même simulée
+    assert "avancer 9" in sortie["motif"] and "SEC-02" in sortie["motif"]
+    assert sortie["non_executees"] == ["tourner 90", "avancer 9", "avancer 1"]
+    assert [ligne["evenement"] for ligne in lignes_journal(tmp_path)] == ["ordre-refuse"]
+
+
+def test_sec07_sequence_reelle_refusee_avant_toute_connexion(capsys, tmp_path, reseau_interdit):
+    code, sortie = lancer(capsys, tmp_path, "sequence", "avancer 1; tourner 200", "--reel")
+    assert code == 2 and sortie["mode"] == "réel" and sortie["etapes"] == []
+    assert "SEC-02" in sortie["motif"]
+
+
+def test_sec07_sequence_reelle_interrompue_dit_pourquoi_et_ce_qui_reste(capsys, tmp_path, liaison_factice, lien):
+    code, sortie = lancer(capsys, tmp_path, "sequence", "avancer 1; tourner 90", "--reel")
+    assert code == 1 and sortie["interrompue"] is True
+    assert sortie["motif"].startswith("séquence interrompue après « avancer 1 » : le robot n'a pas bougé")
+    assert sortie["non_executees"] == ["tourner 90"]
+    assert len(lien.consignes) == 40
+
+
+def test_arret_non_confirme_code_de_sortie_dedie_et_alerte_en_tete(capsys, tmp_path, liaison_factice, lien):
+    def coupure(lien_, octets):
+        if est_consigne(octets):
+            lien_.connecte = False
+
+    lien.sur_publication = coupure
+    code = cli.main(["avancer", "1", "--reel", "--json", "--donnees", str(tmp_path)])
+    sortie = capsys.readouterr()
+    assert code == 3 and code != cli.CODE_REFUS
+    assert sortie.err.startswith("ARRÊT NON CONFIRMÉ")
+    assert "ARRÊT NON CONFIRMÉ (0/3 acquittés)" in json.loads(sortie.out)["echec"]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [("avancer", "1", "--re"), ("--ree", "avancer", "1"), ("stop", "--r"), ("avancer", "1", "--js")],
+)
+def test_aucune_abreviation_d_option_n_est_acceptee(capsys, tmp_path, reseau_interdit, arguments):
+    with pytest.raises(SystemExit) as sortie:
+        cli.main([*arguments, "--donnees", str(tmp_path)])
+    assert sortie.value.code == 2
+
+
+@pytest.mark.parametrize("valeur", ["1_0", "١", "1e1", "inf", "nan"])
+def test_nombre_exotique_refuse_des_la_ligne_de_commande(capsys, tmp_path, reseau_interdit, valeur):
+    with pytest.raises(SystemExit) as sortie:
+        cli.main(["avancer", valeur, "--donnees", str(tmp_path)])
+    assert sortie.value.code == 2
 
 
 def test_sequence_mal_ecrite_refusee_en_bloc(capsys, tmp_path, reseau_interdit):
@@ -115,8 +162,7 @@ def test_sortie_lisible_en_francais(capsys, tmp_path, reseau_interdit):
 def test_reel_explicite_ouvre_la_liaison_et_stop_part_sans_precondition(
     capsys, tmp_path, liaison_factice, lien, session
 ):
-    session.etat.donnees.clear()
-    session.etat.recu_statut = session.etat.recu_pose = None
+    lien.robot = None  # robot muet : aucun état, et l'arrêt part quand même
     code, sortie = lancer(capsys, tmp_path, "stop", "--reel")
     assert code == 0 and sortie["mode"] == "réel"
     assert len(liaison_factice) == 1
@@ -130,12 +176,10 @@ def test_reel_accepte_avant_la_commande(capsys, tmp_path, liaison_factice, lien)
 
 
 def test_reel_refuse_par_sec01_sort_en_erreur(capsys, tmp_path, liaison_factice, lien, session):
-    from conftest import fragment
-
-    session.recevoir_etat(fragment(statut=2))
+    lien.robot = fragment(statut=2)
     code, sortie = lancer(capsys, tmp_path, "avancer", "1", "--reel")
     assert code == 1 and "SEC-01" in sortie["echec"]
-    assert lien.publies == []
+    assert lien.ordres == []
 
 
 class FauxHttp:
@@ -169,7 +213,9 @@ def test_diagnostic_sans_jeton_s_arrete_sans_reseau(capsys, tmp_path, reseau_int
     ]
 
 
-def test_diagnostic_complet_ne_publie_rien(capsys, tmp_path, monkeypatch, liaison_factice, lien):
+def test_diagnostic_complet_ne_publie_rien(capsys, tmp_path, monkeypatch, liaison_factice, lien, session):
+    session.recevoir_etat(fragment())  # battement spontané du robot, reçu en écoute passive
+
     async def acces(_http, _ident):
         return liaison.Acces("identite", "jeton-acces-123", {})
 

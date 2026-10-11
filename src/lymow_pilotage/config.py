@@ -11,6 +11,8 @@ import tomllib
 from dataclasses import dataclass, fields
 from pathlib import Path
 
+from . import securite
+
 NOM_CALIBRATION = "calibration.toml"
 VARIABLE_DOSSIER = "LYMOW_DONNEES"
 
@@ -60,6 +62,11 @@ def _valider(nom: str, valeur: object, defaut: object) -> None:
         raise ErreurConfiguration(f"{NOM_CALIBRATION} : « {nom} » doit valoir l'un de {_CHOIX[nom]}")
     if nom.startswith("facteur_") and not _FACTEUR_MIN <= valeur <= _FACTEUR_MAX:
         raise ErreurConfiguration(f"{NOM_CALIBRATION} : « {nom} » doit rester entre {_FACTEUR_MIN} et {_FACTEUR_MAX}")
+    if nom == "plateau_haut_mm" and not securite.PLATEAU_HAUT_MIN_MM <= valeur <= securite.HAUTEUR_MAX_MM:
+        raise ErreurConfiguration(
+            f"{NOM_CALIBRATION} : « {nom} » doit rester entre "
+            f"{securite.PLATEAU_HAUT_MIN_MM} et {securite.HAUTEUR_MAX_MM} mm"
+        )
 
 
 def charger_calibration(dossier: Path) -> Calibration:

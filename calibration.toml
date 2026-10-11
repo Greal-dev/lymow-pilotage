@@ -10,7 +10,8 @@ signe_angulaire = 1
 
 # Rapport déplacement réel / consigne (entre 0.5 et 2.0). Durée du mouvement =
 # consigne / (vitesse × facteur). Exemple : « avancer 1 » ne parcourt que 0,8 m
-# -> mettre 0.8. La durée reste plafonnée à 12 s quoi qu'il arrive.
+# -> mettre 0.8. Le déplacement commandé (vitesse × durée) reste plafonné à
+# 2 m et 180° : avec 0.5, « avancer 1.5 » est refusé (il commanderait 3 m).
 facteur_distance = 1.0
 facteur_angle = 1.0
 
@@ -22,7 +23,7 @@ variante_trame = "mqtt"
 # Version de protocole annoncée : 49 (ha-lymow, application récente) ou 40 (Lymow-HA).
 version_protocole = 49
 
-# « plateau-haut » règle la hauteur de coupe à cette valeur (20 à 100 mm).
+# « plateau-haut » règle la hauteur de coupe à cette valeur (80 à 100 mm).
 plateau_haut_mm = 100
 
 # Disposition de l'ordre de hauteur de coupe :

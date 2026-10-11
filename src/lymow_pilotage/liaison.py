@@ -74,11 +74,12 @@ class LienMqtt:
     def connecte(self) -> bool:
         return self._client.is_connected
 
-    async def connecter(self) -> None:
+    async def connecter(self, abonner: bool = True) -> None:
         cles = self._acces.cles
         try:
             await self._client.connect(
-                [self._ident.appareil], cles["AccessKeyId"], cles["SecretKey"], cles.get("SessionToken")
+                [self._ident.appareil], cles["AccessKeyId"], cles["SecretKey"], cles.get("SessionToken"),
+                subscribe=abonner,
             )
         except asyncio.CancelledError:
             raise
@@ -89,8 +90,9 @@ class LienMqtt:
         await self._client.async_publish(sujet, charge, timeout=delai)
 
     async def reconnecter(self) -> None:
+        """SEC-03 : voie de secours de l'arrêt — sans abonnements, pour publier au plus vite."""
         await self._client.disconnect()
-        await self.connecter()
+        await self.connecter(abonner=False)
 
     async def fermer(self) -> None:
         await self._client.disconnect()
@@ -112,8 +114,8 @@ async def ouvrir_session(
     client = LymowMqttClient(
         REGION_CONFIG[ident.region]["iot_host"],
         ident.region,
-        on_state=lambda _appareil, fragment: receveur[0].recevoir_etat(fragment),
-        on_online=lambda _appareil, en_ligne: receveur[0].recevoir_presence(en_ligne),
+        on_state=lambda _appareil, fragment, retenu: receveur[0].recevoir_etat(fragment, retenu),
+        on_online=lambda _appareil, en_ligne, retenu: receveur[0].recevoir_presence(en_ligne, retenu),
     )
     lien = LienMqtt(client, ident, acces)
     receveur.append(Session(lien, ident.appareil, journal, cal, autorisees))

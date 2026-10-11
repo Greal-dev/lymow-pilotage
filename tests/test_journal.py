@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from conftest import fragment, lignes_journal
+from conftest import lignes_journal
 
 from lymow_pilotage import journal
 from lymow_pilotage.journal import Journal
@@ -59,7 +59,6 @@ def test_sec06_chaque_etat_recu_et_chaque_ordre_emis_sont_journalises(session, t
 
     from lymow_pilotage import mouvement
 
-    session.recevoir_etat(fragment(statut=1, est=2.0))
     asyncio.run(mouvement.executer_mouvement(session, mouvement.Ordre("avancer", 0.5)))
     evenements = [ligne["evenement"] for ligne in lignes_journal(tmp_path)]
     assert evenements.count("etat-recu") == 2
@@ -79,3 +78,10 @@ def test_sec06_journal_en_panne_n_empeche_pas_l_arret_mais_bloque_un_ordre(tmp_p
     except OSError:
         return
     raise AssertionError("un ordre réel doit être refusé si le journal est indisponible")
+
+
+def test_sec03_journal_garde_large_aucune_panne_ne_remonte(tmp_path):
+    def horloge_cassee():
+        raise RuntimeError("panne quelconque, pas une erreur de disque")
+
+    Journal(tmp_path, horloge=horloge_cassee).ecrire("arret-emis", acquittes=3)  # ne lève pas

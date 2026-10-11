@@ -35,10 +35,14 @@ def test_sec01_liste_blanche_exclut_tout_le_groupe_de_tonte_du_socle():
     assert not securite.STATUTS_LAMES_ARRET & socle.WORK_STATUS_ERROR_GROUP
 
 
-@pytest.mark.parametrize("age", [None, 90.1, 3600.0, -1.0, math.nan])
+@pytest.mark.parametrize("age", [None, 30.1, 90.0, 3600.0, -1.0, math.nan])
 def test_sec01_etat_absent_ou_perime_refuse(age):
     with pytest.raises(RefusSecurite, match="SEC-01"):
         securite.verifier_lames_arret(1, age, True)
+
+
+def test_sec01_etat_de_trente_secondes_au_plus_accepte():
+    securite.verifier_lames_arret(1, 30.0, True)
 
 
 def test_sec01_statut_absent_ou_robot_hors_ligne_refuse():
@@ -46,6 +50,11 @@ def test_sec01_statut_absent_ou_robot_hors_ligne_refuse():
         securite.verifier_lames_arret(None, 1.0, True)
     with pytest.raises(RefusSecurite, match="hors ligne"):
         securite.verifier_lames_arret(1, 1.0, False)
+
+
+def test_sec01_presence_inconnue_refusee_il_faut_un_vrai_explicite():
+    with pytest.raises(RefusSecurite, match="non confirmée"):
+        securite.verifier_lames_arret(1, 1.0, None)
 
 
 # --- SEC-02 -----------------------------------------------------------------
@@ -85,9 +94,63 @@ def test_sec02_rotation_refusee(degres):
         securite.consigne_rotation(degres)
 
 
-def test_sec02_duree_bornee_meme_avec_un_facteur_de_calibration():
-    with pytest.raises(RefusSecurite, match="durée"):
-        securite.consigne_translation(2.0, facteur_distance=0.5)  # 16 s > 12 s
+@pytest.mark.parametrize(("metres", "facteur"), [(2.0, 0.5), (1.5, 0.5), (1.01, 0.5), (-1.5, 0.5), (2.0, 0.99)])
+def test_sec02_deplacement_commande_plafonne_quel_que_soit_le_facteur(metres, facteur):
+    # facteur 0.5 + « avancer 1.5 » commanderait 3 m (12 s à 0,25 m/s) : refus
+    with pytest.raises(RefusSecurite, match="commandé.*SEC-02"):
+        securite.consigne_translation(metres, facteur_distance=facteur)
+
+
+@pytest.mark.parametrize("degres", [180.0, 120.0, -100.0])
+def test_sec02_rotation_commandee_plafonnee_quel_que_soit_le_facteur(degres):
+    with pytest.raises(RefusSecurite, match="commandé"):
+        securite.consigne_rotation(degres, facteur_angle=0.5)
+
+
+@pytest.mark.parametrize("facteur", [0.5, 1.0, 2.0])
+def test_sec02_vitesse_fois_duree_ne_depasse_jamais_les_plafonds(facteur):
+    for metres in (0.1, 0.5, 1.0, 2.0):
+        try:
+            c = securite.consigne_translation(metres, facteur)
+        except RefusSecurite:
+            continue
+        assert abs(c.lineaire) * c.duree <= securite.DISTANCE_MAX_M + 1e-9
+        assert c.duree <= securite.DUREE_MAX_S
+    for degres in (10.0, 90.0, 180.0):
+        try:
+            c = securite.consigne_rotation(degres, facteur)
+        except RefusSecurite:
+            continue
+        assert math.degrees(abs(c.angulaire) * c.duree) <= securite.ANGLE_MAX_DEG + 1e-6
+
+
+def test_sec02_facteur_dans_les_bornes_allonge_la_duree_sans_depasser():
+    assert securite.consigne_translation(1.0, facteur_distance=0.5).duree == 8.0  # 2 m commandés
+
+
+@pytest.mark.parametrize("facteur", [0.0, -1.0, math.nan, math.inf])
+def test_sec02_facteur_invalide_refuse(facteur):
+    with pytest.raises(RefusSecurite):
+        securite.consigne_translation(1.0, facteur_distance=facteur)
+
+
+def test_sec02_mouvement_qui_ne_donnerait_aucune_emission_refuse():
+    with pytest.raises(RefusSecurite, match="trop court"):
+        securite.consigne_rotation(0.5)  # 0,025 s : moins d'une période
+    with pytest.raises(RefusSecurite, match="trop court"):
+        securite.consigne_translation(0.01)
+    assert securite.consigne_translation(0.03).duree >= 1 / securite.CADENCE_HZ
+
+
+@pytest.mark.parametrize("millimetres", [20, 40, 79, 101])
+def test_sec02_plateau_haut_borne_au_haut_de_la_course(millimetres):
+    with pytest.raises(RefusSecurite):
+        protocole.trame_hauteur(millimetres, Calibration())
+
+
+def test_sec02_plateau_haut_accepte_de_80_a_100():
+    assert protocole.trame_hauteur(80, Calibration()).champs["hauteur_coupe_mm"] == 80
+    assert protocole.trame_hauteur(100, Calibration()).champs["hauteur_coupe_mm"] == 100
 
 
 @pytest.mark.parametrize("valeur", PAS_FINIS)

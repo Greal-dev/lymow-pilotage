@@ -94,6 +94,8 @@ def test_extraire_code_accepte_l_url_de_rappel_au_bon_state():
         "LE-CODE",  # code seul : state invérifiable
         "https://evil.example/?code=LE-CODE&state=bon-etat",
         "",
+        "myapp://callback/?code=LE-CODE&state=bon-état",  # non ASCII : refus net, pas d'erreur de type
+        "myapp://callback/?code=LE-CODE&state=%F0%9F%A4%96",
     ],
 )
 def test_extraire_code_rejette(saisie):
@@ -117,6 +119,29 @@ def test_echange_simule_envoie_le_verificateur_et_rend_les_jetons():
         "redirect_uri": "myapp://callback/",
         "code_verifier": demande.verificateur,
     }
+    assert kwargs["allow_redirects"] is False
+
+
+def test_state_non_ascii_attendu_et_recu_identiques_accepte():
+    assert auth.extraire_code("myapp://callback/?code=LE-CODE&state=%C3%A9tat", "état") == "LE-CODE"
+
+
+def test_aucun_post_d_authentification_ne_suit_une_redirection():
+    http = FauxHttp(
+        FausseReponse(400, texte="{}"), FausseReponse(400, texte="{}"), FausseReponse(400, texte="{}"),
+        FausseReponse(400, texte="{}"),
+    )
+    appels = (
+        auth.rafraichir(http, "raf-secret-555", "eu-west-1", auth.METHODE_GOOGLE),
+        auth.rafraichir(http, "raf-secret-555", "eu-west-1", auth.METHODE_MOT_DE_PASSE),
+        auth.connexion_mot_de_passe(http, "a@example.org", "motdepasse-777", "eu-west-1"),
+        LymowAuth(http).get_aws_credentials("idt-1234", "eu-west-1"),
+    )
+    for appel in appels:
+        with pytest.raises(LymowAuthError):
+            asyncio.run(appel)
+    assert len(http.appels) == 4
+    assert all(kwargs["allow_redirects"] is False for _url, kwargs in http.appels)
 
 
 def test_echange_avec_un_mauvais_state_ne_contacte_pas_le_serveur():

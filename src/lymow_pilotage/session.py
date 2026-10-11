@@ -1,9 +1,10 @@
 """Session de dialogue avec un robot : point de passage unique des publications.
 
 Rôle : filtrer ce qui a le droit de partir (catégories, requêtes pures),
-refuser d'émettre sans liaison, tenir l'état à jour. Indépendant du transport :
-la liaison réelle (`liaison`) et les faux clients de test offrent la même forme
-(`connecte`, `publier(sujet, charge, delai=…)`, et si possible `reconnecter()`).
+refuser d'émettre sans liaison, borner chaque publication, tenir l'état à jour.
+Indépendant du transport : la liaison réelle (`liaison`) et les faux clients de
+test offrent la même forme (`connecte`, `publier(sujet, charge, delai=…)`, et
+si possible `reconnecter()`).
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from .protocole import Categorie, Trame
 from .securite import RefusSecurite
 
 PAS_ATTENTE_S = 0.2
+DELAI_REQUETE_S = 3.0
 
 
 class EchecOrdre(Exception):
@@ -55,16 +57,38 @@ class Session:
         self.dormir = dormir
         self.signaler = signaler
         self.etat = Etat()
+        self.arret_en_cours = False
+        self._differes: list[tuple[str, dict[str, Any]]] = []
         self._identifiant = uuid.uuid4().hex
 
-    def recevoir_etat(self, fragment: dict[str, Any]) -> None:
+    def journaliser(self, evenement: str, **champs: Any) -> None:
+        """SEC-03 : pendant un arrêt, rien n'est écrit sur disque ; les lignes attendent."""
+        if self.arret_en_cours:
+            self._differes.append((evenement, champs | {"ecrit_apres_arret": True}))
+        else:
+            self.journal.ecrire(evenement, **champs)
+
+    def fin_arret(self) -> None:
+        self.arret_en_cours = False
+        differes, self._differes = self._differes, []
+        for evenement, champs in differes:
+            self.journal.ecrire(evenement, **champs)
+
+    def recevoir_etat(self, fragment: dict[str, Any], retenu: bool = False) -> None:
+        if retenu:
+            # SEC-01 : un message conservé par le serveur n'a pas d'âge connu.
+            self.journaliser("etat-retenu-ignore")
+            return
         instant = self.horloge()
         self.etat.appliquer(fragment, instant)
-        self.journal.ecrire("etat-recu", **self.etat.resume(instant))  # SEC-06
+        # Un état émis à l'instant par le robot vaut preuve de présence.
+        self.etat.en_ligne = True
+        self.journaliser("etat-recu", **self.etat.resume(instant))  # SEC-06
 
-    def recevoir_presence(self, en_ligne: bool) -> None:
-        self.etat.en_ligne = en_ligne
-        self.journal.ecrire("presence-recue", en_ligne=en_ligne)
+    def recevoir_presence(self, en_ligne: bool, retenu: bool = False) -> None:
+        if not retenu:
+            self.etat.en_ligne = en_ligne
+        self.journaliser("presence-recue", en_ligne=en_ligne, retenu=retenu)
 
     async def publier(self, trame: Trame, delai: float) -> None:
         """Publie en QoS 1 et attend l'acquittement ; lève plutôt que d'abandonner en silence."""
@@ -76,25 +100,30 @@ class Session:
         if not self.lien.connecte:
             raise EchecOrdre("MQTT non connecté : rien n'a été émis")
         try:
-            await self.lien.publier(self.sujet, trame.charge(), delai=delai)
+            # SEC-03 : le délai est tenu ici aussi, au cas où la liaison ne rendrait jamais la main.
+            await asyncio.wait_for(self.lien.publier(self.sujet, trame.charge(), delai=delai), delai)
         except asyncio.CancelledError:
             raise
         except Exception as erreur:  # noqa: BLE001 — toute panne de liaison compte (SEC-03)
             raise EchecOrdre(f"publication non acquittée ({type(erreur).__name__})") from erreur
 
-    async def solliciter(self) -> None:
-        """Demande un état frais par requêtes pures, si la commande y est autorisée."""
+    async def solliciter(self) -> float | None:
+        """Demande un état frais par requêtes pures ; rend l'instant de la demande, ou rien."""
         if Categorie.REQUETE_PURE not in self.autorisees:
-            return
+            return None
+        instant = self.horloge()
+        emises = 0
         for trame in (
             protocole.trame_presence(self._identifiant),
             protocole.trame_demande_configuration(self.cal),
         ):
             try:
-                await self.publier(trame, 3.0)
-                self.journal.ecrire("requete-emise", sujet=self.sujet, trame=trame.description())
+                await self.publier(trame, DELAI_REQUETE_S)
             except EchecOrdre:
-                return  # au mieux : l'écoute passive continue
+                break  # au mieux : l'écoute passive continue
+            emises += 1
+            self.journaliser("requete-emise", sujet=self.sujet, trame=trame.description())
+        return instant if emises else None
 
     async def attendre(self, quoi: str, apres: float | None, delai: float) -> bool:
         """Vrai si un `statut` ou une `pose` est arrivé après l'instant `apres`."""

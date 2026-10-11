@@ -15,7 +15,9 @@ Modifications par rapport à l'original :
 - ``refresh_tokens`` et ``get_aws_credentials`` : erreurs typées
   ``LymowAuthError`` sans corps ni URL (``ValueError`` avec corps et
   ``raise_for_status`` dans l'original) ;
-- plus aucun appel au module ``logging``.
+- plus aucun appel au module ``logging`` ;
+- ``allow_redirects=False`` sur tous les POST : un jeton ou un mot de passe ne
+  suit jamais une redirection.
 """
 
 from __future__ import annotations
@@ -231,6 +233,7 @@ class LymowAuth:
                 data=payload,
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 timeout=OAUTH_REQUEST_TIMEOUT,
+                allow_redirects=False,
             ) as resp:
                 if not resp.ok:
                     await resp.read()
@@ -300,7 +303,7 @@ class LymowAuth:
             "ClientId": client_id,
         }
 
-        async with self._session.post(url, json=payload, headers=headers) as resp:
+        async with self._session.post(url, json=payload, headers=headers, allow_redirects=False) as resp:
             if not resp.ok:
                 body = await resp.text()
                 raise _http_error(resp.status, f"Login failed with HTTP {resp.status}", body)
@@ -331,7 +334,7 @@ class LymowAuth:
             "ClientId": client_id,
         }
 
-        async with self._session.post(url, json=payload, headers=headers) as resp:
+        async with self._session.post(url, json=payload, headers=headers, allow_redirects=False) as resp:
             if not resp.ok:
                 body = await resp.text()
                 raise _http_error(resp.status, f"Login failed with HTTP {resp.status}", body)
@@ -353,7 +356,7 @@ class LymowAuth:
             "AuthParameters": {"REFRESH_TOKEN": refresh_token},
             "ClientId": client_id,
         }
-        async with self._session.post(url, json=payload, headers=headers) as resp:
+        async with self._session.post(url, json=payload, headers=headers, allow_redirects=False) as resp:
             if not resp.ok:
                 body = await resp.text()
                 raise _http_error(resp.status, f"Token refresh failed with HTTP {resp.status}", body)
@@ -383,6 +386,7 @@ class LymowAuth:
                 "Logins": {login_key: id_token},
             },
             headers=headers,
+            allow_redirects=False,
         ) as resp:
             if not resp.ok:
                 raise _http_error(resp.status, f"AWS identity request failed with HTTP {resp.status}")
@@ -398,6 +402,7 @@ class LymowAuth:
                 "Logins": {login_key: id_token},
             },
             headers=headers,
+            allow_redirects=False,
         ) as resp:
             if not resp.ok:
                 raise _http_error(resp.status, f"AWS credentials request failed with HTTP {resp.status}")
