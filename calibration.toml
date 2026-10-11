@@ -1,0 +1,31 @@
+# Calibration du pilotage Lymow — réglages NON secrets, lus à chaque commande.
+# Ce fichier porte les incertitudes du protocole ; il ne peut assouplir aucun
+# invariant de sécurité (plafonds, vitesses, arrêt, simulation par défaut).
+# Une clé inconnue ou une valeur hors borne arrête l'outil avec une erreur.
+
+# Sens de rotation : 1 = une vitesse angulaire positive fait tourner à GAUCHE
+# (convention relevée en Bluetooth par ha-lymow). Passer à -1 si le premier
+# essai « tourner 10 » fait tourner à droite.
+signe_angulaire = 1
+
+# Rapport déplacement réel / consigne (entre 0.5 et 2.0). Durée du mouvement =
+# consigne / (vitesse × facteur). Exemple : « avancer 1 » ne parcourt que 0,8 m
+# -> mettre 0.8. La durée reste plafonnée à 12 s quoi qu'il arrive.
+facteur_distance = 1.0
+facteur_angle = 1.0
+
+# Disposition de la trame de pilotage manuel :
+#   "mqtt" : PbInput{version, remoteControl (champ 10)}        (Lymow-HA)
+#   "ble"  : la même avec le champ 7 = 2 en plus               (trame Bluetooth de ha-lymow)
+variante_trame = "mqtt"
+
+# Version de protocole annoncée : 49 (ha-lymow, application récente) ou 40 (Lymow-HA).
+version_protocole = 49
+
+# « plateau-haut » règle la hauteur de coupe à cette valeur (20 à 100 mm).
+plateau_haut_mm = 100
+
+# Disposition de l'ordre de hauteur de coupe :
+#   "socle"    : avec userCtrl 50 (ha-lymow)
+#   "lymow-ha" : sans userCtrl    (Lymow-HA)
+variante_hauteur = "socle"

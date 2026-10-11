@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lymow-pilotage"
+version = "0.1.0"
+description = "Pilotage à distance prudent d'un robot tondeuse Lymow One Plus (simulation par défaut)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "aiohttp>=3.11",
+    "aiomqtt>=2.3",
+    "keyring>=25",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+lymow = "lymow_pilotage.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
