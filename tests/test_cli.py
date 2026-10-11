@@ -78,6 +78,13 @@ def test_simulation_affiche_duree_cadence_et_arret_final(capsys, tmp_path, resea
     assert sortie["arret_final"]["hexadecimal"] == ARRET.hex(" ")
 
 
+def test_simulation_de_stop_affiche_les_deux_trames(capsys, tmp_path, reseau_interdit):
+    _code, sortie = lancer(capsys, tmp_path, "stop")
+    assert sortie["trame"]["hexadecimal"] == ARRET.hex(" ") and sortie["repetitions"] == 3
+    assert sortie["puis_pause"]["hexadecimal"] == "10 31 28 03"
+    assert "userCtrl 21" in sortie["puis_pause"]["variante"]
+
+
 def test_simulation_sequence(capsys, tmp_path, reseau_interdit):
     code, sortie = lancer(capsys, tmp_path, "sequence", "plateau-haut; tourner 90; avancer 1")
     assert code == 0 and sortie["interrompue"] is False

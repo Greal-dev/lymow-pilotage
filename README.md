@@ -36,7 +36,7 @@ Python 3.12) ; il se régénère avec
 | `lymow tourner <degrés>` | Pivote ; positif = gauche. 180° au plus. |
 | `lymow avancer <mètres>` / `reculer <mètres>` | Translation ; 2 m au plus. |
 | `lymow plateau-haut` | Hauteur de coupe au maximum (100 mm). |
-| `lymow stop` | Arrêt du pilotage manuel, émis 3 fois. |
+| `lymow stop` | Consigne nulle émise 3 fois, sans précondition, puis mise en pause de la tâche (userCtrl 3 ; 21 si le dernier état connu indique un retour à la base). |
 | `lymow sequence "plateau-haut; tourner 90; avancer 1"` | Enchaîne ; rien ne part si une étape est refusable ; s'arrête au premier refus, échec ou constat non confirmé. |
 | `lymow reprendre` / `base` / `annuler` | Reprise de tâche (4), retour base tâche conservée (33), annulation sur place (28). |
 
@@ -54,8 +54,11 @@ décodés, hexadécimal, base64, durée, cadence.
   plus (les messages conservés par le serveur, dits `retain`, sont ignorés),
   une présence en ligne explicitement confirmée, et un statut « lames à
   l'arrêt » : 0 repos, 1 attente, 5 charge, 12 charge terminée,
-  6 télécommande. Tout le reste refuse (tonte, pause, retour, erreur, inconnu,
-  hors ligne). Le statut est revérifié à chaque consigne : s'il sort de la
+  6 télécommande, ainsi que 3 pause et 7 erreur (ajoutés sur décision du
+  propriétaire le 2026-10-11 ; arrêt des lames dans ces deux statuts à
+  constater robot à vue lors de la calibration). Tout le reste refuse : tonte
+  (2), reprise (8), tonte de zone (9), retour à la base (4, 10, 14), arrêt
+  d'urgence (13), mise à jour, inconnu, hors ligne. Le statut est revérifié à chaque consigne : s'il sort de la
   liste ou si le robot passe hors ligne, arrêt immédiat. L'outil ne sait
   émettre aucun ordre de démarrage de tonte ; seul `reprendre` peut relancer
   les lames.
@@ -124,8 +127,12 @@ la demande de configuration (`version` + champ 9 `{10: 1}`). `--passif` et
   est inconnu.
 - Le statut « télécommande » (6) est tenu pour « lames à l'arrêt » afin de
   pouvoir enchaîner deux ordres ; à vérifier robot à vue.
-- `stop` n'émet que la consigne nulle du pilotage manuel : il n'interrompt pas
-  une tonte autonome (utiliser `annuler`, l'application ou le bouton STOP).
+- `stop` met aussi la tâche en pause, même si l'arrêt des consignes n'est pas
+  confirmé ; un échec de la pause est signalé à part. L'effet réel de la pause
+  sur une tonte autonome reste à constater. L'arrêt automatique de fin de
+  mouvement, lui, n'émet que les consignes nulles.
+- Lames à l'arrêt en pause (3) et en erreur (7) : non prouvé, à constater
+  robot à vue.
 - Robot sur sa base : `avancer` le pousserait contre la station.
 - La présence en ligne est tenue pour confirmée dès qu'un état non conservé
   arrive du robot pendant la session ; on ignore si le robot répond à une

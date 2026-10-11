@@ -18,21 +18,25 @@ PAS_FINIS = [math.nan, math.inf, -math.inf]
 # --- SEC-01 -----------------------------------------------------------------
 
 
-@pytest.mark.parametrize("statut", [0, 1, 5, 6, 12])
-def test_sec01_statuts_lames_a_l_arret_acceptes(statut):
+@pytest.mark.parametrize("statut", [0, 1, 3, 5, 6, 7, 12])
+def test_sec01_statuts_lames_a_l_arret_acceptes_dont_pause_et_erreur(statut):
     securite.verifier_lames_arret(statut, 10.0, True)
+    securite.verifier_presence_et_statut(statut, True)  # même liste pendant le mouvement
 
 
-@pytest.mark.parametrize("statut", [-1, 2, 3, 4, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 99])
-def test_sec01_tonte_bordure_et_statut_inconnu_refuses(statut):
+@pytest.mark.parametrize("statut", [-1, 2, 4, 8, 9, 10, 11, 13, 14, 15, 16, 17, 99])
+def test_sec01_tonte_reprise_zone_retour_urgence_et_inconnu_refuses(statut):
     with pytest.raises(RefusSecurite, match="SEC-01"):
         securite.verifier_lames_arret(statut, 10.0, True)
+    with pytest.raises(RefusSecurite, match="SEC-01"):
+        securite.verifier_presence_et_statut(statut, True)
 
 
-def test_sec01_liste_blanche_exclut_tout_le_groupe_de_tonte_du_socle():
+def test_sec01_liste_blanche_exacte_et_sans_tonte_ni_retour_ni_arret_d_urgence():
+    assert securite.STATUTS_LAMES_ARRET == {0, 1, 3, 5, 6, 7, 12}
     assert not securite.STATUTS_LAMES_ARRET & socle.WORK_STATUS_MOWING_GROUP
     assert not securite.STATUTS_LAMES_ARRET & socle.WORK_STATUS_RETURNING_GROUP
-    assert not securite.STATUTS_LAMES_ARRET & socle.WORK_STATUS_ERROR_GROUP
+    assert socle.WORK_STATUS_EMERGENCY_STOP not in securite.STATUTS_LAMES_ARRET
 
 
 @pytest.mark.parametrize("age", [None, 30.1, 90.0, 3600.0, -1.0, math.nan])

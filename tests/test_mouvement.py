@@ -18,6 +18,7 @@ from lymow_pilotage.session import EchecOrdre
 
 AVANCER_1 = Ordre("avancer", 1.0)
 CONSIGNE_AVANT = bytes.fromhex("10 31 52 0a 0d 00 00 80 3e 15 00 00 00 00")
+PAUSE = bytes.fromhex("10 31 28 03")
 IMMOBILE = "le robot n'a pas bougé (patinage ou ordre ignoré)"
 NON_RAFRAICHI = "état non rafraîchi depuis l'ordre : déplacement non vérifié"
 
@@ -95,12 +96,27 @@ def test_rotation_gauche_constatee(session, lien):
 # --- SEC-01 -----------------------------------------------------------------
 
 
-@pytest.mark.parametrize("statut", [2, 9, 3, 99])
-def test_sec01_statut_de_tonte_ou_inconnu_aucune_consigne_emise(session, lien, statut):
+@pytest.mark.parametrize("statut", [2, 8, 9, 4, 13, 99])
+def test_sec01_tonte_reprise_zone_retour_urgence_aucune_consigne_emise(session, lien, statut):
     lien.robot = fragment(statut=statut)
     with pytest.raises(RefusSecurite, match="SEC-01"):
         lancer(mouvement.executer_mouvement(session, AVANCER_1))
     assert lien.ordres == []
+
+
+@pytest.mark.parametrize("statut", [3, 7])
+def test_sec01_pause_et_erreur_autorisent_le_mouvement_manuel(session, lien, statut):
+    lien.robot = fragment(statut=statut)
+    lien.sur_publication = robot_ensuite(fragment(statut=statut, est=1.0))
+    rapport = lancer(mouvement.executer_mouvement(session, AVANCER_1))
+    assert lien.ordres == [CONSIGNE_AVANT] * 40 + [ARRET] * 3
+    assert rapport["verifie"] is True
+
+
+def test_sec01_passage_en_pause_pendant_le_mouvement_ne_l_interrompt_pas(session, lien):
+    lien.sur_publication = a_la_consigne(5, lambda _lien: session.recevoir_etat(fragment(statut=3)))
+    lancer(mouvement.executer_mouvement(session, AVANCER_1))
+    assert len(lien.consignes) == 40
 
 
 def test_sec01_robot_silencieux_refuse_et_seules_des_requetes_pures_sont_parties(session, lien):
@@ -370,10 +386,48 @@ def test_sec03_journal_en_panne_ou_etat_recu_pendant_l_arret_ne_le_retardent_pas
 def test_sec03_stop_reel_sans_aucune_precondition(session, lien, messages):
     lien.robot = None
     rapport = lancer(mouvement.executer_arret(session))
-    assert lien.trames[:3] == [ARRET] * 3
+    assert lien.trames[:4] == [ARRET] * 3 + [PAUSE]  # consignes nulles d'abord, pause ensuite
     assert rapport["arrets_acquittes"] == 3
+    assert rapport["pause"] == {"userCtrl": 3, "acquittee": True}  # sans état connu : 3
     assert rapport["etat_rafraichi"] is False
     assert messages == ["Arrêt émis et acquitté 3/3."]
+
+
+@pytest.mark.parametrize(("statut", "trame"), [(4, "10 31 28 15"), (2, "10 31 28 03"), (10, "10 31 28 03")])
+def test_stop_choisit_la_pause_selon_le_dernier_etat_connu(session, lien, statut, trame):
+    session.recevoir_etat(fragment(statut=statut))  # 4 = retour à la base : pause du retour (21)
+    lancer(mouvement.executer_arret(session))
+    assert lien.ordres == [ARRET] * 3 + [bytes.fromhex(trame)]
+
+
+def test_stop_pause_emise_meme_si_l_arret_n_est_pas_confirme(session, lien, messages):
+    def refuse_les_arrets(_lien, octets):
+        if octets == ARRET:
+            raise TimeoutError
+
+    lien.sur_publication = refuse_les_arrets
+    with pytest.raises(ArretNonConfirme, match="0/3"):
+        lancer(mouvement.executer_arret(session))
+    assert lien.ordres == [PAUSE]
+    assert messages == []  # ni « acquitté » mensonger, ni alerte de pause
+
+
+def test_stop_echec_de_la_pause_signale_sans_masquer_l_arret(session, lien, messages):
+    def refuse_la_pause(_lien, octets):
+        if octets == PAUSE:
+            raise TimeoutError
+
+    lien.sur_publication = refuse_la_pause
+    rapport = lancer(mouvement.executer_arret(session))
+    assert rapport["arrets_acquittes"] == 3 and rapport["pause"] == {"userCtrl": 3, "acquittee": False}
+    assert messages == ["Arrêt émis et acquitté 3/3.", "Mise en pause de la tâche (userCtrl 3) non acquittée."]
+
+
+def test_arret_de_fin_de_mouvement_sans_pause(session, lien):
+    lien.sur_publication = a_la_consigne(5, _echec)
+    with pytest.raises(EchecOrdre):
+        lancer(mouvement.executer_mouvement(session, AVANCER_1))
+    assert PAUSE not in lien.trames and lien.arrets == [ARRET] * 3
 
 
 def test_session_refuse_une_categorie_non_autorisee(session, lien):

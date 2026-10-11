@@ -121,6 +121,9 @@ def simuler(ordre: Ordre, cal: Calibration, appareil: str | None) -> dict[str, A
     elif ordre.nom == "stop":
         trame = arret
         resultat["repetitions"] = securite.REPETITIONS_ARRET
+        resultat["puis_pause"] = _decrire(protocole.trame_tache(code_pause(None), cal)) | {
+            "variante": f"userCtrl {socle.USER_CTRL_PAUSE_DOCK} si le dernier état connu indique un retour à la base"
+        }
     else:
         trame = protocole.trame_tache(TACHES[ordre.nom], cal)
         if ordre.nom != "annuler":
@@ -328,14 +331,53 @@ async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
     )
 
 
+def code_pause(statut: int | None) -> int:
+    """Logique du socle : 21 pendant un retour à la base, 3 sinon (y compris sans état)."""
+    return socle.USER_CTRL_PAUSE_DOCK if statut == socle.WORK_STATUS_DOCKING else socle.USER_CTRL_PAUSE
+
+
+async def _publier_pause(session: Session, trame: protocole.Trame) -> int:
+    try:
+        await session.publier(trame, securite.DELAI_ARRET_S)
+    except EchecOrdre:
+        return 0
+    return 1
+
+
 async def executer_arret(session: Session) -> dict[str, Any]:
-    """`stop --reel` : aucune précondition, pas même un état."""
+    """`stop --reel` : consignes nulles d'abord, sans précondition, puis pause de la tâche.
+
+    La pause part même si l'arrêt n'est pas confirmé ; son échec est signalé à
+    part et ne remplace jamais le résultat de l'arrêt.
+    """
     avant = session.etat.pose
     instant = session.horloge()
-    acquittes = await arreter(session)
-    return {"mode": "réel", "ordre": "stop", "arrets_acquittes": acquittes} | await constater(
-        session, avant, instant, None
+    echec: ArretNonConfirme | None = None
+    interrompu = False
+    acquittes = 0
+    try:
+        acquittes = await arreter(session)
+    except ArretNonConfirme as erreur:
+        echec = erreur
+    except asyncio.CancelledError:
+        interrompu, acquittes = True, securite.REPETITIONS_ARRET  # levée seulement après 3 acquittements
+    code = code_pause(session.etat.statut)
+    trame = protocole.trame_tache(code, session.cal)
+    with _Garde(session, en_arret=True):
+        pause, annule = await _a_l_abri(_publier_pause(session, trame))
+    session.journal.ecrire(
+        "ordre-emis", ordre="stop (pause)", sujet=session.sujet, trame=trame.description(), acquitte=bool(pause)
     )
+    if not pause:
+        _dire(session, f"Mise en pause de la tâche (userCtrl {code}) non acquittée.")
+    if echec:
+        raise echec
+    if interrompu or annule:
+        raise asyncio.CancelledError
+    return {
+        "mode": "réel", "ordre": "stop", "arrets_acquittes": acquittes,
+        "pause": {"userCtrl": code, "acquittee": bool(pause)},
+    } | await constater(session, avant, instant, None)
 
 
 async def executer_plateau(session: Session) -> dict[str, Any]:

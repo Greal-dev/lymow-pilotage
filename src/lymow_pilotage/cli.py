@@ -275,6 +275,7 @@ _LIBELLES = {
     "rtk_satellites": "satellites RTK", "signal_4g": "signal 4G", "signal_wifi": "signal Wi-Fi",
     "wifi_rssi_dbm": "Wi-Fi RSSI (dBm)", "age_etat_s": "âge de l'état (s)", "etape": "étape",
     "reussi": "réussi", "detail": "détail", "region": "région", "methode": "méthode",
+    "puis_pause": "puis mise en pause de la tâche", "acquittee": "acquittée",
     "non_executees": "étapes non exécutées", "arret_non_confirme": "arrêt non confirmé",
     "avance_m": "avance le long du cap (m)", "verifie": "ordre vérifié par le constat",
 }

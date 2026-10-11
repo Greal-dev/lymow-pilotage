@@ -71,13 +71,16 @@ def test_encode_set_cut_height_refuse_hors_bornes(millimetres):
 
 @pytest.mark.parametrize(
     ("code", "reference"),
-    [(4, "10 31 28 04"), (33, "10 31 28 21"), (28, "10 31 28 1c"), (32, "10 31 28 20")],
+    [
+        (4, "10 31 28 04"), (33, "10 31 28 21"), (28, "10 31 28 1c"), (32, "10 31 28 20"),
+        (3, "10 31 28 03"), (21, "10 31 28 15"),  # pause, pause du retour à la base
+    ],
 )
 def test_encode_ordre_tache_codes_autorises(code, reference):
     assert p.encode_ordre_tache(code) == h(reference)
 
 
-@pytest.mark.parametrize("code", [1, 2, 3, 5, 26, 37, 46, 50, 0, -1, 99])
+@pytest.mark.parametrize("code", [1, 2, 5, 22, 26, 37, 46, 50, 0, -1, 99])
 def test_encode_ordre_tache_refuse_tout_autre_code_dont_le_demarrage_de_tonte(code):
     # SEC-01
     with pytest.raises(RefusSecurite):

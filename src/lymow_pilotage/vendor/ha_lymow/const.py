@@ -8,7 +8,7 @@ Modifications par rapport à l'original :
 - sous-ensemble uniquement : domaines Cognito, configuration par région, statuts
   de travail, libellés d'erreur et d'avertissement, bornes de vitesse relevées
   en Bluetooth, qualité RTK ;
-- codes userCtrl : seuls les cinq codes que l'outil a le droit d'émettre sont
+- codes userCtrl : seuls les sept codes que l'outil a le droit d'émettre sont
   recopiés (aucun code de démarrage de tonte) ;
 - tout ce qui concerne Home Assistant, la caméra et le Bluetooth est retiré.
 """
@@ -116,7 +116,9 @@ WORK_STATUS_ERROR_GROUP = frozenset({WORK_STATUS_ERROR, WORK_STATUS_EMERGENCY_ST
 # ---------------------------------------------------------------------------
 # MQTT command codes (published to pbinput topic) — sous-ensemble autorisé
 # ---------------------------------------------------------------------------
+USER_CTRL_PAUSE = 3  # pause in place
 USER_CTRL_RESUME = 4  # resume from pause
+USER_CTRL_PAUSE_DOCK = 21  # pause while returning to dock
 USER_CTRL_FORCE_REINIT = 28  # stop in place, reset to waiting
 USER_CTRL_EXIT_REMOTE = 32  # exit remote control mode
 USER_CTRL_RECHARGE_DOCK = 33  # dock + keep task progress

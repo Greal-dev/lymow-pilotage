@@ -50,6 +50,8 @@ USER_CTRL_AUTORISES: dict[int, str] = {
     socle.USER_CTRL_RECHARGE_DOCK: "retour à la base, tâche conservée",
     socle.USER_CTRL_FORCE_REINIT: "annuler la tâche, arrêt sur place",
     socle.USER_CTRL_EXIT_REMOTE: "quitter le mode télécommande",
+    socle.USER_CTRL_PAUSE: "mettre la tâche en pause",
+    socle.USER_CTRL_PAUSE_DOCK: "mettre le retour à la base en pause",
 }
 
 

@@ -49,8 +49,8 @@ EXCES_MARGE_DEG = 5.0
 SENS_MARGE_DEG = 10.0
 
 # SEC-01 : seuls statuts où les lames sont tenues pour arrêtées. Tout autre
-# statut — tonte (2, 8, 9), pause (3), retour (4, 10, 14), erreur (7, 13),
-# mise à jour (11), essais d'usine (15, 16), inconnu, hors ligne (-1) — refuse.
+# statut — tonte (2, 8, 9), retour (4, 10, 14), arrêt d'urgence (13), mise à
+# jour (11), essais d'usine (15, 16), inconnu, hors ligne (-1) — refuse.
 STATUTS_LAMES_ARRET = frozenset(
     {
         socle.WORK_STATUS_NONE,
@@ -58,6 +58,10 @@ STATUTS_LAMES_ARRET = frozenset(
         socle.WORK_STATUS_CHARGING,
         socle.WORK_STATUS_CHARGING_FULL,
         socle.WORK_STATUS_REMOTE_CONTROL,
+        # PAUSE (3) et ERROR (7) : ajoutés sur décision du propriétaire le 2026-10-11 ;
+        # arrêt des lames dans ces statuts à constater robot à vue lors de la calibration.
+        socle.WORK_STATUS_PAUSE,
+        socle.WORK_STATUS_ERROR,
     }
 )
 
