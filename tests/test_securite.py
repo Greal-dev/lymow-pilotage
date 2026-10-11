@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import pytest
 
 from lymow_pilotage import protocole, securite
 from lymow_pilotage.config import Calibration
-from lymow_pilotage.mouvement import Ordre, consigne_de
+from lymow_pilotage.mouvement import Ordre, consigne_de, hauteur_de
 from lymow_pilotage.securite import RefusSecurite
 from lymow_pilotage.vendor.ha_lymow import const as socle
 
@@ -148,13 +149,115 @@ def test_sec02_mouvement_qui_ne_donnerait_aucune_emission_refuse():
 
 @pytest.mark.parametrize("millimetres", [20, 40, 79, 101])
 def test_sec02_plateau_haut_borne_au_haut_de_la_course(millimetres):
+    cal = dataclasses.replace(Calibration(), plateau_haut_mm=millimetres)
     with pytest.raises(RefusSecurite):
-        protocole.trame_hauteur(millimetres, Calibration())
+        hauteur_de(Ordre("plateau-haut"), cal)
 
 
 def test_sec02_plateau_haut_accepte_de_80_a_100():
-    assert protocole.trame_hauteur(80, Calibration()).champs["hauteur_coupe_mm"] == 80
-    assert protocole.trame_hauteur(100, Calibration()).champs["hauteur_coupe_mm"] == 100
+    for millimetres in (80, 100):
+        cal = dataclasses.replace(Calibration(), plateau_haut_mm=millimetres)
+        assert hauteur_de(Ordre("plateau-haut"), cal) == millimetres
+
+
+@pytest.mark.parametrize("millimetres", [20, 55, 90, 100])
+def test_sec02_plateau_en_millimetres_sur_toute_la_course(millimetres):
+    assert hauteur_de(Ordre("plateau", millimetres), Calibration()) == millimetres
+    assert protocole.trame_hauteur(millimetres, Calibration()).champs["hauteur_coupe_mm"] == millimetres
+
+
+@pytest.mark.parametrize("millimetres", [19, 101, 0, 1000, 55.5, math.nan, None, True])
+def test_sec02_plateau_hors_bornes_ou_non_entier_refuse(millimetres):
+    with pytest.raises(RefusSecurite):
+        hauteur_de(Ordre("plateau", millimetres), Calibration())
+
+
+# --- SEC-02 : vitesse et durée par ordre ------------------------------------
+
+
+def test_sec02_vitesse_par_defaut_egale_au_plafond():
+    assert securite.consigne_translation(1.0).lineaire == securite.VITESSE_LINEAIRE_M_S
+    assert securite.consigne_rotation(45.0).angulaire == securite.VITESSE_ANGULAIRE_RAD_S
+
+
+def test_sec02_vitesse_choisie_allonge_la_duree():
+    lente = securite.consigne_translation(-0.5, vitesse=0.1)
+    assert (lente.lineaire, lente.duree) == (-0.1, pytest.approx(5.0))
+    tour = securite.consigne_rotation(-45.0, vitesse=0.2)
+    assert tour.angulaire == -0.2 and tour.duree == pytest.approx(math.radians(45) / 0.2)
+
+
+@pytest.mark.parametrize("vitesse", [0.26, 0.5, 0.049, 0.0, -0.1, *PAS_FINIS])
+def test_sec02_vitesse_lineaire_hors_bornes_refusee(vitesse):
+    with pytest.raises(RefusSecurite):
+        securite.consigne_translation(0.5, vitesse=vitesse)
+    with pytest.raises(RefusSecurite):
+        securite.consigne_translation(None, vitesse=vitesse, duree=1.0)
+
+
+@pytest.mark.parametrize("vitesse", [0.36, 0.6, 0.049, 0.0, *PAS_FINIS])
+def test_sec02_vitesse_angulaire_hors_bornes_refusee(vitesse):
+    with pytest.raises(RefusSecurite):
+        securite.consigne_rotation(None, vitesse=vitesse, duree=1.0)
+
+
+def test_sec02_vitesse_negative_refusee_avec_un_angle_admise_avec_une_duree():
+    with pytest.raises(RefusSecurite):
+        securite.consigne_rotation(45.0, vitesse=-0.2)
+    droite = securite.consigne_rotation(None, vitesse=-0.2, duree=2.0)
+    assert droite.angulaire == -0.2 and droite.valeur == pytest.approx(-math.degrees(0.4))
+    assert securite.consigne_rotation(None, signe=-1, vitesse=0.2, duree=2.0).angulaire == -0.2
+
+
+def test_sec02_duree_tient_la_consigne_dans_le_sens_de_l_ordre():
+    arriere = securite.consigne_translation(None, vitesse=0.1, duree=2.0, sens=-1)
+    assert (arriere.lineaire, arriere.duree, arriere.valeur) == (-0.1, 2.0, pytest.approx(-0.2))
+    assert securite.consigne_translation(None, duree=8.0).lineaire == 0.25  # 2 m tout juste
+
+
+@pytest.mark.parametrize("duree", [0.0, -1.0, 0.05, 9.01, 60.0, *PAS_FINIS])
+def test_sec02_duree_hors_bornes_refusee(duree):
+    with pytest.raises(RefusSecurite):
+        securite.consigne_translation(None, vitesse=0.05, duree=duree)
+    with pytest.raises(RefusSecurite):
+        securite.consigne_rotation(None, vitesse=0.05, duree=duree)
+
+
+@pytest.mark.parametrize(("vitesse", "duree"), [(0.25, 8.1), (0.25, 9.0), (0.23, 9.0)])
+def test_sec02_produit_vitesse_duree_au_dessus_de_2_m_refuse(vitesse, duree):
+    with pytest.raises(RefusSecurite, match="vitesse × durée"):
+        securite.consigne_translation(None, vitesse=vitesse, duree=duree)
+
+
+def test_sec02_produit_vitesse_duree_au_dessus_de_180_degres_refuse():
+    with pytest.raises(RefusSecurite, match="vitesse × durée"):
+        securite.consigne_rotation(None, duree=9.0)  # 0,35 rad/s × 9 s = 180,5°
+    assert securite.consigne_rotation(None, duree=8.9).duree == 8.9
+
+
+def test_sec02_distance_trop_longue_a_vitesse_lente_refusee_par_la_duree():
+    with pytest.raises(RefusSecurite, match="durée"):
+        securite.consigne_translation(2.0, vitesse=0.05)  # 40 s
+
+
+@pytest.mark.parametrize(("valeur", "duree"), [(None, None), (1.0, 2.0)])
+def test_sec02_exactement_une_distance_ou_une_duree(valeur, duree):
+    with pytest.raises(RefusSecurite, match="exactement l'un des deux"):
+        securite.consigne_translation(valeur, duree=duree)
+    with pytest.raises(RefusSecurite, match="exactement l'un des deux"):
+        securite.consigne_rotation(valeur, duree=duree)
+    for nom in ("tourner", "avancer", "reculer"):
+        with pytest.raises(RefusSecurite):
+            consigne_de(Ordre(nom, valeur, duree=duree), Calibration())
+
+
+def test_sec02_essai_arret_auto_bornes():
+    defaut = securite.consigne_essai(None, None)
+    assert (defaut.lineaire, defaut.angulaire, defaut.duree) == (0.10, 0.0, 3.0)
+    assert securite.consigne_essai(0.15, 4.0).valeur == pytest.approx(0.6)  # exposition maximale
+    for vitesse, fenetre in ((0.16, 3.0), (0.25, 3.0), (0.04, 3.0), (-0.1, 3.0), (0.1, 0.9), (0.1, 4.1), (math.nan, 3.0), (0.1, math.inf)):
+        with pytest.raises(RefusSecurite):
+            securite.consigne_essai(vitesse, fenetre)
 
 
 @pytest.mark.parametrize("valeur", PAS_FINIS)

@@ -33,19 +33,61 @@ Python 3.12) ; il se régénère avec
 | `lymow connexion` | Compte Google : affiche l'adresse à ouvrir, puis lit l'adresse de rappel `myapp://callback/?code=…&state=…` sans écho. `--mot-de-passe` : compte à adresse et mot de passe. |
 | `lymow diagnostic` | Jeton présent, rafraîchissement, appareils, MQTT, réception d'un état, micrologiciel. Ne publie rien. |
 | `lymow etat` | État du robot. `--passif` : n'émet aucune requête. `--attente S` : attente maximale (75 s). |
-| `lymow tourner <degrés>` | Pivote ; positif = gauche. 180° au plus. |
-| `lymow avancer <mètres>` / `reculer <mètres>` | Translation ; 2 m au plus. |
-| `lymow plateau-haut` | Hauteur de coupe au maximum (100 mm). |
+| `lymow tourner (<degrés> \| --duree S) [--vitesse V]` | Pivote ; positif = gauche. 180° au plus. |
+| `lymow avancer (<mètres> \| --duree S) [--vitesse V]` | Avance ; 2 m au plus. |
+| `lymow reculer (<mètres> \| --duree S) [--vitesse V]` | Recule ; 2 m au plus. |
+| `lymow plateau <mm>` | Hauteur du plateau de coupe, entier de 20 à 100 mm. |
+| `lymow plateau-haut` | Raccourci : hauteur maximale (100 mm, réglable de 80 à 100). |
 | `lymow stop` | Consigne nulle émise 3 fois, sans précondition, puis mise en pause de la tâche (userCtrl 3 ; 21 si le dernier état connu indique un retour à la base). |
-| `lymow sequence "plateau-haut; tourner 90; avancer 1"` | Enchaîne ; rien ne part si une étape est refusable ; s'arrête au premier refus, échec ou constat non confirmé. |
+| `lymow sequence "plateau 90; tourner 45 --vitesse 0.2; reculer --duree 2 --vitesse 0.1"` | Enchaîne ; rien ne part si une étape est refusable ; s'arrête au premier refus, échec ou constat non confirmé. Étapes : `tourner`, `avancer`, `reculer`, `plateau`, `plateau-haut`, `stop`. `--reel` et `essai-arret-auto` y sont interdits. |
 | `lymow reprendre` / `base` / `annuler` | Reprise de tâche (4), retour base tâche conservée (33), annulation sur place (28). |
+| `lymow essai-arret-auto [--vitesse V] [--observation S]` | Calibration, robot à vue : une seule consigne avant, puis silence, puis arrêt (voir « Calibration »). |
 
 Options communes, avant ou après la commande : `--reel` (émettre vraiment),
 `--json`, `--donnees DOSSIER` (journaux et `calibration.toml` ; par défaut la
 variable `LYMOW_DONNEES`, sinon le dossier qui contient `pyproject.toml`).
 
 Sans `--reel`, chaque ordre affiche ce qu'il enverrait : sujet MQTT, champs
-décodés, hexadécimal, base64, durée, cadence.
+décodés, hexadécimal, base64, vitesse, durée, déplacement commandé, nombre
+d'émissions, cadence.
+
+### Paramètres réglables par ordre
+
+| Paramètre | Où | Bornes | Défaut |
+|---|---|---|---|
+| Angle | `tourner <degrés>` | 0 exclu à ±180° ; positif = gauche | obligatoire, sauf `--duree` |
+| Distance | `avancer <mètres>`, `reculer <mètres>` | 0 exclu à 2 m, toujours positive | obligatoire, sauf `--duree` |
+| Durée | `--duree S` (remplace l'angle ou la distance : exactement l'un des deux) | 0,1 à 9 s, et vitesse × durée ≤ 2 m ou 180° | aucune |
+| Vitesse linéaire | `avancer`/`reculer --vitesse V` en m/s | 0,05 à 0,25 | 0,25 |
+| Vitesse angulaire | `tourner --vitesse V` en rad/s (une seule forme, pas de °/s) | 0,05 à 0,35 | 0,35 |
+| Sens | signe de l'angle ; `avancer` ou `reculer` ; avec `tourner --duree`, signe de `--vitesse` (négatif = droite) | — | gauche, avant |
+| Hauteur de plateau | `plateau <mm>` | entier de 20 à 100 mm | aucune (`plateau-haut` : 100) |
+| Essai | `essai-arret-auto --vitesse V --observation S` | 0,05 à 0,15 m/s ; 1 à 4 s | 0,10 m/s ; 3 s |
+
+À vitesse réduite la durée plafonne la portée : `avancer 2 --vitesse 0.05`
+demanderait 40 s et est refusé (au plus vitesse × 9 s). Avec `--duree`, la
+consigne est tenue telle quelle : les facteurs de `calibration.toml` ne
+s'appliquent pas.
+
+## Calibration (robot à vue, zone dégagée, main sur le bouton STOP)
+
+1. **`lymow essai-arret-auto --reel` en premier.** But : savoir si le robot
+   s'arrête seul quand les consignes cessent, ce dont dépend tout le reste de
+   l'exposition. L'outil émet une seule consigne avant (0,10 m/s), n'émet rien
+   pendant 3 s tout en surveillant le statut, puis envoie l'arrêt garanti.
+   Il affiche ensuite le déplacement mesuré et une lecture prudente : « le
+   robot semble conserver la dernière consigne », « le robot semble s'arrêter
+   seul » ou « constat instrumental impossible, fiez-vous à l'observation
+   visuelle ». **L'observation visuelle fait foi.** Exposition maximale :
+   0,15 m/s × 4 s = 0,6 m, plus le délai d'arrêt (jusqu'à 20 s d'essais si la
+   liaison tombe à ce moment-là, soit 3 m de plus à 0,15 m/s).
+2. `lymow tourner 10 --reel` : sens de rotation (`signe_angulaire`).
+3. `lymow avancer 0.5 --reel`, puis `lymow tourner 90 --reel` : échelles
+   (`facteur_distance`, `facteur_angle`).
+4. Vérifier à l'œil que les lames sont à l'arrêt dans les statuts pause (3),
+   erreur (7) et télécommande (6).
+5. `lymow plateau 60 --reel` puis `lymow plateau-haut --reel` : effet réel de
+   la hauteur de coupe robot à l'arrêt.
 
 ## Règles de sécurité (codées en dur, aucune option ne les lève)
 

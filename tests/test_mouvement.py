@@ -535,19 +535,63 @@ def test_analyse_de_sequence():
 
 
 @pytest.mark.parametrize(
-    "texte", ["", " ; ", "voler 3", "tourner", "avancer un", "stop 3", "tourner 90 10", "reprendre", "tondre"]
+    "texte",
+    [
+        "", " ; ", "voler 3", "avancer un", "stop 3", "tourner 90 10", "reprendre", "tondre",
+        "plateau", "plateau 90 95", "plateau 90.5", "plateau -90", "plateau-haut 90", "plateau 90 --vitesse 0.1",
+        "avancer 1 --reel", "--reel avancer 1", "avancer 1 --json", "stop --reel", "avancer 1 --vitesse",
+        "avancer 1 --vitesse 0.1 --vitesse 0.2", "avancer --duree", "avancer 1 --vitesse=0.1", "stop --duree 2",
+        "essai-arret-auto", "essai-arret-auto --vitesse 0.1",
+    ],
 )
 def test_analyse_de_sequence_refuse_avant_toute_etape(texte):
     with pytest.raises(ErreurSaisie):
         mouvement.analyser_sequence(texte)
 
 
-@pytest.mark.parametrize("nombre", ["1_0", "١", "１", "1e1", "inf", "nan", "0x10", "1.", ".5", "1 0", "--1", ""])
+def test_reel_et_essai_interdits_dans_une_sequence_avec_un_message_clair():
+    with pytest.raises(ErreurSaisie, match="« --reel » refusée"):
+        mouvement.analyser_sequence("plateau 90; avancer 1 --reel")
+    with pytest.raises(ErreurSaisie, match="interdite dans une séquence"):
+        mouvement.analyser_sequence("avancer 1; essai-arret-auto")
+
+
+def test_analyse_de_sequence_avec_options():
+    ordres = mouvement.analyser_sequence("plateau 90; tourner 45 --vitesse 0.2; reculer --duree 2 --vitesse 0.1")
+    assert ordres == [
+        Ordre("plateau", 90),
+        Ordre("tourner", 45.0, vitesse=0.2),
+        Ordre("reculer", None, vitesse=0.1, duree=2.0),
+    ]
+    assert [str(o) for o in ordres] == ["plateau 90", "tourner 45 --vitesse 0.2", "reculer --duree 2 --vitesse 0.1"]
+    assert mouvement.analyser_sequence("tourner --vitesse -0,2 --duree 3") == [Ordre("tourner", None, -0.2, 3.0)]
+    for ordre in ordres:
+        mouvement.valider(ordre, session_cal())
+
+
+def session_cal():
+    from lymow_pilotage.config import Calibration
+
+    return Calibration()
+
+
+@pytest.mark.parametrize("texte", ["tourner", "avancer", "avancer 1 --duree 2", "plateau 19", "avancer 1 --vitesse 0.3"])
+def test_etape_lisible_mais_refusable_arretee_a_la_validation(texte):
+    (ordre,) = mouvement.analyser_sequence(texte)
+    with pytest.raises(RefusSecurite):
+        mouvement.valider(ordre, session_cal())
+
+
+@pytest.mark.parametrize("nombre", ["1_0", "١", "１", "1e1", "inf", "nan", "0x10", "1.", ".5", "1 0", "--1"])
 def test_nombres_exotiques_refuses(nombre):
     with pytest.raises(ValueError):
         mouvement.lire_nombre(nombre)
     with pytest.raises(ErreurSaisie):
         mouvement.analyser_sequence(f"avancer {nombre}")
+    with pytest.raises(ErreurSaisie):
+        mouvement.analyser_sequence(f"avancer 1 --vitesse {nombre}")
+    with pytest.raises(ValueError):
+        mouvement.lire_entier(nombre)
 
 
 def test_sec07_une_etape_au_dessus_d_un_plafond_et_rien_n_est_emis(session, lien):
@@ -606,3 +650,159 @@ def test_sec07_constat_negatif_sur_la_derniere_etape_n_interrompt_rien(session, 
     bilan = lancer(mouvement.executer_sequence(session, [AVANCER_1]))
     assert bilan["interrompue"] is False and "non_executees" not in bilan
     assert bilan["etapes"][0]["constat"] == IMMOBILE
+
+
+# --- vitesse, durée, plateau ------------------------------------------------
+
+
+def test_mouvement_a_vitesse_et_duree_choisies(session, lien):
+    lien.sur_publication = robot_ensuite(fragment(est=-0.2))
+    rapport = lancer(mouvement.executer_mouvement(session, Ordre("reculer", None, vitesse=0.1, duree=2.0)))
+    lente = bytes.fromhex("10 31 52 0a 0d cd cc cc bd 15 00 00 00 00")  # -0.1 = bdcccccd
+    assert lien.ordres == [lente] * 20 + [ARRET] * 3
+    assert rapport["verifie"] is True and rapport["avance_m"] == -0.2
+
+
+def test_rotation_a_droite_par_duree_et_vitesse_negative(session, lien):
+    lien.sur_publication = robot_ensuite(fragment(theta=math.radians(-23)))
+    rapport = lancer(mouvement.executer_mouvement(session, Ordre("tourner", None, vitesse=-0.2, duree=2.0)))
+    assert set(lien.consignes) == {bytes.fromhex("10 31 52 0a 0d 00 00 00 00 15 cd cc 4c be")}  # -0.2
+    assert len(lien.consignes) == 20 and rapport["verifie"] is True
+
+
+def test_plateau_en_millimetres(session, lien):
+    rapport = lancer(mouvement.executer(session, Ordre("plateau", 90)))
+    assert lien.ordres == [bytes.fromhex("10 31 28 32 62 04 6a 02 08 5a")]
+    assert rapport["ordre"] == "plateau 90"
+
+
+def test_plateau_suit_les_memes_regles_de_statut_que_plateau_haut(session, lien):
+    lien.robot = fragment(statut=2)
+    with pytest.raises(RefusSecurite, match="SEC-01"):
+        lancer(mouvement.executer(session, Ordre("plateau", 60)))
+    assert lien.ordres == []
+
+
+def test_sec07_sequence_avec_options_validee_en_entier_avant_d_emettre(session, lien):
+    ordres = mouvement.analyser_sequence("plateau 90; tourner 45 --vitesse 0.2; reculer --duree 9 --vitesse 0.25")
+    bilan = lancer(mouvement.executer_sequence(session, ordres))
+    assert lien.publies == [] and bilan["etapes"] == []
+    assert "reculer --duree 9 --vitesse 0.25" in bilan["motif"] and "SEC-02" in bilan["motif"]
+
+
+def test_sequence_avec_options_executee(session, lien):
+    lien.sur_publication = robot_ensuite(fragment(theta=math.radians(45)))
+    ordres = mouvement.analyser_sequence("plateau 90; tourner 45 --vitesse 0.2")
+    bilan = lancer(mouvement.executer_sequence(session, ordres))
+    assert bilan["interrompue"] is False
+    assert lien.ordres[0] == bytes.fromhex("10 31 28 32 62 04 6a 02 08 5a")
+    assert len(lien.consignes) == 40  # 45° à 0,2 rad/s = 3,93 s
+
+
+# --- essai-arret-auto -------------------------------------------------------
+
+ESSAI = Ordre("essai-arret-auto")
+CONSIGNE_ESSAI = bytes.fromhex("10 31 52 0a 0d cd cc cc 3d 15 00 00 00 00")  # 0.1 = 3dcccccd
+
+
+def test_essai_une_seule_consigne_puis_silence_puis_trois_arrets(session, lien, horloge):
+    instants = []
+    lien.sur_publication = lambda _lien, octets: instants.append((horloge(), octets))
+    lancer(mouvement.executer_essai(session, ESSAI))
+    assert lien.ordres == [CONSIGNE_ESSAI] + [ARRET] * 3
+    emission = next(t for t, o in instants if o == CONSIGNE_ESSAI)
+    arret = next(t for t, o in instants if o == ARRET)
+    assert arret - emission == pytest.approx(3.0, abs=0.01)  # fenêtre de silence par défaut
+    assert not [o for t, o in instants if emission < t < arret]
+
+
+@pytest.mark.parametrize(
+    ("deplacement", "lecture"),
+    [
+        (0.30, "le robot semble conserver la dernière consigne"),
+        (0.22, "le robot semble conserver la dernière consigne"),
+        (0.05, "le robot semble s'arrêter seul"),
+        (0.0, "le robot semble s'arrêter seul"),
+        (0.16, "lecture indécise : déplacement intermédiaire"),
+    ],
+)
+def test_essai_lecture_prudente_du_deplacement(session, lien, deplacement, lecture):
+    lien.sur_publication = robot_ensuite(fragment(est=deplacement))
+    rapport = lancer(mouvement.executer_essai(session, ESSAI))
+    assert rapport["lecture"] == lecture
+    assert rapport["deplacement_m"] == deplacement
+    assert rapport["deplacement_si_consigne_conservee_m"] == 0.3
+    assert "observation visuelle fait foi" in rapport["rappel"]
+
+
+def test_essai_sans_etat_rafraichi_renvoie_a_l_observation_visuelle(session, lien):
+    lien.sur_publication = robot_ensuite(None)
+    rapport = lancer(mouvement.executer_essai(session, ESSAI))
+    assert rapport["lecture"] == "constat instrumental impossible, fiez-vous à l'observation visuelle"
+    assert "deplacement_m" not in rapport and "observation visuelle fait foi" in rapport["rappel"]
+
+
+def test_essai_memes_preconditions_sec01_qu_un_mouvement(session, lien):
+    lien.robot = fragment(statut=2)
+    with pytest.raises(RefusSecurite, match="SEC-01"):
+        lancer(mouvement.executer_essai(session, ESSAI))
+    assert lien.ordres == []
+
+
+def _pendant_la_fenetre(session, horloge, action):
+    """Remplace l'attente de la session : `action()` une fois, 1 s après le début du silence."""
+    debut = []
+
+    async def dormir(secondes):
+        await horloge.dormir(secondes)
+        if session.lien.consignes and not debut:
+            debut.append(horloge())
+        if debut and debut[0] is not None and horloge() - debut[0] >= 1.0:
+            debut[0] = None
+            action()
+
+    session.dormir = dormir
+
+
+def test_essai_interruption_pendant_la_fenetre_arret_immediat(session, lien, horloge):
+    async def scenario():
+        tache = asyncio.ensure_future(mouvement.executer_essai(session, ESSAI))
+        _pendant_la_fenetre(session, horloge, tache.cancel)  # effet de Ctrl+C
+        debut = horloge()
+        with pytest.raises(asyncio.CancelledError):
+            await tache
+        return horloge() - debut
+
+    ecoule = lancer(scenario())
+    assert lien.ordres == [CONSIGNE_ESSAI] + [ARRET] * 3
+    assert ecoule < 2.0  # arrêt dès l'interruption, sans attendre la fin des 3 s
+
+
+def test_essai_statut_qui_sort_de_la_liste_pendant_la_fenetre_arret_immediat(session, lien, horloge):
+    _pendant_la_fenetre(session, horloge, lambda: session.recevoir_etat(fragment(statut=2)))
+    debut = horloge()
+    with pytest.raises(EchecOrdre, match="interrompu en cours de route.*SEC-01"):
+        lancer(mouvement.executer_essai(session, ESSAI))
+    assert lien.ordres == [CONSIGNE_ESSAI] + [ARRET] * 3
+    assert horloge() - debut < 2.0
+
+
+def test_essai_liaison_perdue_pendant_la_fenetre_arret_tente(session, lien, horloge):
+    _pendant_la_fenetre(session, horloge, lambda: setattr(lien, "connecte", False))
+    with pytest.raises(ArretNonConfirme):
+        lancer(mouvement.executer_essai(session, ESSAI))
+    assert lien.ordres == [CONSIGNE_ESSAI]
+
+
+def test_essai_vitesse_et_fenetre_choisies_dans_les_bornes(session, lien):
+    lancer(mouvement.executer_essai(session, Ordre("essai-arret-auto", None, vitesse=0.15, duree=1.0)))
+    assert len(lien.consignes) == 1 and lien.arrets == [ARRET] * 3
+    with pytest.raises(RefusSecurite):
+        lancer(mouvement.executer_essai(session, Ordre("essai-arret-auto", None, vitesse=0.2)))
+    assert len(lien.consignes) == 1
+
+
+def test_essai_refuse_dans_une_sequence(session, lien):
+    with pytest.raises(ErreurSaisie, match="interdite dans une séquence"):
+        mouvement.analyser_sequence("avancer 1; essai-arret-auto")
+    assert lien.publies == []

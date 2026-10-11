@@ -168,8 +168,6 @@ def trame_arret(cal: Calibration) -> Trame:
 
 
 def trame_hauteur(millimetres: int, cal: Calibration) -> Trame:
-    """Seul usage : « plateau-haut », donc borné au haut de la course (SEC-02)."""
-    securite.verifier_plateau_haut(millimetres)
     octets = encode_set_cut_height(
         millimetres, variante=cal.variante_hauteur, version=cal.version_protocole
     )

@@ -27,15 +27,25 @@ from .vendor.ha_lymow import const as socle
 ATTENTE_ETAT_S = 75.0
 
 MOUVEMENTS = ("tourner", "avancer", "reculer")
+ESSAI = "essai-arret-auto"
+EXPOSITION_ESSAI = (
+    f"au plus {securite.ESSAI_VITESSE_MAX_M_S:g} m/s × {securite.ESSAI_OBSERVATION_MAX_S:g} s = "
+    f"{securite.ESSAI_VITESSE_MAX_M_S * securite.ESSAI_OBSERVATION_MAX_S:g} m si le robot conserve la consigne, "
+    f"plus le délai d'arrêt (jusqu'à {securite.ECHEANCE_ARRET_S:g} s d'essais si la liaison tombe)"
+)
+RAPPEL_ESSAI = "l'observation visuelle fait foi : cette lecture n'est qu'un indice"
+PLATEAUX = ("plateau", "plateau-haut")
 TACHES = {
     "reprendre": socle.USER_CTRL_RESUME,
     "base": socle.USER_CTRL_RECHARGE_DOCK,
     "annuler": socle.USER_CTRL_FORCE_REINIT,
 }
-ETAPES_SEQUENCE = (*MOUVEMENTS, "plateau-haut", "stop")
+ETAPES_SEQUENCE = (*MOUVEMENTS, *PLATEAUX, "stop")
+OPTIONS_MOUVEMENT = ("--vitesse", "--duree")
 _STATUTS_REPRISE = (socle.WORK_STATUS_PAUSE, socle.WORK_STATUS_REMOTE_CONTROL)
 # Chiffres ASCII seulement : `float` accepterait « 1_0 » ou des chiffres d'autres écritures.
 _NOMBRE = re.compile(r"[+-]?[0-9]+(?:[.,][0-9]+)?")
+_ENTIER = re.compile(r"[0-9]{1,4}")
 
 
 class ArretNonConfirme(EchecOrdre):
@@ -48,11 +58,22 @@ class ErreurSaisie(Exception):
 
 @dataclass(frozen=True)
 class Ordre:
+    """`valeur` : degrés, mètres ou millimètres. `duree` : secondes tenues, ou fenêtre de l'essai."""
+
     nom: str
     valeur: float | None = None
+    vitesse: float | None = None
+    duree: float | None = None
 
     def __str__(self) -> str:
-        return self.nom if self.valeur is None else f"{self.nom} {self.valeur:g}"
+        mots = [self.nom]
+        if self.valeur is not None:
+            mots.append(f"{self.valeur:g}")
+        if self.duree is not None:
+            mots.append(f"{'--observation' if self.nom == ESSAI else '--duree'} {self.duree:g}")
+        if self.vitesse is not None:
+            mots.append(f"--vitesse {self.vitesse:g}")
+        return " ".join(mots)
 
 
 def lire_nombre(texte: str) -> float:
@@ -61,19 +82,40 @@ def lire_nombre(texte: str) -> float:
     return float(texte.replace(",", "."))
 
 
+def lire_entier(texte: str) -> int:
+    if not _ENTIER.fullmatch(texte):
+        raise ValueError(f"entier positif attendu, reçu « {texte} »")
+    return int(texte)
+
+
 def analyser_etape(texte: str) -> Ordre:
+    """Une étape de séquence : nom, valeur éventuelle, puis `--vitesse` / `--duree` pour un mouvement."""
     mots = texte.split()
-    if not mots or mots[0] not in ETAPES_SEQUENCE:
+    nom = mots[0] if mots else ""
+    if nom == ESSAI:
+        raise ErreurSaisie(f"« {ESSAI} » est interdite dans une séquence : à lancer seule, robot à vue")
+    if nom not in ETAPES_SEQUENCE:
         raise ErreurSaisie(f"étape inconnue « {texte.strip()} » ; étapes possibles : {', '.join(ETAPES_SEQUENCE)}")
-    attendu = 2 if mots[0] in MOUVEMENTS else 1
-    if len(mots) != attendu:
-        raise ErreurSaisie(f"« {mots[0]} » attend {attendu - 1} valeur(s)")
-    if attendu == 1:
-        return Ordre(mots[0])
+    positionnels: list[str] = []
+    options: dict[str, float] = {}
+    reste = iter(mots[1:])
     try:
-        return Ordre(mots[0], lire_nombre(mots[1]))
+        for mot in reste:
+            if mot in OPTIONS_MOUVEMENT and nom in MOUVEMENTS and mot not in options:
+                options[mot] = lire_nombre(next(reste, ""))
+            elif mot.startswith("--"):
+                # SEC-05 : `--reel` ne se glisse jamais dans la chaîne d'une séquence.
+                raise ErreurSaisie(f"option « {mot} » refusée dans l'étape « {texte.strip()} »")
+            else:
+                positionnels.append(mot)
+        attendus = (0, 1) if nom in MOUVEMENTS else (1,) if nom == "plateau" else (0,)
+        if len(positionnels) not in attendus:
+            raise ErreurSaisie(f"nombre de valeurs inattendu dans « {texte.strip()} »")
+        lire = lire_entier if nom == "plateau" else lire_nombre
+        valeur = lire(positionnels[0]) if positionnels else None
     except ValueError:
         raise ErreurSaisie(f"valeur illisible dans « {texte.strip()} »") from None
+    return Ordre(nom, valeur, options.get("--vitesse"), options.get("--duree"))
 
 
 def analyser_sequence(texte: str) -> list[Ordre]:
@@ -86,20 +128,49 @@ def analyser_sequence(texte: str) -> list[Ordre]:
 
 def consigne_de(ordre: Ordre, cal: Calibration) -> Consigne:
     """SEC-02 : plafonds appliqués ici, en simulation comme en réel."""
+    if ordre.nom == ESSAI:
+        return securite.consigne_essai(ordre.vitesse, ordre.duree)
     if ordre.nom == "tourner":
-        return securite.consigne_rotation(ordre.valeur, cal.facteur_angle, cal.signe_angulaire)
-    if ordre.valeur is None or not ordre.valeur > 0:  # « not > » refuse aussi NaN
-        raise RefusSecurite("distance refusée : valeur strictement positive exigée (SEC-02)")
-    metres = ordre.valeur if ordre.nom == "avancer" else -ordre.valeur
-    return securite.consigne_translation(metres, cal.facteur_distance)
+        return securite.consigne_rotation(
+            ordre.valeur, cal.facteur_angle, cal.signe_angulaire, vitesse=ordre.vitesse, duree=ordre.duree
+        )
+    sens = 1 if ordre.nom == "avancer" else -1
+    metres = None
+    if ordre.valeur is not None:
+        if not ordre.valeur > 0:  # « not > » refuse aussi NaN
+            raise RefusSecurite("distance refusée : valeur strictement positive exigée (SEC-02)")
+        metres = sens * ordre.valeur
+    return securite.consigne_translation(
+        metres, cal.facteur_distance, vitesse=ordre.vitesse, duree=ordre.duree, sens=sens
+    )
+
+
+def hauteur_de(ordre: Ordre, cal: Calibration) -> int:
+    """SEC-02 : `plateau <mm>` sur toute la course, `plateau-haut` dans le haut seulement."""
+    if ordre.nom == "plateau-haut":
+        return securite.verifier_plateau_haut(cal.plateau_haut_mm)
+    return securite.verifier_hauteur(ordre.valeur)  # type: ignore[arg-type]
 
 
 def valider(ordre: Ordre, cal: Calibration) -> None:
     """SEC-02 / SEC-07 : tout ce qui peut être refusé sans parler au robot."""
-    if ordre.nom in MOUVEMENTS:
+    if ordre.nom in MOUVEMENTS or ordre.nom == ESSAI:
         consigne_de(ordre, cal)
-    elif ordre.nom == "plateau-haut":
-        securite.verifier_plateau_haut(cal.plateau_haut_mm)
+    elif ordre.nom in PLATEAUX:
+        hauteur_de(ordre, cal)
+
+
+def _grandeurs(consigne: Consigne) -> dict[str, Any]:
+    """Vitesse et déplacement commandé (vitesse × durée), toujours affichés."""
+    if consigne.attendu == "rotation":
+        return {
+            "vitesse_rad_s": abs(consigne.angulaire),
+            "deplacement_commande_deg": round(math.degrees(abs(consigne.angulaire) * consigne.duree), 1),
+        }
+    return {
+        "vitesse_m_s": abs(consigne.lineaire),
+        "deplacement_commande_m": round(abs(consigne.lineaire) * consigne.duree, 3),
+    }
 
 
 def simuler(ordre: Ordre, cal: Calibration, appareil: str | None) -> dict[str, Any]:
@@ -107,17 +178,29 @@ def simuler(ordre: Ordre, cal: Calibration, appareil: str | None) -> dict[str, A
     sujet = protocole.sujet_ordres(appareil) if appareil else "/device/<appareil>/pbinput"
     resultat: dict[str, Any] = {"mode": "simulation", "ordre": str(ordre), "sujet": sujet, "qos": 1}
     arret = protocole.trame_arret(cal)
+    arret_final = _decrire(arret) | {"repetitions": securite.REPETITIONS_ARRET}
     if ordre.nom in MOUVEMENTS:
         consigne = consigne_de(ordre, cal)
         trame = protocole.trame_consigne(consigne.lineaire, consigne.angulaire, cal)
-        resultat |= {
+        resultat |= _grandeurs(consigne) | {
             "duree_s": round(consigne.duree, 2),
             "cadence_hz": securite.CADENCE_HZ,
-            "emissions_prevues": math.ceil(consigne.duree * securite.CADENCE_HZ),
-            "arret_final": _decrire(arret) | {"repetitions": securite.REPETITIONS_ARRET},
+            "emissions_prevues": math.ceil(round(consigne.duree * securite.CADENCE_HZ, 6)),
+            "arret_final": arret_final,
         }
-    elif ordre.nom == "plateau-haut":
-        trame = protocole.trame_hauteur(cal.plateau_haut_mm, cal)
+    elif ordre.nom == ESSAI:
+        consigne = consigne_de(ordre, cal)
+        trame = protocole.trame_consigne(consigne.lineaire, 0.0, cal)
+        resultat |= {
+            "vitesse_m_s": consigne.lineaire,
+            "emissions_prevues": 1,
+            "observation_s": consigne.duree,
+            "deplacement_si_consigne_conservee_m": round(consigne.valeur, 3),
+            "arret_final": arret_final,
+            "exposition": EXPOSITION_ESSAI,
+        }
+    elif ordre.nom in PLATEAUX:
+        trame = protocole.trame_hauteur(hauteur_de(ordre, cal), cal)
     elif ordre.nom == "stop":
         trame = arret
         resultat["repetitions"] = securite.REPETITIONS_ARRET
@@ -380,19 +463,68 @@ async def executer_arret(session: Session) -> dict[str, Any]:
     } | await constater(session, avant, instant, None)
 
 
-async def executer_plateau(session: Session) -> dict[str, Any]:
-    trame = protocole.trame_hauteur(session.cal.plateau_haut_mm, session.cal)  # SEC-02
+async def executer_essai(session: Session, ordre: Ordre) -> dict[str, Any]:
+    """Essai d'arrêt automatique : UNE consigne, puis silence, puis l'arrêt garanti habituel."""
+    consigne = consigne_de(ordre, session.cal)  # SEC-02
+    avant = await _exiger_lames_arret(session)  # SEC-01
+    trame = protocole.trame_consigne(consigne.lineaire, 0.0, session.cal)
+    session.journal.ecrire(
+        "ordre-emis", strict=True, ordre=str(ordre), sujet=session.sujet,
+        trame=trame.description(), observation_s=consigne.duree, emissions=1,
+    )
+    with _Garde(session, en_arret=False) as garde:
+        instant_arret = session.horloge()
+        try:
+            _surveiller(session)
+            await session.publier(trame, securite.DELAI_CONSIGNE_S)  # la seule consigne de l'essai
+            debut = session.horloge()
+            while (restant := consigne.duree - (session.horloge() - debut)) > 0.001:
+                _surveiller(session)  # SEC-01 : la surveillance continue pendant le silence
+                if not session.lien.connecte:
+                    raise EchecOrdre("connexion MQTT perdue pendant la fenêtre d'observation")
+                await session.dormir(min(restant, 1.0 / securite.CADENCE_HZ))
+        finally:
+            # SEC-03 : même arrêt garanti qu'un mouvement, y compris sur Ctrl+C.
+            garde.en_arret = True
+            instant_arret = session.horloge()
+            try:
+                await arreter(session)
+            finally:
+                session.journal.ecrire("ordre-termine", ordre=str(ordre), emissions=1)
+    rapport = await constater(session, avant, instant_arret, None)
+    apres = session.etat.pose if rapport["etat_rafraichi"] else None
+    resultat: dict[str, Any] = {
+        "mode": "réel", "ordre": str(ordre), "emissions": 1,
+        "vitesse_m_s": consigne.lineaire, "observation_s": consigne.duree,
+        "deplacement_si_consigne_conservee_m": round(consigne.valeur, 3),
+    } | {cle: rapport[cle] for cle in ("etat_rafraichi", "avant", "apres", "statut_apres")}
+    if avant is None or apres is None:
+        resultat["lecture"] = "constat instrumental impossible, fiez-vous à l'observation visuelle"
+    else:
+        distance = avant.vers(apres)[0]
+        resultat["deplacement_m"] = round(distance, 3)
+        if distance >= securite.ESSAI_PART_CONSERVEE * consigne.valeur:
+            resultat["lecture"] = "le robot semble conserver la dernière consigne"
+        elif distance <= securite.ESSAI_PART_ARRET * consigne.valeur:
+            resultat["lecture"] = "le robot semble s'arrêter seul"
+        else:
+            resultat["lecture"] = "lecture indécise : déplacement intermédiaire"
+    return resultat | {"verifie": rapport["verifie"], "rappel": RAPPEL_ESSAI}
+
+
+async def executer_plateau(session: Session, ordre: Ordre = Ordre("plateau-haut")) -> dict[str, Any]:
+    trame = protocole.trame_hauteur(hauteur_de(ordre, session.cal), session.cal)  # SEC-02
     avant = await _exiger_lames_arret(session)  # SEC-01 : le plateau est un organe mobile
     hauteur_avant = session.etat.hauteur_coupe_mm
     session.journal.ecrire(
-        "ordre-emis", strict=True, ordre="plateau-haut", sujet=session.sujet, trame=trame.description()
+        "ordre-emis", strict=True, ordre=str(ordre), sujet=session.sujet, trame=trame.description()
     )
     instant = session.horloge()
     await session.publier(trame, securite.DELAI_ARRET_S)
     rapport = await constater(session, avant, instant, None)
     return {
         "mode": "réel",
-        "ordre": "plateau-haut",
+        "ordre": str(ordre),
         "hauteur_avant_mm": hauteur_avant,
         "hauteur_apres_mm": session.etat.hauteur_coupe_mm if rapport["etat_rafraichi"] else None,
     } | rapport
@@ -499,8 +631,10 @@ def _pose(pose: Pose | None) -> dict[str, float] | None:
 async def executer(session: Session, ordre: Ordre) -> dict[str, Any]:
     if ordre.nom in MOUVEMENTS:
         return await executer_mouvement(session, ordre)
-    if ordre.nom == "plateau-haut":
-        return await executer_plateau(session)
+    if ordre.nom == ESSAI:
+        return await executer_essai(session, ordre)
+    if ordre.nom in PLATEAUX:
+        return await executer_plateau(session, ordre)
     if ordre.nom == "stop":
         return await executer_arret(session)
     return await executer_tache(session, ordre.nom)

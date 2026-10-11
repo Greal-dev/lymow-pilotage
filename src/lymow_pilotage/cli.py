@@ -16,7 +16,7 @@ from typing import Any
 
 import aiohttp
 
-from . import auth, coffre, config, liaison, mouvement
+from . import auth, coffre, config, liaison, mouvement, securite
 from .journal import Journal, declarer_secret, masquer
 from .mouvement import ErreurSaisie, Ordre
 from .protocole import Categorie
@@ -86,9 +86,39 @@ def construire_analyseur() -> argparse.ArgumentParser:
         )
 
     nombre = mouvement.lire_nombre
-    ajouter("tourner", "pivoter (positif = gauche)").add_argument("valeur", type=nombre, metavar="degrés")
-    ajouter("avancer", "avancer").add_argument("valeur", type=nombre, metavar="mètres")
-    ajouter("reculer", "reculer").add_argument("valeur", type=nombre, metavar="mètres")
+    mouvements = (
+        ("tourner", "pivoter (positif = gauche)", "degrés", "rad/s", securite.VITESSE_ANGULAIRE_RAD_S),
+        ("avancer", "avancer", "mètres", "m/s", securite.VITESSE_LINEAIRE_M_S),
+        ("reculer", "reculer", "mètres", "m/s", securite.VITESSE_LINEAIRE_M_S),
+    )
+    for nom, aide, unite, unite_vitesse, plafond in mouvements:
+        fils_mouvement = ajouter(nom, f"{aide} : <{unite}> ou --duree S")
+        fils_mouvement.add_argument("valeur", type=nombre, nargs="?", default=None, metavar=unite)
+        fils_mouvement.add_argument(
+            "--vitesse", type=nombre, default=None, metavar="V",
+            help=f"vitesse en {unite_vitesse}, de 0.05 à {plafond:g} (défaut : {plafond:g})"
+            + (" ; avec --duree, une valeur négative tourne à droite" if nom == "tourner" else ""),
+        )
+        fils_mouvement.add_argument(
+            "--duree", type=nombre, default=None, metavar="S",
+            help=f"tenir la consigne S secondes (au plus {securite.DUREE_MAX_S:g}) au lieu de donner des {unite}",
+        )
+    plateau = ajouter("plateau", f"régler la hauteur du plateau de coupe ({securite.HAUTEUR_MIN_MM} à {securite.HAUTEUR_MAX_MM} mm)")
+    plateau.add_argument("valeur", type=mouvement.lire_entier, metavar="mm")
+    essai = ajouter(
+        mouvement.ESSAI,
+        "calibration, robot à vue : le robot s'arrête-t-il seul quand les consignes cessent ? "
+        f"Une seule consigne avant, puis silence, puis arrêt. Exposition : {mouvement.EXPOSITION_ESSAI}.",
+    )
+    essai.add_argument(
+        "--vitesse", type=nombre, default=None, metavar="V",
+        help=f"m/s, de 0.05 à {securite.ESSAI_VITESSE_MAX_M_S:g} (défaut : {securite.ESSAI_VITESSE_M_S:g})",
+    )
+    essai.add_argument(
+        "--observation", type=nombre, default=None, metavar="S", dest="duree",
+        help=f"fenêtre sans émission, de {securite.ESSAI_OBSERVATION_MIN_S:g} à "
+        f"{securite.ESSAI_OBSERVATION_MAX_S:g} s (défaut : {securite.ESSAI_OBSERVATION_S:g})",
+    )
     aides = {
         "plateau-haut": "lever le plateau de coupe au maximum",
         "stop": "arrêt du pilotage manuel (sans précondition avec --reel)",
@@ -98,7 +128,9 @@ def construire_analyseur() -> argparse.ArgumentParser:
     }
     for nom in _ORDRES_SIMPLES:
         ajouter(nom, aides[nom])
-    sequence = ajouter("sequence", 'enchaîner : "plateau-haut; tourner 90; avancer 1"')
+    sequence = ajouter(
+        "sequence", 'enchaîner : "plateau 90; tourner 45 --vitesse 0.2; reculer --duree 2 --vitesse 0.1"'
+    )
     sequence.add_argument("etapes", metavar='"étape; étape; …"')
     return analyseur
 
@@ -106,7 +138,8 @@ def construire_analyseur() -> argparse.ArgumentParser:
 def _ordres(args: argparse.Namespace) -> list[Ordre]:
     if args.commande == "sequence":
         return mouvement.analyser_sequence(args.etapes)
-    return [Ordre(args.commande, getattr(args, "valeur", None))]
+    lire = lambda nom: getattr(args, nom, None)  # noqa: E731
+    return [Ordre(args.commande, lire("valeur"), lire("vitesse"), lire("duree"))]
 
 
 def _refuser(ordres: list[Ordre], ctx: Contexte, mode: str) -> dict[str, Any] | None:
@@ -275,6 +308,10 @@ _LIBELLES = {
     "rtk_satellites": "satellites RTK", "signal_4g": "signal 4G", "signal_wifi": "signal Wi-Fi",
     "wifi_rssi_dbm": "Wi-Fi RSSI (dBm)", "age_etat_s": "âge de l'état (s)", "etape": "étape",
     "reussi": "réussi", "detail": "détail", "region": "région", "methode": "méthode",
+    "vitesse_m_s": "vitesse (m/s)", "vitesse_rad_s": "vitesse (rad/s)",
+    "deplacement_commande_m": "déplacement commandé (m)", "deplacement_commande_deg": "déplacement commandé (°)",
+    "observation_s": "fenêtre d'observation (s)",
+    "deplacement_si_consigne_conservee_m": "déplacement si la consigne est conservée (m)",
     "puis_pause": "puis mise en pause de la tâche", "acquittee": "acquittée",
     "non_executees": "étapes non exécutées", "arret_non_confirme": "arrêt non confirmé",
     "avance_m": "avance le long du cap (m)", "verifie": "ordre vérifié par le constat",

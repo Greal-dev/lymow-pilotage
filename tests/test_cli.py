@@ -48,6 +48,9 @@ def lancer(capsys, tmp_path, *arguments: str) -> tuple[int, dict]:
     [
         ("tourner", "10"), ("avancer", "1"), ("reculer", "0.5"), ("plateau-haut",),
         ("stop",), ("reprendre",), ("base",), ("annuler",),
+        ("plateau", "90"), ("essai-arret-auto",), ("essai-arret-auto", "--vitesse", "0.15", "--observation", "4"),
+        ("tourner", "--duree", "2", "--vitesse", "-0.2"), ("reculer", "--duree", "2", "--vitesse", "0.1"),
+        ("tourner", "45", "--vitesse", "0.2"),
     ],
 )
 def test_sec05_sans_reel_aucune_connexion_et_zero_publication(capsys, tmp_path, reseau_interdit, lien, arguments):
@@ -76,6 +79,98 @@ def test_simulation_affiche_duree_cadence_et_arret_final(capsys, tmp_path, resea
     assert sortie["trame"]["champs"]["vitesse_lineaire_m_s"] == 0.25
     assert sortie["arret_final"]["repetitions"] == 3
     assert sortie["arret_final"]["hexadecimal"] == ARRET.hex(" ")
+
+
+def test_simulation_affiche_toujours_vitesse_duree_deplacement_et_emissions(capsys, tmp_path, reseau_interdit):
+    _code, defaut = lancer(capsys, tmp_path, "avancer", "1")
+    assert (defaut["vitesse_m_s"], defaut["duree_s"], defaut["deplacement_commande_m"]) == (0.25, 4.0, 1.0)
+    _code, lent = lancer(capsys, tmp_path, "reculer", "--duree", "2", "--vitesse", "0.1")
+    assert (lent["vitesse_m_s"], lent["duree_s"], lent["deplacement_commande_m"], lent["emissions_prevues"]) == (
+        0.1, 2.0, 0.2, 20,
+    )
+    assert lent["trame"]["champs"]["vitesse_lineaire_m_s"] == -0.1
+    _code, tour = lancer(capsys, tmp_path, "tourner", "45", "--vitesse", "0.2")
+    assert tour["vitesse_rad_s"] == 0.2 and tour["deplacement_commande_deg"] == 45.0
+    assert tour["emissions_prevues"] == 40
+    _code, droite = lancer(capsys, tmp_path, "tourner", "--duree", "2", "--vitesse", "-0.2")
+    assert droite["trame"]["champs"]["vitesse_angulaire_rad_s"] == -0.2
+    assert droite["deplacement_commande_deg"] == 22.9
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("avancer",), ("avancer", "1", "--duree", "2"), ("tourner",), ("tourner", "45", "--duree", "2"),
+        ("avancer", "1", "--vitesse", "0.26"), ("avancer", "1", "--vitesse", "0.04"),
+        ("tourner", "45", "--vitesse", "0.36"), ("tourner", "45", "--vitesse", "-0.2"),
+        ("avancer", "--duree", "9", "--vitesse", "0.25"), ("avancer", "--duree", "9.5"),
+        ("avancer", "--duree", "2", "--vitesse", "-0.1"),
+        ("plateau", "19"), ("plateau", "101"),
+        ("essai-arret-auto", "--vitesse", "0.16"), ("essai-arret-auto", "--observation", "4.5"),
+        ("essai-arret-auto", "--observation", "0.5"),
+    ],
+)
+def test_parametres_hors_bornes_refuses_en_simulation_comme_en_reel(capsys, tmp_path, reseau_interdit, arguments):
+    for mode in ((), ("--reel",)):  # refusé avant toute connexion, même avec --reel
+        code, sortie = lancer(capsys, tmp_path, *arguments, *mode)
+        assert code == 2 and "echec" in sortie
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [("plateau",), ("plateau", "90.5"), ("plateau", "haut"), ("avancer", "1", "--vitesse", "1_0"),
+     ("avancer", "--duree", "inf"), ("essai-arret-auto", "1"), ("essai-arret-auto", "--duree", "2")],
+)
+def test_saisie_invalide_refusee_par_la_ligne_de_commande(capsys, tmp_path, reseau_interdit, arguments):
+    with pytest.raises(SystemExit) as sortie:
+        cli.main([*arguments, "--donnees", str(tmp_path)])
+    assert sortie.value.code == 2
+
+
+def test_simulation_de_l_essai_d_arret_automatique(capsys, tmp_path, reseau_interdit, lien):
+    code, sortie = lancer(capsys, tmp_path, "essai-arret-auto")
+    assert code == 0 and sortie["mode"] == "simulation"
+    assert (sortie["vitesse_m_s"], sortie["observation_s"], sortie["emissions_prevues"]) == (0.1, 3.0, 1)
+    assert sortie["deplacement_si_consigne_conservee_m"] == 0.3
+    assert sortie["arret_final"]["repetitions"] == 3
+    assert "0.6 m" in sortie["exposition"]
+    assert lien.publies == []
+
+
+def test_essai_reel_passe_par_la_liaison(capsys, tmp_path, liaison_factice, lien):
+    code, sortie = lancer(capsys, tmp_path, "essai-arret-auto", "--reel")
+    assert code == 0 and sortie["emissions"] == 1
+    assert len(lien.consignes) == 1 and len(lien.arrets) == 3
+    assert "observation visuelle" in sortie["rappel"]
+
+
+def test_essai_et_reel_interdits_dans_une_sequence(capsys, tmp_path, reseau_interdit):
+    cas = (
+        ("avancer 1; essai-arret-auto", "interdite dans une séquence"),
+        ("plateau 90; avancer 1 --reel", "option « --reel » refusée"),
+    )
+    for chaine, message in cas:
+        assert cli.main(["sequence", chaine, "--donnees", str(tmp_path)]) == 2
+        assert message in capsys.readouterr().err
+    assert not (tmp_path / "journaux").exists()
+
+
+def test_sequence_avec_options_en_simulation(capsys, tmp_path, reseau_interdit):
+    code, sortie = lancer(
+        capsys, tmp_path, "sequence", "plateau 90; tourner 45 --vitesse 0.2; reculer --duree 2 --vitesse 0.1"
+    )
+    assert code == 0
+    assert [etape["ordre"] for etape in sortie["etapes"]] == [
+        "plateau 90", "tourner 45 --vitesse 0.2", "reculer --duree 2 --vitesse 0.1",
+    ]
+    assert sortie["etapes"][0]["trame"]["champs"]["hauteur_coupe_mm"] == 90
+
+
+def test_aide_de_l_essai_documente_l_exposition(capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    aide = " ".join(capsys.readouterr().out.split())
+    assert "essai-arret-auto" in aide and "0.15 m/s × 4 s = 0.6 m" in aide
 
 
 def test_simulation_de_stop_affiche_les_deux_trames(capsys, tmp_path, reseau_interdit):
