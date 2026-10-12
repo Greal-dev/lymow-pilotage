@@ -16,7 +16,7 @@ from lymow_pilotage.config import Calibration
 from lymow_pilotage.mouvement import ErreurSaisie
 from lymow_pilotage.protocole import est_requete_pure
 
-SANS_POSE = {"workStatus": 1, "battery": 80}
+SANS_POSE = {"robotState": 1, "workStatus": 1, "battery": 80}
 
 
 async def armer(http, serveur) -> str:
@@ -200,7 +200,7 @@ def test_direct_file_limitee_a_cinq_et_stop_vide_la_file_et_desarme(tmp_path, mo
 
 
 def test_direct_refus_sec01_desarme_et_vide_la_file(tmp_path, monkeypatch, session_reelle, lien):
-    lien.robot = {"workStatus": 4, "battery": 80}  # retour à la base : hors liste blanche
+    lien.robot = {"robotState": 4, "workStatus": 4, "battery": 80}  # retour à la base : hors liste blanche
 
     async def scenario():
         async with serveur_ui(tmp_path, monkeypatch, reel=True, session=session_reelle) as (serveur, http):
@@ -263,8 +263,9 @@ def test_page_du_pave_etat_complet_et_garde_fous_visibles(tmp_path, monkeypatch)
     page = (ui.STATIQUE / "index.html").read_text(encoding="utf-8")
     script = (ui.STATIQUE / "pave.js").read_text(encoding="utf-8")
     assert "PILOTAGE DIRECT ARMÉ" in page and 'id="bandeau-direct"' in page and "Échap ou Espace" in page
-    assert page.index('class="pilotage large-bloc"') < page.index('id="video"') < page.index('id="bloc-fleches"')
-    for identifiant in ("pave-miniature", "pave-total", "pave-retours", "pave-file", "direct-interrupteur", "pave-clavier"):
+    # La vidéo et les flèches partagent le même cadre, dans le bloc principal.
+    assert page.index('id="bloc-pilotage"') < page.index('id="bloc-fleches"') < page.index('id="video"') < page.index('data-fleche=')
+    for identifiant in ("pave-miniature", "pave-total", "pave-retours", "pave-file", "direct-interrupteur", "fleches-bascule"):
         assert f'id="{identifiant}"' in page and f'"{identifiant}"' in script
     assert page.count("data-fleche=") == 4
     # Mode file : la flèche écrit dans LA séquence de la page ; aucune émission sans les deux temps.

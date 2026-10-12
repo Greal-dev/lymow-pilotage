@@ -47,11 +47,71 @@
   function texteEtatDesOrdres(ordres) {
     if (!ordres) { return ""; }
     var texte = ordres.statut ? "Robot : " + ordres.statut : "Robot : état inconnu";
+    if (ordres.tache) { texte += " (tâche : " + ordres.tache + ")"; }
     return ordres.mouvement_refuse ? texte + " — " + ordres.mouvement_refuse : texte;
   }
 
+  /* En-tête : l'état du robot en une ligne (en ligne, statut, batterie, RTK). */
+  function resumeEtat(etat) {
+    if (!etat) { return "état du robot inconnu"; }
+    var morceaux = [etat.en_ligne === true ? "en ligne" : etat.en_ligne === false ? "HORS LIGNE" : "présence inconnue"];
+    morceaux.push((etat.statut_libelle || "statut inconnu") + (etat.tache_libelle ? " (tâche : " + etat.tache_libelle + ")" : ""));
+    if (typeof etat.batterie_pct === "number") { morceaux.push("batterie " + etat.batterie_pct + " %"); }
+    if (etat.rtk) { morceaux.push(etat.rtk); }
+    return morceaux.join(" · ") + (etat.perime ? " (état ancien)" : "");
+  }
+
+  /* Sections repliables : fermées par défaut, puis ce que le poste a mémorisé ; « compte » ouverte
+   * d'office si aucun compte n'est connecté. Une mémoire abîmée vaut « rien de mémorisé ». */
+  function voletsOuverts(memoire, noms, compteConnecte) {
+    var ouverts = {};
+    var valide = memoire && typeof memoire === "object" && !Array.isArray(memoire);
+    noms.forEach(function (nom) { ouverts[nom] = Boolean(valide && memoire[nom] === true); });
+    if (!compteConnecte && noms.indexOf("compte") >= 0) { ouverts.compte = true; }
+    return ouverts;
+  }
+
+  /* Pourquoi les flèches n'agissent pas maintenant ; chaîne vide si elles agissent. Après une pause
+   * demandée, elles attendent le statut « pause » frais — et rien ne part tout seul ensuite. */
+  function blocageDesFleches(ordres) {
+    if (ordres && ordres.pause && ordres.pause.etat === "en attente") {
+      return "Pause en attente de confirmation : les flèches reprendront ensuite.";
+    }
+    return "";
+  }
+
+  /* Ce que la page propose à côté d'un refus : le geste utile, s'il existe. */
+  function gestesProposes(ordres, occupe) {
+    return {
+      pause: Boolean(ordres && ordres.action === "pause" && !occupe),
+      reprendre: Boolean(ordres && ordres.reprise_possible && !occupe),
+      texte: ordres && ordres.pause ? ordres.pause.texte : ""
+    };
+  }
+
+  /* SEC-01b — attestation « lames à l'arrêt » de l'opérateur : ce que la page en dit. Le serveur seul
+   * décide si elle est proposable (statut attestable) ; rien n'est déduit ici. */
+  function messageStatutDeclare(attestation) {
+    if (!attestation || !attestation.proposable || attestation.active) { return ""; }
+    return "Le robot se déclare : " + attestation.statut + ".";
+  }
+
+  function bandeauAttestation(attestation) {
+    if (!attestation || !attestation.active) { return ""; }
+    var reste = Math.max(0, Math.floor(attestation.reste_s || 0));
+    var secondes = reste % 60;
+    return "Pilotage autorisé sur attestation de l'opérateur — expire dans "
+      + (reste < 600 ? "0" : "") + Math.floor(reste / 60) + ":" + (secondes < 10 ? "0" : "") + secondes;
+  }
+
   var api = {
+    messageStatutDeclare: messageStatutDeclare,
+    bandeauAttestation: bandeauAttestation,
     texteOrdre: texteOrdre,
+    blocageDesFleches: blocageDesFleches,
+    gestesProposes: gestesProposes,
+    resumeEtat: resumeEtat,
+    voletsOuverts: voletsOuverts,
     libelleEmission: libelleEmission,
     avertissementOrdreSeul: avertissementOrdreSeul,
     motifEmissionIndisponible: motifEmissionIndisponible,

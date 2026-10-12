@@ -19,15 +19,16 @@ from lymow_pilotage.vendor.ha_lymow.protocol import decode_pboutput
 
 # PbOutput écrit à la main :
 #   champ 3 (1a) erreurs compactées [19]
-#   champ 5 (2a) PbRobotInfo {batterie(2)=80, wifi(3)=4, 4G(4)=3, workStatus(6)=1}
-#   champ 6 (32) RTK {satellites(1)=22, statut(4)=3}
+#   champ 5 (2a) PbRobotInfo {robotStatus(1)=3, batterie(2)=80, wifi(3)=4, 4G(4)=3, workStatus(6)=2}
+#     — la forme réelle d'une tâche en pause (2026-10-12) : statut vivant 3, tâche 2
+#   champ 6 (32) localisation {satellites(1)=22, précision horizontale(2)=0,02 m, qualité(4)=3}
 #   champ 10 (52) profil {softwareVersion(3)="v2.1"}
 #   champ 14 (72) pose {est=1.0, nord=2.0, theta=pi/2 -> db 0f c9 3f}
 #   champ 17 (8a 01) configuration {rcCutHeight(3)=60}
 PBOUTPUT = bytes.fromhex(
     "1a 01 13"
-    "2a 08 10 50 18 04 20 03 30 01"
-    "32 04 08 16 20 03"
+    "2a 0a 08 03 10 50 18 04 20 03 30 02"
+    "32 09 08 16 15 0a d7 a3 3c 20 03"
     "52 06 1a 04 76 32 2e 31"
     "72 0f 0d 00 00 80 3f 15 00 00 00 40 1d db 0f c9 3f"
     "8a 01 02 18 3c"
@@ -39,10 +40,12 @@ def test_etat_decode_et_resume():
     etat.appliquer(decode_pboutput(PBOUTPUT), 100.0)
     resume = etat.resume(112.5)
     assert resume["batterie_pct"] == 80
-    assert resume["statut"] == 1 and resume["statut_libelle"] == "prêt, en attente d'ordre"
+    assert resume["statut"] == 3 and resume["statut_libelle"] == "tonte en pause"  # le statut VIVANT (f1)
+    assert resume["tache"] == 2 and resume["tache_libelle"] == "tonte en cours"  # la tâche (f6), à part
+    assert etat.statut == 3 and etat.tache == 2
     assert resume["erreurs"] == ["19 : Robot wheel slip"] and resume["avertissements"] == []
     assert (resume["position_est_m"], resume["position_nord_m"], resume["cap_deg"]) == (1.0, 2.0, 90.0)
-    assert resume["rtk"] == "FIXED" and resume["rtk_satellites"] == 22
+    assert resume["rtk"] == "précision horizontale 0.02 m — FIXED (libellé non confirmé)" and resume["rtk_satellites"] == 22
     assert (resume["signal_wifi"], resume["signal_4g"]) == (4, 3)
     assert resume["hauteur_coupe_mm"] == 60 and resume["micrologiciel"] == "v2.1"
     assert resume["age_etat_s"] == 12.5 and resume["en_ligne"] is True
@@ -59,7 +62,7 @@ def test_reponse_partielle_ne_rafraichit_ni_le_statut_ni_les_erreurs():
 
 def test_pose_non_finie_ignoree():
     etat = Etat()
-    etat.appliquer({"workStatus": 1, "poseEastM": math.nan, "poseNorthM": 0.0, "poseThetaRad": 0.0}, 1.0)
+    etat.appliquer({"robotState": 1, "workStatus": 1, "poseEastM": math.nan, "poseNorthM": 0.0, "poseThetaRad": 0.0}, 1.0)
     assert etat.pose is None
 
 
@@ -128,7 +131,7 @@ def test_socle_reception_decode_l_etat_et_la_presence():
     client._dispatch(SimpleNamespace(topic="/device/robot-test/notify-app", payload=b'{"robotState":"online"}'))
     client._dispatch(SimpleNamespace(topic="/device/robot-test/pboutput", payload=b"pas du json"))
     client._dispatch(SimpleNamespace(topic="/device/autre/pboutput", payload=enveloppe.encode()))
-    assert len(etats) == 1 and etats[0][1]["workStatus"] == 1 and etats[0][2] is False
+    assert len(etats) == 1 and (etats[0][1]["robotState"], etats[0][1]["workStatus"]) == (3, 2) and etats[0][2] is False
     assert presences == [("robot-test", True, False)]
 
 

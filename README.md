@@ -43,6 +43,7 @@ Python 3.12) ; il se régénère avec
 | `lymow plateau-haut` | Raccourci : hauteur maximale (100 mm, réglable de 80 à 100). |
 | `lymow stop` | Consigne nulle émise 3 fois, sans précondition, puis mise en pause de la tâche (userCtrl 3 ; 21 si le dernier état connu indique un retour à la base). |
 | `lymow sequence "plateau 90; tourner 45 --vitesse 0.2; reculer --duree 2 --vitesse 0.1"` | Enchaîne ; rien ne part si une étape est refusable ; s'arrête au premier refus, échec ou constat non confirmé. Étapes : `tourner`, `avancer`, `reculer`, `plateau`, `plateau-haut`, `stop`. `--reel` et `essai-arret-auto` y sont interdits. |
+| `lymow pause` | Met la tâche en pause (3), ou le retour à la base (21) : la pause de `stop`, sans les consignes nulles. |
 | `lymow reprendre` / `base` / `annuler` | Reprise de tâche (4), retour base tâche conservée (33), annulation sur place (28). |
 | `lymow ui [--reel \| --demo] [--port N]` | Interface web locale avec retour vidéo (voir « Interface web locale ») ; `--demo` : robot et jardin fictifs, sans compte ni réseau. |
 | `lymow carte` | Carte du robot : zones, zones interdites, passages, station (lecture seule ; contours complets avec `--json`). Une grande carte arrive coupée à 81 920 octets (constat du 2026-10-12) : les tranches suivantes sont demandées une à une (hypothèse à confirmer en réel), et une carte restée tronquée est refusée avec son motif. |
@@ -82,6 +83,16 @@ s'appliquent pas.
 `127.0.0.1` uniquement — aucune option ne change cet hôte —, ouvre le
 navigateur et s'arrête sur Ctrl+C. `lancer-lymow.cmd` (double-clic) lance
 `lymow ui` en simulation.
+
+La page tient en un écran de pilotage : l'en-tête (mode, état du robot en une
+ligne, STOP toujours visible), puis un bloc unique — la vidéo, sa barre de
+commande (vidéo, « Flèches : activer », pas des flèches, « Direct : armer »,
+« Plateau haut », « Pause ») et la séquence en cours sur une ligne avec
+« Prévisualiser » et « Émettre ». Tout le reste est rangé dans des sections
+repliées par défaut, dont l'état ouvert ou fermé est mémorisé par le
+navigateur (rien d'autre n'y est stocké) : « Carte et ajustement de zone »,
+« Ordres détaillés », « Calibration », « Compte » (ouverte d'elle-même si
+aucun compte n'est connecté), « Journal et résultat détaillé ».
 
 - Version. Au lancement, l'interface calcule une empreinte de son code et
   charge sa page en mémoire : la page servie reste cohérente avec le serveur,
@@ -215,7 +226,21 @@ premier essai, ouvrir la console du navigateur (F12) et observer :
 ## Pilotage par flèches
 
 But : écrire vite une suite d'étapes — se dégager, rejoindre une zone où le
-réseau revient — et non piloter à vue. Le panneau est à côté de la vidéo.
+réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même.
+
+- **Une seule bascule : « Flèches : activer »** (ou un clic dans la vidéo).
+  Elle active ensemble les quatre boutons affichés sur la vidéo et le
+  clavier ; un liseré orange autour de la vidéo le montre. Cliquer ailleurs
+  ou Échap les désactive — Échap reste STOP dès qu'un mouvement est en cours
+  ou que le pilotage direct est armé.
+- **Robot en tonte ou en retour : un mouvement est refusé** (SEC-01), et la
+  page le dit avant même d'essayer : « Le robot tond : mettez la tâche en
+  pause pour prendre la main », avec le bouton « Mettre en pause » à côté (une
+  confirmation, puis la pause seule : `userCtrl` 3, ou 21 pendant un retour à
+  la base). Les flèches attendent ensuite le statut « pause » reçu du robot ;
+  rien ne part tout seul après la pause. « Reprendre la tâche » reste proposé
+  (les lames peuvent redémarrer). Limite connue : un retour à la base mis en
+  pause donne un statut où aucun mouvement n'est permis.
 
 - Quatre flèches (boutons, ou clavier quand le panneau a le focus) : ↑ avancer,
   ↓ reculer, ← tourner à gauche, → tourner à droite. Pas choisis dans deux
@@ -281,10 +306,60 @@ réseau revient — et non piloter à vue. Le panneau est à côté de la vidéo
   propriétaire le 2026-10-11 ; arrêt des lames dans ces deux statuts à
   constater robot à vue lors de la calibration). Tout le reste refuse : tonte
   (2), reprise (8), tonte de zone (9), retour à la base (4, 10, 14), arrêt
-  d'urgence (13), mise à jour, inconnu, hors ligne. Le statut est revérifié à chaque consigne : s'il sort de la
+  d'urgence (13), mise à jour, inconnu, hors ligne.
+  **Le statut jugé est le statut VIVANT du robot**, `robotStatus` (champ 1 de
+  `robotInfo`), et lui seul. Constat du 2026-10-12, trames réelles :
+  `workStatus` (champ 6), jugé jusque-là, reste à 2 (tonte) pendant toute la
+  tâche, pause comprise — l'outil refusait donc à tort un robot en pause.
+  Valeurs observées (champ 1 / champ 6) : en charge 5/1, au repos 1/1, tâche
+  en pause 3/2, télécommande 6/2. Le champ 6 n'est plus qu'une information
+  (« tâche : tonte en cours »). Une trame sans champ 1 laisse le statut
+  inconnu : refus, jamais de repli sur le champ 6. La liste elle-même n'a pas
+  changé. Le statut est revérifié à chaque consigne : s'il sort de la
   liste ou si le robot passe hors ligne, arrêt immédiat. L'outil ne sait
   émettre aucun ordre de démarrage de tonte ; seul `reprendre` peut relancer
   les lames.
+- **SEC-01b Attestation de l'opérateur** (décision du propriétaire,
+  2026-10-12). Elle porte, comme tout SEC-01, sur le statut VIVANT du robot
+  (`robotStatus`, champ 1). Le constat qui l'a motivée — robot en pause,
+  lames arrêtées à vue, « statut 2 » publié — venait du champ 6, qui n'est
+  plus jugé : un robot en pause est désormais admis sans attestation. Elle
+  reste utile si le robot se déclare vraiment en tonte ou en retour alors que
+  l'opérateur voit ses lames arrêtées. Règle : un mouvement manuel (`tourner`, `avancer`, `reculer`, flèches
+  comprises) est admis si le statut est dans la liste de SEC-01, **ou** si
+  une attestation « lames à l'arrêt constatées par l'opérateur » est active
+  et que le robot se déclare en tonte (2, 8, 9) ou en retour (4, 10, 14).
+  Aucune attestation ne lève le refus en arrêt d'urgence (13), mise à jour
+  (11), essais d'usine (15, 16), hors ligne, statut absent ou inconnu. Le
+  reste de SEC-01 est inchangé : état frais, présence en ligne, un mouvement
+  à la fois, statut revérifié à chaque consigne (avec attestation, un
+  statut 2 n'interrompt pas ; un passage à 13, 11 ou hors ligne interrompt
+  toujours, comme l'expiration ou le retrait de l'attestation en cours de
+  mouvement). SEC-02, SEC-03 et les suivantes sont inchangées.
+  - *Vie de l'attestation.* 10 minutes au plus, dans la mémoire du processus
+    seulement : jamais active au lancement, jamais écrite sur disque, aucune
+    variable d'environnement ni clé de `calibration.toml` ne la pose. Elle
+    tombe sur STOP, à l'arrêt du serveur, à la réouverture de la liaison, dès
+    que le robot passe dans un statut toujours refusé ou hors ligne, et à la
+    demande (« Retirer »).
+  - *Dans la page* (`lymow ui --reel`, ou `--demo` ; refusée en simulation et
+    pendant un mouvement) : quand le statut seul bloque, la ligne de statut
+    du bloc Pilotage propose d'abord « Mettre en pause », puis « Le robot se
+    déclare : … » et le bouton « Je vois le robot, lames à l'arrêt :
+    autoriser le pilotage 10 min », avec une confirmation explicite. Tant
+    qu'elle est active : bandeau orange en haut de page, avec le temps
+    restant et « Retirer ».
+  - *En ligne de commande* : `--lames-arretees-constatees`, avec `--reel`
+    seulement, sur `tourner`, `avancer`, `reculer` et `sequence` ; elle vaut
+    pour cette commande.
+  - *Journal.* Chaque pose, retrait et expiration y figure
+    (`attestation-posee`, `attestation-retiree`, `attestation-expiree`), et
+    chaque ordre émis sous attestation porte la mention et le statut déclaré.
+  - *Limites.* **L'outil ne peut pas vérifier ce que l'opérateur atteste** :
+    si les lames tournent, il fera bouger un robot lames en marche. À
+    n'utiliser que robot à vue. Le plateau de coupe et l'essai d'arrêt
+    automatique n'en bénéficient pas : ils restent sur la liste de SEC-01.
+    Non vérifié en réel.
 - **SEC-02 Plafonds** : 2 m, 180°, 0,25 m/s, 0,35 rad/s, 9 s par mouvement ;
   le déplacement réellement commandé (vitesse × durée) respecte les mêmes
   2 m et 180° quel que soit le facteur de calibration ; `plateau-haut` entre
@@ -475,7 +550,14 @@ tonte ; la surface et les bornes que le robot recalcule ne sont pas comparées.
 - `plateau-haut` : l'effet d'un changement de hauteur de coupe robot à l'arrêt
   est inconnu.
 - Le statut « télécommande » (6) est tenu pour « lames à l'arrêt » afin de
-  pouvoir enchaîner deux ordres ; à vérifier robot à vue.
+  pouvoir enchaîner deux ordres ; à vérifier robot à vue. Constat du
+  2026-10-12 : toute trame de pilotage manuel, y compris la consigne nulle
+  de l'arrêt, fait passer le robot en « télécommande » (6) pendant une
+  trentaine de secondes (26 à 32 s observées), puis il revient en pause (3).
+- Qualité de position : les sources se contredisent sur le sens des valeurs
+  (1 = point seul, ou flottant). L'outil affiche la précision horizontale en
+  mètres quand le robot la donne, et le libellé seulement comme indication
+  « non confirmé ».
 - `stop` met aussi la tâche en pause, même si l'arrêt des consignes n'est pas
   confirmé ; un échec de la pause est signalé à part. L'effet réel de la pause
   sur une tonte autonome reste à constater. L'arrêt automatique de fin de

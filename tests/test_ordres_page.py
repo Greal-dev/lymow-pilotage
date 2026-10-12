@@ -18,8 +18,8 @@ from test_ui import attendre, executer, poster, serveur_ui
 
 from lymow_pilotage import capture, mouvement, ui
 
-SANS_POSE = {"workStatus": 1, "battery": 80}  # le robot réel : un état, jamais de position
-EN_RETOUR = {"workStatus": 4, "battery": 80}
+SANS_POSE = {"robotState": 1, "workStatus": 1, "battery": 80}  # le robot réel : un état, jamais de position
+EN_RETOUR = {"robotState": 4, "workStatus": 4, "battery": 80}
 RECULER = {"nom": "reculer", "duree": 0.3, "vitesse": 0.1}
 TROIS_ETAPES = [RECULER, {"nom": "tourner", "duree": 0.3, "vitesse": 0.2}, {"nom": "avancer", "duree": 0.3, "vitesse": 0.1}]
 TRAME = json.dumps({"message": base64.b64encode(b"\x2a\x04\x08\x05\x30\x01").decode()})
@@ -44,7 +44,8 @@ def test_bouton_emettre_ne_reste_pas_grise_apres_un_ordre_sans_position(tmp_path
             etape = serveur.resultat["etapes"][0]
             assert etape["verification"] == "non vérifiable" and etape["constat"] == mouvement.POSITION_NON_FOURNIE
             assert serveur.resultat["code_sortie"] == 0 and serveur.resultat["interrompue"] is False
-            assert serveur.instantane()["ordres"] == {"statut": "prêt, en attente d'ordre", "mouvement_refuse": None}
+            ordres = serveur.instantane()["ordres"]
+            assert (ordres["statut"], ordres["mouvement_refuse"], ordres["action"]) == ("prêt, en attente d'ordre", None, None)
             # La page est de nouveau utilisable : un second ordre se prévisualise et s'émet.
             statut, _corps = await emettre(http, serveur, [RECULER])
             assert statut == 202
@@ -54,9 +55,9 @@ def test_bouton_emettre_ne_reste_pas_grise_apres_un_ordre_sans_position(tmp_path
             lien.robot = dict(EN_RETOUR)
             await poster(http, serveur, "/api/actualiser")
             await attendre(lambda: serveur.instantane()["ordres"]["mouvement_refuse"] is not None)
-            assert serveur.instantane()["ordres"] == {
-                "statut": "retour à la base", "mouvement_refuse": "mouvement refusé tant que le robot est en : retour à la base",
-            }
+            ordres = serveur.instantane()["ordres"]
+            assert ordres["statut"] == "retour à la base" and ordres["action"] == "pause"
+            assert ordres["mouvement_refuse"] == "Le robot rentre à sa base : mettez le retour en pause pour prendre la main."
             # Un ordre refusé rend la main lui aussi, avec son motif et la reprise proposée.
             statut, _corps = await emettre(http, serveur, [RECULER, RECULER])
             assert statut == 202

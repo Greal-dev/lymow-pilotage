@@ -28,7 +28,7 @@ from .securite import RefusSecurite
 from .session import EchecOrdre
 from .vendor.ha_lymow.api import LymowApiClient
 
-_ORDRES_SIMPLES = ("plateau-haut", "stop", "reprendre", "base", "annuler")
+_ORDRES_SIMPLES = ("plateau-haut", "stop", "pause", "reprendre", "base", "annuler")
 _AUTORISEES_ORDRES = frozenset(Categorie)
 _LECTURE = frozenset({Categorie.REQUETE_PURE})
 PORT_UI = 8377  # même valeur que ui.PORT_DEFAUT, sans charger le serveur web pour les autres commandes
@@ -120,6 +120,7 @@ def construire_analyseur() -> argparse.ArgumentParser:
             "--duree", type=nombre, default=None, metavar="S",
             help=f"tenir la consigne S secondes (au plus {securite.DUREE_MAX_S:g}) au lieu de donner des {unite}",
         )
+        _option_attestation(fils_mouvement)
     plateau = ajouter("plateau", f"régler la hauteur du plateau de coupe ({securite.HAUTEUR_MIN_MM} à {securite.HAUTEUR_MAX_MM} mm)")
     plateau.add_argument("valeur", type=mouvement.lire_entier, metavar="mm")
     essai = ajouter(
@@ -139,6 +140,7 @@ def construire_analyseur() -> argparse.ArgumentParser:
     aides = {
         "plateau-haut": "lever le plateau de coupe au maximum",
         "stop": "arrêt du pilotage manuel (sans précondition avec --reel)",
+        "pause": "mettre la tâche (ou le retour à la base) en pause, pour prendre la main",
         "reprendre": "reprendre la tâche en pause (les lames peuvent redémarrer)",
         "base": "retour à la base en conservant la tâche",
         "annuler": "annuler la tâche, arrêt sur place",
@@ -149,6 +151,7 @@ def construire_analyseur() -> argparse.ArgumentParser:
         "sequence", 'enchaîner : "plateau 90; tourner 45 --vitesse 0.2; reculer --duree 2 --vitesse 0.1"'
     )
     sequence.add_argument("etapes", metavar='"étape; étape; …"')
+    _option_attestation(sequence)
     ajouter("carte", "afficher la carte du robot : zones, zones interdites, passages, station (lecture seule)")
     ajuster = ajouter(
         "ajuster-zone",
@@ -195,6 +198,16 @@ def construire_analyseur() -> argparse.ArgumentParser:
     return analyseur
 
 
+def _option_attestation(analyseur: argparse.ArgumentParser) -> None:
+    # SEC-01b : sur tourner, avancer, reculer et sequence seulement ; ailleurs l'option n'existe pas.
+    analyseur.add_argument(
+        "--lames-arretees-constatees", action="store_true",
+        help="avec --reel seulement : vous attestez, robot à vue, que les lames sont à l'arrêt alors que "
+        "le robot se déclare en tonte ou en retour (l'outil ne peut pas le vérifier) ; vaut pour cette "
+        "commande, jamais en arrêt d'urgence, mise à jour, essai d'usine ou hors ligne (SEC-01b)",
+    )
+
+
 def _lire_port(texte: str) -> int:
     # `lire_entier` s'arrête à quatre chiffres (millimètres) : un port en compte jusqu'à cinq.
     if not (texte.isascii() and texte.isdigit() and len(texte) <= 5):
@@ -234,7 +247,7 @@ def _sans_echec(fonction: Any) -> Any:
     return protegee
 
 
-async def _emettre(ordres: list[Ordre], ctx: Contexte) -> tuple[dict[str, Any], int]:
+async def _emettre(ordres: list[Ordre], ctx: Contexte, attestee: bool = False) -> tuple[dict[str, Any], int]:
     refus = conduite.refuser(ordres, ctx.cal, ctx.journal, "réel")
     if refus:
         return refus, CODE_REFUS
@@ -245,7 +258,15 @@ async def _emettre(ordres: list[Ordre], ctx: Contexte) -> tuple[dict[str, Any], 
     try:
         async with liaison.ouvrir_session(ctx.journal, ctx.cal, _AUTORISEES_ORDRES, brut=brut) as session:
             en_arret[0] = lambda: session.arret_en_cours
-            return await conduite.emettre_ordres(session, ordres, ctx.journal)
+            if not attestee:
+                return await conduite.emettre_ordres(session, ordres, ctx.journal)
+            # SEC-01b : attestation de cette invocation seulement ; elle meurt avec la commande.
+            session.attestation = securite.Attestation(session.horloge, session.journaliser)
+            session.attestation.poser("option --lames-arretees-constatees")
+            try:
+                return await conduite.emettre_ordres(session, ordres, ctx.journal)
+            finally:
+                session.attestation.retirer("fin de la commande")
     finally:
         if ecoute is not None:
             _sans_echec(ecoute.vider_attente)()
@@ -253,12 +274,20 @@ async def _emettre(ordres: list[Ordre], ctx: Contexte) -> tuple[dict[str, Any], 
 
 async def _commande_ordres(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
     ordres = _ordres(args)
-    bilan, code = await _emettre(ordres, ctx) if args.reel else conduite.simuler_ordres(ordres, ctx.cal, ctx.journal)
+    attestee = getattr(args, "lames_arretees_constatees", False)
+    if attestee and not args.reel:
+        # SEC-01b : en simulation rien ne part ; l'option n'y a aucun sens et ne doit pas s'y banaliser.
+        raise ErreurSaisie("--lames-arretees-constatees n'est acceptée qu'avec --reel (SEC-01b)")
+    if args.reel:
+        bilan, code = await _emettre(ordres, ctx, attestee)
+    else:
+        bilan, code = conduite.simuler_ordres(ordres, ctx.cal, ctx.journal)
+    resume = {"attestation_demandee": securite.MENTION_ATTESTATION} if attestee else {}
     if args.commande == "sequence":
-        return {"sequence": args.etapes} | bilan, code
+        return {"sequence": args.etapes} | resume | bilan, code
     if bilan["etapes"]:
-        return bilan["etapes"][0], code
-    return {"mode": bilan["mode"], "ordre": str(ordres[0]), "echec": bilan["motif"]}, code
+        return resume | bilan["etapes"][0], code
+    return {"mode": bilan["mode"], "ordre": str(ordres[0]), "echec": bilan["motif"]} | resume, code
 
 
 async def _commande_etat(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:

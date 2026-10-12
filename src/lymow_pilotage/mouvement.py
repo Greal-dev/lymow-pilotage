@@ -2,7 +2,7 @@
 
 Rôle : porter SEC-03 (arrêt dans un `finally`, homme mort, arrêt à l'abri des
 interruptions), SEC-04 (constat après ordre), SEC-07 (séquence) et appeler
-SEC-01/02 avant toute émission. Ne sait rien du transport : tout passe par
+SEC-01/02 avant toute émission (SEC-01b : attestation de l'opérateur lue sur la session). Ne sait rien du transport : tout passe par
 `Session.publier`.
 """
 
@@ -48,6 +48,8 @@ TACHES = {
     "reprendre": socle.USER_CTRL_RESUME,
     "base": socle.USER_CTRL_RECHARGE_DOCK,
     "annuler": socle.USER_CTRL_FORCE_REINIT,
+    # Mise en pause de la tâche, seule : la même pause que celle de `stop`, sans les consignes nulles.
+    "pause": socle.USER_CTRL_PAUSE,
 }
 ETAPES_SEQUENCE = (*MOUVEMENTS, *PLATEAUX, "stop")
 OPTIONS_MOUVEMENT = ("--vitesse", "--duree")
@@ -218,7 +220,9 @@ def simuler(ordre: Ordre, cal: Calibration, appareil: str | None) -> dict[str, A
         }
     else:
         trame = protocole.trame_tache(TACHES[ordre.nom], cal)
-        if ordre.nom != "annuler":
+        if ordre.nom == "pause":
+            resultat["variante"] = f"userCtrl {socle.USER_CTRL_PAUSE_DOCK} si le robot rentre à sa base"
+        elif ordre.nom != "annuler":
             sortie = protocole.trame_tache(socle.USER_CTRL_EXIT_REMOTE, cal)
             resultat["precede_si_telecommande"] = _decrire(sortie)
     resultat["trame"] = _decrire(trame)
@@ -401,10 +405,17 @@ async def arreter(session: Session) -> int:
 # --- SEC-01 : état frais --------------------------------------------------------
 
 
-async def _exiger_lames_arret(session: Session) -> Pose | None:
+def _attestee(session: Session) -> bool:
+    """SEC-01b : une attestation de l'opérateur est-elle active sur cette session ?"""
+    return session.attestation is not None and session.attestation.active
+
+
+async def _exiger_lames_arret(session: Session, attestable: bool = False) -> Pose | None:
     """SEC-01 : état reçu dans la session, après sollicitation, puis liste blanche.
 
     Rend la pose de départ si elle est aussi fraîche que le statut (SEC-04).
+    SEC-01b : `attestable` n'est vrai que pour tourner, avancer, reculer ; le plateau et
+    l'essai d'arrêt automatique restent sur la seule liste blanche.
     """
     if not session.lien.connecte:
         raise EchecOrdre("MQTT non connecté : rien n'a été émis")
@@ -416,7 +427,8 @@ async def _exiger_lames_arret(session: Session) -> Pose | None:
     maintenant = session.horloge()
     frais = etat.recu_statut is not None and etat.recu_statut > instant
     securite.verifier_lames_arret(
-        etat.statut if frais else None, etat.age_statut(maintenant) if frais else None, etat.en_ligne
+        etat.statut if frais else None, etat.age_statut(maintenant) if frais else None, etat.en_ligne,
+        attestee=attestable and _attestee(session),
     )
     pose_fraiche = (
         etat.recu_pose is not None
@@ -426,10 +438,15 @@ async def _exiger_lames_arret(session: Session) -> Pose | None:
     return etat.pose if pose_fraiche else None
 
 
-def _surveiller(session: Session) -> None:
-    """SEC-01 : en cours de mouvement, un état qui sort de la liste blanche arrête tout."""
+def _surveiller(session: Session, attestable: bool = False) -> None:
+    """SEC-01 : en cours de mouvement, un état qui sort de la liste blanche arrête tout.
+
+    SEC-01b : même règle qu'au départ ; une attestation retirée ou expirée en route arrête aussi.
+    """
     try:
-        securite.verifier_presence_et_statut(session.etat.statut, session.etat.en_ligne)
+        securite.verifier_presence_et_statut(
+            session.etat.statut, session.etat.en_ligne, attestable and _attestee(session)
+        )
     except RefusSecurite as refus:
         raise EchecOrdre(f"mouvement interrompu en cours de route : {refus}") from None
 
@@ -439,11 +456,16 @@ def _surveiller(session: Session) -> None:
 
 async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
     consigne = consigne_de(ordre, session.cal)  # SEC-02
-    avant = await _exiger_lames_arret(session)  # SEC-01
+    avant = await _exiger_lames_arret(session, attestable=True)  # SEC-01, SEC-01b
+    # SEC-01b : tout ordre émis pendant qu'une attestation est active le dit, au journal et au bilan.
+    sous_attestation: dict[str, Any] = {}
+    if _attestee(session):
+        sous_attestation = {"attestation": securite.MENTION_ATTESTATION, "statut_declare": session.etat.statut}
     trame = protocole.trame_consigne(consigne.lineaire, consigne.angulaire, session.cal)
     session.journal.ecrire(  # SEC-06 : sans trace possible, pas d'ordre
         "ordre-emis", strict=True, ordre=str(ordre), sujet=session.sujet,
         trame=trame.description(), duree_s=round(consigne.duree, 2), cadence_hz=securite.CADENCE_HZ,
+        **sous_attestation,
     )
     periode = 1.0 / securite.CADENCE_HZ
     emissions = 0
@@ -456,7 +478,7 @@ async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
             # de l'horloge ne doit pas ajouter une consigne).
             maximum = math.ceil(round(consigne.duree * securite.CADENCE_HZ, 6))
             while emissions < maximum and consigne.duree - (session.horloge() - debut) > 0.001:
-                _surveiller(session)
+                _surveiller(session, attestable=True)
                 await session.publier(trame, securite.DELAI_CONSIGNE_S)
                 emissions += 1
                 attente = min(debut + emissions * periode, debut + consigne.duree) - session.horloge()
@@ -470,7 +492,7 @@ async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
                 await arreter(session)
             finally:
                 session.journal.ecrire("ordre-termine", ordre=str(ordre), emissions=emissions)
-    return {"mode": "réel", "ordre": str(ordre), "emissions": emissions} | await constater(
+    return {"mode": "réel", "ordre": str(ordre), "emissions": emissions} | sous_attestation | await constater(
         session, avant, instant_arret, consigne
     )
 
@@ -505,6 +527,8 @@ async def executer_arret(session: Session) -> dict[str, Any]:
         echec = erreur
     except asyncio.CancelledError:
         interrompu, acquittes = True, securite.REPETITIONS_ARRET  # levée seulement après 3 acquittements
+    if session.attestation is not None:
+        session.attestation.retirer("STOP")  # SEC-01b : après les arrêts, jamais avant (rien ne les retarde)
     code = code_pause(session.etat.statut)
     trame = protocole.trame_tache(code, session.cal)
     with _Garde(session, en_arret=True):
@@ -606,7 +630,9 @@ async def executer_tache(session: Session, nom: str) -> dict[str, Any]:
         if nom == "reprendre" and etat.statut not in _STATUTS_REPRISE:
             libelle = LIBELLES_STATUT.get(etat.statut, str(etat.statut))
             raise RefusSecurite(f"« reprendre » refusé : rien à reprendre (statut : {libelle})")
-        if etat.statut == socle.WORK_STATUS_REMOTE_CONTROL:
+        if nom == "pause":
+            codes = [code_pause(etat.statut)]  # 21 pendant un retour à la base, 3 sinon : comme `stop`
+        elif etat.statut == socle.WORK_STATUS_REMOTE_CONTROL:
             codes.insert(0, socle.USER_CTRL_EXIT_REMOTE)
     avant = etat.pose
     instant = session.horloge()
@@ -774,7 +800,9 @@ async def executer_sequence(session: Session, ordres: list[Ordre]) -> dict[str, 
             motif = rapport["constat"]
         else:
             try:  # (c) : dit ici, avec le statut en clair, plutôt qu'au refus de l'étape suivante
-                securite.verifier_presence_et_statut(session.etat.statut, session.etat.en_ligne)
+                securite.verifier_presence_et_statut(
+                    session.etat.statut, session.etat.en_ligne, _attestee(session)  # SEC-01b
+                )
             except RefusSecurite:
                 motif = f"le robot est passé en « {rapport['statut_apres']} », hors des statuts où un mouvement est permis"
         if motif:
