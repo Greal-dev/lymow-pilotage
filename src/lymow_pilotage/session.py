@@ -49,6 +49,7 @@ class Session:
         signaler: Callable[[str], None] = _avertir,
     ) -> None:
         self.lien = lien
+        self.appareil = appareil
         self.sujet = protocole.sujet_ordres(appareil)
         self.journal = journal
         self.cal = cal

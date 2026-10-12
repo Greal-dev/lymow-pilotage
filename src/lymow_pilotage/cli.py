@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import getpass
+import hmac
 import json
 import sys
 from dataclasses import dataclass
@@ -153,7 +154,16 @@ def construire_analyseur() -> argparse.ArgumentParser:
     )
     restaurer = ajouter("restaurer-zone", "remettre le contour d'une zone depuis une sauvegarde ; simulation sans --reel")
     restaurer.add_argument("fichier", metavar="sauvegarde.pb")
-    restaurer.add_argument("--zone", default=None, metavar="nom|identifiant")
+    restaurer.add_argument("--zone", default=None, metavar="identifiant", help="identifiant exact de la zone")
+    ajuster.add_argument(
+        "--nouvelle-reference", action="store_true",
+        help="prendre la carte actuelle du robot comme nouvelle référence de dérive cumulée",
+    )
+    for ecriture in (ajuster, restaurer):
+        ecriture.add_argument(
+            "--confirmer", default=None, metavar="EMPREINTE",
+            help="exigé avec --reel : l'empreinte affichée par la même commande en simulation",
+        )
     interface = ajouter(
         "ui", "interface web locale (127.0.0.1 seulement) ; simulation sans --reel, quoi que demande la page ; "
         "la connexion au compte Google peut s'y faire"
@@ -314,25 +324,43 @@ async def _retoucher(args: argparse.Namespace, ctx: Contexte, preparer: Any) -> 
     """Simulation : lit la carte (comme `etat`), calcule, écrit un aperçu. Réel : SEC-08 à SEC-11."""
     autorisees = _AUTORISEES_ORDRES if args.reel else _LECTURE
     async with liaison.ouvrir_session(ctx.journal, ctx.cal, autorisees) as session:
-        operation = preparer(await carte.demander(session, securite.ATTENTE_CARTE_S))
+        operation = preparer(await carte.demander(session, securite.ATTENTE_CARTE_S), session)
+        retouche.controler_cumul(ctx.dossier, session.appareil, operation)  # SEC-10 cumulatif, dès l'aperçu
         if args.reel:
+            # L'empreinte lie l'émission à CE que la simulation a montré : carte, zone, contour.
+            fournie = (args.confirmer or "").encode()
+            if not hmac.compare_digest(fournie, operation.empreinte.encode()):
+                raise RefusSecurite(
+                    "--confirmer absent ou différent : relancez la même commande sans --reel, "
+                    "vérifiez l'aperçu, puis recopiez l'empreinte affichée"
+                )
             return await retouche.emettre(session, operation, ctx.dossier)
     apercu = retouche.ecrire_apercu(operation, ctx.dossier, datetime.now())
     ctx.journal.ecrire("carte-simulee", ordre=operation.description, resume=operation.resume, apercu=str(apercu))
-    note = "simulation : la carte a été lue, rien n'a été écrit sur le robot ; ajoutez --reel pour émettre"
-    return {"mode": "simulation", "ordre": operation.description} | operation.resume | {"apercu": str(apercu), "note": note}, 0
+    note = (
+        "simulation : la carte a été lue, rien n'a été écrit sur le robot ; pour émettre, relancez avec "
+        f"--reel --confirmer {operation.empreinte}"
+    )
+    return {"mode": "simulation", "ordre": operation.description} | operation.resume | {
+        "apercu": str(apercu), "empreinte": operation.empreinte, "note": note,
+    }, 0
 
 
 async def _commande_ajuster(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
     return await _retoucher(
-        args, ctx, lambda recue: retouche.preparer_ajustement(recue, args.zone, args.de, args.a, args.cm, args.cote, args.raccord)
+        args, ctx,
+        lambda recue, _session: retouche.preparer_ajustement(
+            recue, args.zone, args.de, args.a, args.cm, args.cote, args.raccord, args.nouvelle_reference
+        ),
     )
 
 
 async def _commande_restaurer(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
-    sauvegarde = retouche.charger_sauvegarde(Path(args.fichier))
     return await _retoucher(
-        args, ctx, lambda recue: retouche.preparer_restauration(recue, sauvegarde, args.zone, args.fichier)
+        args, ctx,
+        lambda recue, session: retouche.preparer_restauration(
+            recue, retouche.charger_sauvegarde(Path(args.fichier), session.appareil), args.zone, args.fichier
+        ),
     )
 
 

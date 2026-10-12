@@ -170,8 +170,11 @@
       option.selected = zone.identifiant === precedent;
       choix.appendChild(option);
     });
+    var incomplete = carte && carte.complete === false
+      ? "CARTE INCOMPLÈTE (" + carte.manques.join(" ; ") + ") : affichage seul, aucune retouche possible — "
+      : "";
     $("carte-etat").textContent = carte
-      ? "carte reçue à " + (reponse.heure || "?") + " (il y a " + Math.round(reponse.age_s) + " s)"
+      ? incomplete + "carte reçue à " + (reponse.heure || "?") + " (il y a " + Math.round(reponse.age_s) + " s)"
       : "aucune carte : cliquez sur « Actualiser la carte »";
     recadrer();
     dessiner();
