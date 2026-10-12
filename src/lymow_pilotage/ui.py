@@ -26,13 +26,14 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
-from . import auth, compte, conduite, liaison, mouvement, rappel, retouche, securite
+from . import auth, compte, conduite, demo, liaison, mouvement, rappel, retouche, securite
 from . import carte as cartes
 from .config import Calibration
 from .journal import Journal, assainir, declarer_secret, masquer
 from .mouvement import ErreurSaisie, Ordre
 from .securite import RefusSecurite
 from .protocole import Categorie
+from .session import Session
 
 HOTE = "127.0.0.1"  # jamais 0.0.0.0 : aucune option ne change cette valeur
 PORT_DEFAUT = 8377
@@ -53,7 +54,7 @@ NON_CONNECTE = "non connecté — utilisez le panneau « Compte » de cette page
 ROUTE_REOUVERTURE = "/api/instance/rouvrir"
 DELAI_REOUVERTURE_S = 3.0  # au plus une réouverture de page toutes les trois secondes
 DELAI_RAPPEL_S = 1.0  # au plus une remise d'adresse de rappel par seconde
-MODES = ("simulation", "réel")
+MODES = ("simulation", "réel", "démonstration")
 
 
 class EchecDemarrage(Exception):
@@ -117,9 +118,16 @@ def ordres_depuis(corps: Any) -> list[Ordre]:
 
 class ServeurUI:
     def __init__(
-        self, cal: Calibration, journal: Journal, *, reel: bool, port: int = PORT_DEFAUT, dossier: Path | None = None
+        self, cal: Calibration, journal: Journal, *, reel: bool, port: int = PORT_DEFAUT, dossier: Path | None = None,
+        demonstration: bool = False,
     ) -> None:
+        if reel and demonstration:
+            raise ErreurSaisie("--demo et --reel sont incompatibles : la démonstration ne parle jamais au vrai robot")
         self.cal, self.journal, self.reel, self.port = cal, journal, reel, port
+        self.demonstration = demonstration
+        # En démonstration les ordres « partent » vers un robot fictif en mémoire : aucun invariant
+        # n'est relâché, c'est la liaison qui est fausse.
+        self.emet = reel or demonstration
         self.dossier = dossier if dossier is not None else journal._dossier.parent  # sauvegardes de carte
         self.carte_heure: str | None = None
         # Deux secrets de 256 bits, neufs à chaque lancement : le jeton d'adresse sert UNE fois,
@@ -194,7 +202,7 @@ class ServeurUI:
         self.port = self.adresses_ecoute()[0][1]
         self.un_clic = rappel.etat(self.registre)
         await self._connecter()
-        self._noter(f"interface démarrée en mode {'RÉEL' if self.reel else 'simulation'}")
+        self._noter(f"interface démarrée en mode {self.mode}")
 
     def adresses_ecoute(self) -> list[tuple[str, int]]:
         assert self._lanceur is not None
@@ -206,7 +214,7 @@ class ServeurUI:
 
     @property
     def mode(self) -> str:
-        return MODES[1] if self.reel else MODES[0]
+        return MODES[2] if self.demonstration else MODES[1] if self.reel else MODES[0]
 
     def ouvrir_page(self) -> bool:
         """Nouveau jeton d'adresse à usage unique, donné au navigateur par CE processus seulement."""
@@ -244,6 +252,14 @@ class ServeurUI:
             await self._connecter_sans_verrou()
 
     async def _connecter_sans_verrou(self) -> None:
+        if self.demonstration:  # ni coffre, ni compte, ni nuage : un robot fictif en mémoire
+            robot = demo.RobotFictif()
+            self.session = Session(robot, demo.APPAREIL, self.journal, self.cal, frozenset(Categorie))
+            robot.session = self.session
+            self.session.signaler = self._signaler
+            self.ident, self.etat_liaison = None, demo.MENTION
+            await self.session.solliciter()
+            return
         # Identifiants relus dans le coffre à chaque connexion : le jeton stocké a pu tourner.
         try:
             self.ident = liaison.lire_identifiants()
@@ -383,10 +399,10 @@ class ServeurUI:
             age = etat["age_etat_s"]
             etat["perime"] = age is None or age > securite.AGE_MAX_ETAT_S
         image: dict[str, Any] = {
-            "mode": "réel" if self.reel else "simulation",
+            "mode": self.mode,
             "connecte": session is not None and bool(session.lien.connecte),
             "liaison": self.etat_liaison,
-            "appareil": self.ident.appareil if self.ident else None,
+            "appareil": demo.APPAREIL if self.demonstration else self.ident.appareil if self.ident else None,
             "occupe": self.occupe,
             "compte": self._compte(),
             "etat": etat,
@@ -449,10 +465,10 @@ class ServeurUI:
 
     async def _previsualiser(self, requete: web.Request) -> web.StreamResponse:
         ordres = ordres_depuis(await self._corps(requete))
-        bilan, code = conduite.simuler_ordres(ordres, self.cal, self.journal)
+        bilan, code = conduite.simuler_ordres(ordres, self.cal, self.journal, self._appareil_fictif())
         identifiant = None
         self.previsualisation = None  # une nouvelle prévisualisation annule toujours la précédente
-        if self.reel and code == 0:
+        if self.emet and code == 0:
             identifiant = secrets.token_urlsafe(16)
             self.previsualisation = (identifiant, ordres, self.horloge() + DUREE_PREVISUALISATION_S)
         texte = " ; ".join(str(ordre) for ordre in ordres)
@@ -461,7 +477,7 @@ class ServeurUI:
 
     async def _emettre(self, requete: web.Request) -> web.StreamResponse:
         # SEC-05 : serveur lancé sans --reel, aucun ordre réel, quoi que demande la page.
-        if not self.reel:
+        if not self.emet:
             return _refus(403, "serveur lancé en simulation : aucun ordre réel n'est accepté (SEC-05)")
         corps = await self._corps(requete)
         propose = corps.get("identifiant") if isinstance(corps, dict) else None
@@ -481,7 +497,8 @@ class ServeurUI:
         if isinstance(attendue[1], retouche.Retouche):
             operation = attendue[1]  # SEC-08 : aucun autre ordre en cours, vérifié juste au-dessus
             self._lancer_travail(
-                operation.description, lambda: retouche.emettre(self.session, operation, self.dossier)
+                operation.description,
+                lambda: retouche.emettre(self.session, operation, self.dossier, demonstration=self.demonstration),
             )
         else:
             self._lancer(attendue[1])
@@ -524,7 +541,7 @@ class ServeurUI:
     async def _stop(self, _requete: web.Request) -> web.StreamResponse:
         """STOP : sans prévisualisation, prioritaire sur tout ordre en cours."""
         async with self._verrou_stop:
-            if not self.reel:
+            if not self.emet:
                 bilan, _code = conduite.simuler_ordres([Ordre("stop")], self.cal, self.journal)
                 self._noter("STOP (simulation)")
                 return web.json_response({"bilan": bilan})
@@ -584,14 +601,16 @@ class ServeurUI:
             operation = retouche.preparer_ajustement(
                 carte, corps["zone"], int(de), int(a), cm, corps["cote"], _nombre(corps.get("raccord"))
             )
-            retouche.controler_cumul(self.dossier, self.session.appareil, operation)
+            retouche.controler_cumul(
+                self.dossier, self.session.appareil, operation, demonstration=self.demonstration
+            )
         except RefusSecurite as refus:
             self._noter(f"retouche refusée : {refus}")
             return web.json_response({"refus": str(refus), "identifiant": None})
         except cartes.CarteIllisible as erreur:
             raise ErreurSaisie(str(erreur)) from None
         identifiant = None
-        if self.reel:  # SEC-08 : pas d'identifiant d'émission en simulation
+        if self.emet:  # SEC-08 : pas d'identifiant d'émission en simulation
             identifiant = secrets.token_urlsafe(16)
             self.previsualisation = (identifiant, operation, self.horloge() + DUREE_PREVISUALISATION_S)
         self.journal.ecrire("carte-simulee", ordre=operation.description, resume=operation.resume)
@@ -615,6 +634,13 @@ class ServeurUI:
             "un_clic": self.un_clic,
         }
 
+    def _appareil_fictif(self) -> str | None:
+        return demo.APPAREIL if self.demonstration else None
+
+    def _refuser_en_demonstration(self) -> None:
+        if self.demonstration:
+            raise web.HTTPForbidden(reason="indisponible en démonstration : aucun compte, aucun robot réel")
+
     def _refuser_si_occupe(self) -> None:
         if self.occupe or self._stop_demande:
             raise web.HTTPConflict(reason="un ordre est en cours : attendez sa fin ou faites STOP")
@@ -625,6 +651,7 @@ class ServeurUI:
         return _refus(400, f"connexion refusée : {motif}")
 
     async def _compte_commencer(self, requete: web.Request) -> web.StreamResponse:
+        self._refuser_en_demonstration()
         self._refuser_si_occupe()
         corps = await self._corps(requete)
         region = corps.get("region") if isinstance(corps, dict) else None
@@ -637,6 +664,7 @@ class ServeurUI:
         return web.json_response({"url": demande.url, "expire_s": DUREE_TENTATIVE_S})
 
     async def _compte_valider(self, requete: web.Request) -> web.StreamResponse:
+        self._refuser_en_demonstration()
         self._refuser_si_occupe()
         corps = await self._corps(requete)
         adresse = corps.get("adresse") if isinstance(corps, dict) else None
@@ -679,6 +707,8 @@ class ServeurUI:
         un `state` étranger ne consomme pas la tentative. La réponse ne dit que « ok » ou non.
         """
         reponse = {"interface": "lymow", "ok": False}
+        if self.demonstration:
+            return web.json_response(reponse, status=409)
         maintenant = self.horloge()
         if self._dernier_rappel is not None and maintenant - self._dernier_rappel < DELAI_RAPPEL_S:
             return web.json_response(reponse, status=429)
@@ -704,6 +734,7 @@ class ServeurUI:
 
     async def _compte_un_clic(self, requete: web.Request) -> web.StreamResponse:
         """Active ou retire le gestionnaire `myapp` : mêmes fonctions que `lymow rappel-installer`."""
+        self._refuser_en_demonstration()
         corps = await self._corps(requete)
         activer = corps.get("activer") if isinstance(corps, dict) else None
         if not isinstance(activer, bool):
@@ -719,6 +750,7 @@ class ServeurUI:
         return web.json_response({"un_clic": self.un_clic, "message": message})
 
     async def _compte_choisir(self, requete: web.Request) -> web.StreamResponse:
+        self._refuser_en_demonstration()
         self._refuser_si_occupe()
         corps = await self._corps(requete)
         appareil = corps.get("appareil") if isinstance(corps, dict) else None
@@ -745,6 +777,7 @@ class ServeurUI:
         return web.json_response({"connecte": self.ident is not None, "liaison": self.etat_liaison})
 
     async def _compte_deconnecter(self, _requete: web.Request) -> web.StreamResponse:
+        self._refuser_en_demonstration()
         self._refuser_si_occupe()
         async with self._verrou_acces:
             await self._pile.aclose()
@@ -768,6 +801,8 @@ class ServeurUI:
             return await liaison.demarrer_video(http, self.ident, acces)
 
     async def _video_demarrer(self, _requete: web.Request) -> web.StreamResponse:
+        if self.demonstration:
+            return _refus(403, "vidéo désactivée en démonstration : le robot fictif n'a pas de caméra")
         if self.ident is None:
             return _refus(503, NON_CONNECTE)
         if self.video_ouverte:
@@ -793,9 +828,9 @@ def _refus(statut: int, message: str) -> web.Response:
     return web.json_response({"erreur": message}, status=statut)
 
 
-async def rejoindre(port: int, reel: bool) -> str:
+async def rejoindre(port: int, reel: bool, demonstration: bool = False) -> str:
     """Port occupé : si c'est une interface lymow du même mode, lui faire rouvrir sa page."""
-    mode = MODES[1] if reel else MODES[0]
+    mode = MODES[2] if demonstration else MODES[1] if reel else MODES[0]
     corps: Any = None
     statut = 0
     try:
@@ -826,19 +861,20 @@ async def rejoindre(port: int, reel: bool) -> str:
 
 
 async def servir(
-    cal: Calibration, journal: Journal, *, reel: bool, port: int, navigateur: bool = True, dossier: Path | None = None
+    cal: Calibration, journal: Journal, *, reel: bool, port: int, navigateur: bool = True, dossier: Path | None = None,
+    demonstration: bool = False,
 ) -> str:
-    serveur = ServeurUI(cal, journal, reel=reel, port=port, dossier=dossier)
+    serveur = ServeurUI(cal, journal, reel=reel, port=port, dossier=dossier, demonstration=demonstration)
     if not navigateur:
         serveur.ouvrir_navigateur = lambda _adresse: False
     try:
         await serveur.demarrer()
     except OSError:  # port déjà pris (WinError 10048) : une interface tourne peut-être déjà
         await serveur.arreter()
-        return await rejoindre(port, reel)
+        return await rejoindre(port, reel, demonstration)
     rappel.noter_port(dossier, serveur.port, True)
     try:
-        print(f"Interface en mode {'RÉEL' if reel else 'simulation'} sur {serveur.adresse} — Ctrl+C pour arrêter.")
+        print(f"Interface en mode {serveur.mode.upper() if reel else serveur.mode} sur {serveur.adresse} — Ctrl+C pour arrêter.")
         serveur.ouvrir_page()  # en cas d'échec : adresse affichée, et la fenêtre reste ouverte
         await serveur.fin.wait()
     finally:

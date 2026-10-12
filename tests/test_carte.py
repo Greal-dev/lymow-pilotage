@@ -22,6 +22,8 @@ from conftest import DEMANDE_CARTE, ENTETE_ECRITURE_CARTE, fragment, lignes_jour
 from lymow_pilotage import carte as cartes
 from lymow_pilotage import cli, geometrie, liaison, protocole, retouche
 from lymow_pilotage.config import Calibration
+from lymow_pilotage.demo import passage_brut as _passage  # mêmes constructeurs que le robot fictif
+from lymow_pilotage.demo import zone_brute as _zone
 from lymow_pilotage.mouvement import ErreurSaisie
 from lymow_pilotage.protocole import Categorie, est_requete_pure
 from lymow_pilotage.securite import RefusSecurite
@@ -32,23 +34,6 @@ from lymow_pilotage.vendor.ha_lymow import protocol as pb
 PELOUSE = [(0.0, 0.0), (5.0, 0.0), (10.0, 0.0), (10.0, 6.0), (5.0, 6.0), (0.0, 6.0)]  # sens trigonométrique
 MASSIF = [(4.0, 2.0), (6.0, 2.0), (6.0, 4.0), (4.0, 4.0)]
 VERGER = [(14.0, 0.0), (20.0, 0.0), (20.0, 6.0), (14.0, 6.0)]
-
-
-def _polygone(points) -> bytes:
-    return b"".join(pb._field_bytes(1, pb._field_f32(1, x) + pb._field_f32(2, y)) for x, y in points)
-
-
-def _zone(identifiant, nom, points, parent=None, reglages=b"\x08\x28\x48\x0a") -> bytes:
-    infos = pb._field_i32(1, 1) + pb._field_str(2, nom) + pb._field_str(3, identifiant) + pb._field_i32(4, 1)
-    infos += pb._field_bytes(5, _polygone(points))
-    surface = abs(geometrie.aire_signee(list(points)))
-    brut = pb._field_bytes(1, infos) + pb._field_bytes(2, reglages) + pb._field_bytes(3, pb._field_f32(3, surface))
-    return brut + (pb._field_str(4, parent) if parent else b"")
-
-
-def _passage(identifiant, zone1, zone2, points, station=False) -> bytes:
-    brut = pb._field_str(1, identifiant) + pb._field_str(2, zone1) + pb._field_str(3, zone2) + pb._field_i32(4, 1)
-    return brut + pb._field_bytes(5, _polygone(points)) + pb._field_i32(6, 1 if station else 0)
 
 
 def contenu(

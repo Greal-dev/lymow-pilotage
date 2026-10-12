@@ -70,6 +70,17 @@ section, .ordre {
   padding: 0.35rem;
   letter-spacing: 0.04em;
 }
+.bandeau-demo {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: #1565c0;
+  color: #ffffff;
+  text-align: center;
+  font-weight: 700;
+  padding: 0.35rem;
+  letter-spacing: 0.04em;
+}
 .stop {
   grid-column: 2;
   grid-row: 1 / span 2;

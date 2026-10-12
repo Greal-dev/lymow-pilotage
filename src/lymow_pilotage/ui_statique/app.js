@@ -8,6 +8,7 @@
   var sequence = [];
   var previsualisation = null;
   var modeReel = false;
+  var emission = false; // réel, ou démonstration (robot fictif)
   var dernierResultat = "";
   var video = { pc: null, ws: null };
   var videoOuverte = false;
@@ -100,8 +101,12 @@
 
   function appliquer(image) {
     modeReel = image.mode === "réel";
+    var demonstration = image.mode === "démonstration";
+    emission = modeReel || demonstration;
     $("bandeau-reel").hidden = !modeReel;
-    $("mode").textContent = modeReel ? "MODE RÉEL" : "simulation";
+    $("bandeau-demo").hidden = !demonstration;
+    $("video-demarrer").hidden = demonstration;
+    $("mode").textContent = modeReel ? "MODE RÉEL" : image.mode;
     $("mode").className = "pastille" + (modeReel ? " reel" : "");
     $("liaison").textContent = image.liaison + (image.occupe ? " — ordre en cours" : "");
     $("appareil").textContent = image.appareil || "";
@@ -341,7 +346,7 @@
     vider($("previsualisation-detail"));
     rendre(detail, $("previsualisation-detail"));
     if (!reponse.identifiant) {
-      $("emettre-note").textContent = modeReel
+      $("emettre-note").textContent = emission
         ? "Refusée : rien à émettre."
         : "Simulation : le serveur n'émet rien (relancez « lymow ui --reel » pour émettre).";
       return;
