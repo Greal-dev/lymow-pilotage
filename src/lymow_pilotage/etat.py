@@ -14,6 +14,8 @@ from . import securite
 from .vendor.ha_lymow import const as socle
 
 CLE_STATUT, CLE_TACHE = "robotState", "workStatus"
+# Au-delà, les corrections de la base sont tenues pour perdues (elles arrivent chaque seconde en temps normal).
+AGE_CORRECTIONS_MAX_S = 10.0
 LIBELLES_STATUT: dict[int, str] = {
     socle.WORK_STATUS_OFFLINE: "inconnu ou hors ligne",
     socle.WORK_STATUS_NONE: "au repos à la station",
@@ -65,6 +67,10 @@ class Etat:
     en_ligne: bool | None = None
     recu_statut: float | None = None
     recu_pose: float | None = None
+    # Origine de la carte (latitude, longitude), posée par l'appelant quand une carte est connue : sans
+    # elle, la position satellite brute ne se compare pas à la pose.
+    origine: tuple[float, float] | None = None
+    recu_rtk: float | None = None
 
     def appliquer(self, fragment: dict[str, Any], instant: float) -> None:
         """Fusionne un fragment décodé ; `instant` = horloge monotone à la réception."""
@@ -80,6 +86,8 @@ class Etat:
         if CLE_TACHE not in fragment:
             # Une réponse partielle ne doit pas effacer les codes déjà connus.
             fragment = {c: v for c, v in fragment.items() if c not in ("errorCodes", "errorCode", "warningCodes")}
+        if any(c in fragment for c in ("rtkL1", "rtkL2", "rtkDiagnostic")):
+            self.recu_rtk = instant
         if all(isinstance(fragment.get(c), float) and math.isfinite(fragment[c]) for c in _CLES_POSE):
             self.recu_pose = instant
         else:
@@ -115,6 +123,65 @@ class Etat:
         return valeur if isinstance(valeur, float) and math.isfinite(valeur) and 0 <= valeur < 1000 else None
 
     @property
+    def age_corrections_s(self) -> float | None:
+        """Âge des corrections de la base, tel que le robot l'annonce (diagnostic RTK)."""
+        for bloc, cle in (("rtkL2", "differentialAgeSec"), ("rtkDiagnostic", "diffAgeS")):
+            valeur = (self.donnees.get(bloc) or {}).get(cle)
+            if isinstance(valeur, (int, float)) and not isinstance(valeur, bool) and math.isfinite(valeur) and valeur >= 0:
+                return float(valeur)
+        return None
+
+    @property
+    def position_brute(self) -> tuple[float, float, bool] | None:
+        """Position satellite brute dans le repère de la carte (est, nord) ; le troisième terme dit si
+        elle est assez fine pour être comparée à la pose (coordonnées en double précision)."""
+        lla = self.donnees.get("llaCoords")
+        if not isinstance(lla, dict) or self.origine is None:
+            return None
+        lat, lon = lla.get("lat"), lla.get("lon")
+        if not all(isinstance(v, float) and math.isfinite(v) for v in (lat, lon)):
+            return None
+        rayon = 6_378_137.0
+        nord = math.radians(lat - self.origine[0]) * rayon
+        est = math.radians(lon - self.origine[1]) * rayon * math.cos(math.radians(self.origine[0]))
+        return est, nord, bool(lla.get("double"))
+
+    @property
+    def ecart_brut_m(self) -> tuple[float, bool] | None:
+        """Écart entre position satellite brute et position calculée par le robot, et s'il est fiable."""
+        brute, pose = self.position_brute, self.pose
+        if brute is None or pose is None:
+            return None
+        return math.hypot(brute[0] - pose.est_m, brute[1] - pose.nord_m), brute[2]
+
+    @property
+    def ecart_pour_la_garde(self) -> float | None:
+        """L'écart, seulement s'il est mesurable assez finement pour juger (SEC-12)."""
+        ecart = self.ecart_brut_m
+        return ecart[0] if ecart is not None and ecart[1] else None
+
+    def detail_localisation(self) -> str:
+        """Ce qui distingue un lien de base perdu d'un ciel masqué : âge des corrections, base, écart."""
+        morceaux = []
+        age = self.age_corrections_s
+        if age is not None:
+            morceaux.append(
+                f"corrections de la base reçues il y a {age:.0f} s" if age <= AGE_CORRECTIONS_MAX_S
+                else f"plus de corrections depuis {age:.0f} s"
+            )
+        base = (self.donnees.get("rtkL1") or {}).get("baseStationStatus")
+        if base == "offline":
+            morceaux.append("base hors ligne")
+        erreur = (self.donnees.get("rtkDiagnostic") or {}).get("primaryError")
+        if isinstance(erreur, str) and erreur:
+            morceaux.append(f"motif annoncé : {erreur}")
+        ecart = self.ecart_brut_m
+        if ecart is not None:
+            texte = f"écart position satellite / position calculée : {ecart[0]:.2f} m".replace(".", ",")
+            morceaux.append(texte if ecart[1] else texte + " (indicatif : coordonnées en simple précision)")
+        return " ; ".join(morceaux)
+
+    @property
     def hauteur_coupe_mm(self) -> int | None:
         return self.donnees.get("rcCutHeight")
 
@@ -142,6 +209,12 @@ class Etat:
             # SEC-12 : la qualité de localisation se lit sur la précision en mètres, à chaque trame.
             "precision_m": None if self.precision_m is None else round(self.precision_m, 2),
             "localisation": securite.qualite_position(self.precision_m),
+            "localisation_detail": self.detail_localisation(),
+            "age_corrections_s": self.age_corrections_s,
+            "ecart_brut_m": None if self.ecart_brut_m is None else round(self.ecart_brut_m[0], 2),
+            "position_brute": (
+                None if self.position_brute is None else [round(self.position_brute[0], 2), round(self.position_brute[1], 2)]
+            ),
             "localisation_texte": (
                 f"position : {securite.texte_precision(self.precision_m)} — {securite.qualite_position(self.precision_m)}"
             ),

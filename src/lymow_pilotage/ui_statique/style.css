@@ -231,6 +231,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .vue-carte .cadre-carte svg { height: calc(100vh - 20rem); min-height: 14rem; }
 .vue-carte .actions, .vue-carte .legende { margin: 0.2rem 0; font-size: 0.9rem; }
 .carte-incertitude { fill: #ef6c0022; stroke: #ef6c00; stroke-dasharray: 5 4; }
+.carte-brute { fill: none; stroke: #c62828; stroke-width: 2px; }
+.carte-ecart { stroke: #c62828; stroke-dasharray: 3 3; }
 .carte-trajet { fill: none; stroke: #6a1b9a; stroke-width: 3px; stroke-dasharray: 8 5; }
 .carte-cible { fill: #2e7d4655; stroke: #2e7d46; stroke-width: 3px; }
 .etat-video { position: absolute; left: 0.5rem; top: 0.4rem; color: #ffffff; background: #000000aa; padding: 0 0.4rem;

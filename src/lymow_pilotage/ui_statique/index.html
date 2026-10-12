@@ -34,6 +34,7 @@
             <span id="ordres-etat" class="etat-ordres" role="status"></span>
             <strong id="localisation" class="localisation" role="status" title="Qualité de localisation, jugée sur la précision horizontale annoncée par le robot : fiable jusqu'à 0,10 m, dégradée jusqu'à 0,50 m, perdue au-delà."></strong>
           </p>
+          <p id="localisation-detail" class="note" role="status"></p>
           <button id="fleches-bascule" type="button" class="bascule" aria-pressed="false" title="Active les flèches du clavier et de la caméra. Par défaut chaque flèche fait bouger le robot tout de suite (une confirmation à l'activation ; désactivé après 60 s sans action, sur STOP ou sur un refus).">Flèches : activer</button>
           <label class="case" title="Cochée : les flèches ajoutent des étapes à une séquence, qui ne part qu'avec « Prévisualiser » puis « Émettre »."><input id="composer" type="checkbox"> Composer une séquence (ne pas émettre tout de suite)</label>
           <p id="pave-focus" class="note" role="status"></p>
@@ -64,6 +65,7 @@
               <span id="reprise-conseil" class="note">Robot en pause : « Reprendre » relance la tâche — les lames peuvent redémarrer.</span>
               <span id="reprise-avertissement" class="avertissement" role="alert"></span>
               <button id="reprendre-quand-meme" type="button" data-tache="reprendre-quand-meme" hidden>Reprendre quand même</button>
+              <button id="recalage" type="button" hidden title="Charge dans la séquence un aller-retour en ligne droite (deux pas en avant, deux en arrière, au pas choisi). À n'exécuter qu'en zone dégagée. Effet non garanti : jamais essayé sur ce robot.">Recalage assisté : aller-retour</button>
             </p>
             <p id="pave-signal" class="avertissement" role="alert"></p>
             <p id="direct-etat" class="note" role="status"></p>

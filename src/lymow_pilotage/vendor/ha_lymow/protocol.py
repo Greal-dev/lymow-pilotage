@@ -22,6 +22,9 @@ Modifications par rapport à l'original :
   et la retouche du contour d'UNE zone (``encode_set_zone_polygon``, seule écriture de
   carte que le socle dit vérifiée en réel), avec la version de protocole en paramètre ;
   ``decode_map_response`` n'est pas recopié (le projet garde les octets bruts) ;
+- diagnostics RTK (ajout du 2026-10-12) : les réponses aux demandes 57 et 58 sont de
+  nouveau décodées (champs 35 et 36, libellés du socle ; champ 8, diagnostic avancé),
+  ainsi que les coordonnées brutes du robot (champ 26), gardées en mémoire seulement ;
 - envoi de carte entière (``encode_sync_map*``), création, suppression, fusion,
   découpe et renommage de zones, passages, réglages, Wi-Fi, code PIN et trame de
   pilotage Bluetooth : non recopiés.
@@ -307,7 +310,66 @@ def decode_pboutput(pb_bytes: bytes) -> dict[str, Any]:
         if theta_rad is not None:
             state["poseThetaRad"] = _decode_f32(theta_rad)
 
+    # Diagnostic RTK de niveau 1 (champ 35, réponse à la demande 57) et de niveau 2 (champ 36,
+    # demande 58) — libellés du socle, relevés sur l'écran « RTK Diagnostic » de l'application.
+    for field_no, labels, key in ((35, _RTK_L1_LABELS, "rtkL1"), (36, _RTK_L2_LABELS, "rtkL2")):
+        raw = _first(fields, field_no)
+        if not isinstance(raw, bytes):
+            continue
+        level: dict[str, Any] = {}
+        for fno, wire_type, value in _decode_fields(raw):
+            label = labels.get(fno)
+            if label is None or not isinstance(value, int):
+                continue
+            if label == "baseStationStatus":
+                level[label] = "online" if value == 0 else "offline"
+            elif wire_type == 5:
+                level[label] = round(_decode_f32(value), 4)
+            else:
+                level[label] = _signed32(value)
+        if level:
+            state[key] = level
+
+    # Diagnostic avancé (champ 8 : {f1: type, f2: JSON}) — précision, âge des corrections, motif d'erreur.
+    diag_raw = _first(fields, 8)
+    if isinstance(diag_raw, bytes) and diag_raw:
+        js = _first(_decode_fields(diag_raw), 2)
+        if isinstance(js, bytes):
+            try:
+                d = json.loads(js.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                d = None
+            if isinstance(d, dict):
+                adv: dict[str, Any] = {}
+                if isinstance(d.get("precision"), (int, float)) and not isinstance(d.get("precision"), bool):
+                    adv["precisionM"] = round(float(d["precision"]), 4)
+                if isinstance(d.get("diff_age"), (int, float)) and not isinstance(d.get("diff_age"), bool):
+                    adv["diffAgeS"] = float(d["diff_age"])
+                if isinstance(d.get("primary_error_desc"), str) and d["primary_error_desc"]:
+                    adv["primaryError"] = d["primary_error_desc"][:80]
+                if adv:
+                    state["rtkDiagnostic"] = adv
+
+    # Coordonnées brutes du robot (champ 26 : latitude, longitude, altitude). `double` dit si elles
+    # arrivent en double précision : en simple précision, elles ne valent qu'à quelques décimètres près.
+    lla_raw = _first(fields, 26)
+    if isinstance(lla_raw, bytes):
+        lla = {fno: (wire_type, value) for fno, wire_type, value in _decode_fields(lla_raw)}
+        if 1 in lla and 2 in lla and all(lla[n][0] in (1, 5) and isinstance(lla[n][1], int) for n in (1, 2)):
+            def _coord(n: int) -> float:
+                wire_type, value = lla[n]
+                return struct.unpack("<d", struct.pack("<Q", value))[0] if wire_type == 1 else _decode_f32(value)
+
+            state["llaCoords"] = {"lat": _coord(1), "lon": _coord(2), "double": lla[1][0] == 1 and lla[2][0] == 1}
+
     return state
+
+
+_RTK_L1_LABELS: dict[int, str] = {
+    2: "locationPrecisionM", 3: "gnssSatellites", 4: "l1SatCount", 5: "l2SatCount", 6: "l5SatCount",
+    7: "l1SnrMedian", 8: "l2SnrMedian", 9: "l5SnrMedian", 10: "baseStationStatus", 11: "dataErrorRatePct",
+}
+_RTK_L2_LABELS: dict[int, str] = {1: "differentialAgeSec"}
 
 
 # ---------------------------------------------------------------------------

@@ -148,6 +148,15 @@
         cx: signal.cible.est_m, cy: -signal.cible.nord_m, r: 7 * parPixel
       }), "bon signal le plus proche : " + signal.cible.distance_m + " m, cap " + signal.cible.cap_deg + "°"));
     }
+    // Position satellite brute : marqueur distinct, relié à la pose quand l'écart dépasse 0,20 m.
+    if (robot && robot.source === "pose" && etatRobot && etatRobot.position_brute) {
+      var brute = etatRobot.position_brute;
+      if (typeof etatRobot.ecart_brut_m === "number" && etatRobot.ecart_brut_m > 0.20) {
+        dessin.appendChild(svg("line", "carte-ecart", { x1: robot.est, y1: -robot.nord, x2: brute[0], y2: -brute[1] }));
+      }
+      dessin.appendChild(titre(svg("circle", "carte-brute", { cx: brute[0], cy: -brute[1], r: 4 * parPixel }),
+        "position satellite brute — " + (etatRobot.localisation_detail || "")));
+    }
     if (robot && robot.rayon) {  // cercle d'incertitude, au rayon annoncé par le robot
       dessin.appendChild(titre(svg("circle", "carte-incertitude", {
         cx: robot.est, cy: -robot.nord, r: robot.rayon

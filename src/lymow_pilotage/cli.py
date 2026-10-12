@@ -19,7 +19,7 @@ from typing import Any
 
 import aiohttp
 
-from . import auth, calibrage, capture, carte, compte, conduite, config, journal, liaison, mouvement, rappel, retouche, securite
+from . import auth, calibrage, capture, carte, compte, conduite, config, journal, liaison, mouvement, protocole, rappel, retouche, securite
 from .conduite import CODE_ARRET_NON_CONFIRME, CODE_REFUS
 from .journal import Journal, masquer
 from .mouvement import ErreurSaisie, Ordre
@@ -93,6 +93,10 @@ def construire_analyseur() -> argparse.ArgumentParser:
         help=f"durée d'écoute, de 1 à {capture.SECONDES_MAX} (défaut : {capture.SECONDES_DEFAUT})",
     )
     ecoute.add_argument("--carte", action="store_true", help="demander aussi la carte entière (lecture)")
+    ecoute.add_argument(
+        "--rtk", action="store_true",
+        help="demander aussi le diagnostic RTK toutes les 5 s (lecture : âge des corrections, lien de la base…)",
+    )
     ecoute.add_argument(
         "--dossier", default=None, metavar="D",
         help=f"dossier des captures (défaut : {capture.DOSSIER}/ du dossier de données)",
@@ -332,7 +336,16 @@ async def _commande_capture(args: argparse.Namespace, ctx: Contexte) -> tuple[An
             except (EchecOrdre, carte.CarteIllisible) as erreur:
                 verdict = str(erreur)
         fin = session.horloge() + args.secondes
+        prochaine = session.horloge()
         while session.horloge() < fin and session.lien.connecte:
+            if args.rtk and session.horloge() >= prochaine:  # requêtes pures, à la cadence du socle
+                prochaine = session.horloge() + protocole.PERIODE_DIAGNOSTIC_RTK_S
+                try:
+                    await session.publier(protocole.trame_presence(session._identifiant), 3.0)
+                    for niveau in (1, 2):
+                        await session.publier(protocole.trame_diagnostic_rtk(session.cal, niveau), 3.0)
+                except EchecOrdre:
+                    pass
             await session.dormir(min(1.0, fin - session.horloge()))
         coupee = not session.lien.connecte
     bilan = ecoute.resume() | {"secondes": args.secondes, "carte_demandee": args.carte}

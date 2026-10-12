@@ -34,6 +34,7 @@ from .config import Calibration
 from .journal import Journal, assainir, declarer_secret, masquer
 from .mouvement import ErreurSaisie, Ordre
 from .securite import RefusSecurite
+from . import protocole
 from .protocole import Categorie
 from .session import Session
 from .vendor.ha_lymow import const as socle
@@ -279,6 +280,7 @@ class ServeurUI:
         self.un_clic = rappel.etat(self.registre)
         await self._connecter()
         self._veille = asyncio.create_task(self._veiller())
+        self._sonde = asyncio.create_task(self._sonder_rtk())
         self._noter(f"interface démarrée en mode {self.mode}")
 
     def adresses_ecoute(self) -> list[tuple[str, int]]:
@@ -317,9 +319,10 @@ class ServeurUI:
         await self._interrompre()
         self.attestation.retirer("arrêt du serveur")  # SEC-01b ; après l'arrêt du mouvement, jamais avant
         self._fermer_ecoute()
-        if self._veille is not None:
-            self._veille.cancel()
-            await asyncio.gather(self._veille, return_exceptions=True)
+        for tache in (self._veille, getattr(self, "_sonde", None)):
+            if tache is not None:
+                tache.cancel()
+                await asyncio.gather(tache, return_exceptions=True)
         if self._battement is not None:
             self._battement.cancel()
             await asyncio.gather(self._battement, return_exceptions=True)
@@ -400,6 +403,29 @@ class ServeurUI:
                 async with self._verrou_acces:
                     if self.session is None and not self.ferme:
                         await self._connecter_sans_verrou()
+
+    async def _sonder_rtk(self) -> None:
+        """Demandes de diagnostic RTK (requêtes pures), à la cadence du socle : interface ouverte et liaison
+        active seulement — jamais main rendue, jamais pendant un ordre (rien ne s'ajoute au mouvement)."""
+        while True:
+            await asyncio.sleep(protocole.PERIODE_DIAGNOSTIC_RTK_S)
+            session = self.session
+            if self.suspendue or self.demonstration or self.ferme or self.occupe or session is None or not session.lien.connecte:
+                continue
+            self._poser_origine(session)
+            try:
+                await session.publier(protocole.trame_presence(session._identifiant), 3.0)
+                for niveau in (1, 2):
+                    await session.publier(protocole.trame_diagnostic_rtk(session.cal, niveau), 3.0)
+            except Exception:  # noqa: BLE001 — une demande perdue se refera au tour suivant
+                continue
+
+    def _poser_origine(self, session: Any) -> None:
+        """L'origine de la carte connue (mémoire ou référence) permet de comparer position brute et pose."""
+        if session.etat.origine is None:
+            carte, _meta = self._carte_affichee()
+            if carte is not None:
+                session.etat.origine = cartes.origine(carte)
 
     # --- enregistrement de diagnostic pendant un ordre réel --------------------
 
@@ -589,6 +615,7 @@ class ServeurUI:
             image |= {
                 "bornes": _bornes() | {
                     "precision_fiable_m": securite.PRECISION_FIABLE_M, "precision_degradee_m": securite.PRECISION_DEGRADEE_M,
+                    "ecart_brut_affiche_m": securite.ECART_BRUT_AFFICHE_M,
                 },
                 "libelles": conduite.LIBELLES,
                 "fleches": {
@@ -623,10 +650,16 @@ class ServeurUI:
             # Après un dégagement, la reprise reste proposée clairement (les lames peuvent redémarrer).
             "reprise_possible": etat.statut == socle.WORK_STATUS_PAUSE,
             # SEC-12 : dit AVANT de reprendre ou de renvoyer à la base ; rien si la position est fiable.
-            "avertissement_position": securite.avertissement_position(etat.precision_m),
+            "avertissement_position": securite.avertissement_position(etat.precision_m, etat.ecart_pour_la_garde),
+            # Signal revenu mais position calculée douteuse : le recalage assisté est proposé.
+            "recalage_conseille": (
+                securite.qualite_position(etat.precision_m) == securite.FIABLE
+                and securite.avertissement_position(etat.precision_m, etat.ecart_pour_la_garde) is not None
+            ),
             # Signal retrouvé, robot en pause : la reprise est proposée (la garde SEC-12 passe).
             "reprise_conseillee": (
-                etat.statut == socle.WORK_STATUS_PAUSE and securite.qualite_position(etat.precision_m) == securite.FIABLE
+                etat.statut == socle.WORK_STATUS_PAUSE
+                and securite.avertissement_position(etat.precision_m, etat.ecart_pour_la_garde) is None
             ),
         }
 

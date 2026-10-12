@@ -290,6 +290,48 @@ réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même
   à vue ou vidéo ouverte. Non vérifié en réel : ce panneau n'a été testé que
   hors ligne.
 
+## Localisation
+
+Ce qui est **observé** (trames réelles du 2026-10-12) :
+
+- le robot annonce à chaque trame le nombre de satellites, une précision
+  horizontale en mètres, une qualité et l'état de son nœud de localisation ;
+- la précision est passée de 0,03 m (matin, station) à 1,1–1,5 m après une
+  perte de signal, puis est revenue à 0,01 m, robot immobile, sans aucun saut
+  de la pose : on ne peut pas dire si la pose était juste ou si le filtre du
+  robot ne s'est pas recalé ;
+- l'origine de la carte est codée en simple précision.
+
+Ce qui est **documenté par le socle** (ha-lymow), non encore vu dans nos
+captures : le robot n'envoie le détail RTK qu'à un client qui le demande
+(demandes 57 et 58, toutes les 5 s) — âge des corrections de la base, état
+de la base, taux d'erreur du lien radio, motif d'erreur. L'outil émet ces
+deux demandes comme **requêtes pures** (forme exacte, contrôlée à l'octet),
+interface ouverte et liaison active seulement, jamais main rendue ni pendant
+un ordre ; `lymow capture --rtk` les émet aussi, pour disposer de trames
+réelles. La page affiche alors « corrections de la base reçues il y a 2 s »
+ou « plus de corrections depuis 45 s » : c'est ce qui distingue un lien de
+base perdu d'un ciel masqué.
+
+Ce qui est **supposé** : les coordonnées brutes du robot (champ 26 du
+schéma) permettraient de mesurer l'écart entre position satellite et
+position calculée. L'outil le calcule quand elles arrivent, l'affiche, et le
+trace sur la carte au-delà de 0,20 m. La garde de reprise (SEC-12) exige
+alors un écart de 0,30 m au plus — **seulement si ces coordonnées sont en
+double précision** ; en simple précision (cas de l'origine de la carte),
+l'écart n'est qu'indicatif et ne bloque rien. Tant qu'aucune trame réelle
+n'a été capturée, cette partie n'est vérifiée que sur des trames construites
+d'après le schéma.
+
+**Aucune commande de recalage n'est émise.** Les codes 47 et l'entrée de
+localisation du schéma n'ont jamais été essayés par personne : l'outil ne les
+encode pas, et sa liste blanche les refuse. Le « recalage assisté » proposé
+quand l'écart est trop grand ne fait que charger dans la séquence un
+aller-retour en ligne droite (deux pas en avant, deux en arrière), à
+n'émettre qu'en zone dégagée : pratique décrite par la communauté, effet non
+garanti, jamais essayé sur ce robot. Sinon : retour à la base, ou
+redémarrage du robot.
+
 ## Retour vers le bon signal
 
 But : quand le robot a perdu sa position précise, le ramener là où le signal

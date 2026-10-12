@@ -331,6 +331,10 @@ def consigne_essai(vitesse: float | None, observation: float | None) -> Consigne
 PRECISION_FIABLE_M = 0.10
 PRECISION_DEGRADEE_M = 0.50
 FIABLE, DEGRADEE, PERDUE = "fiable", "dégradée", "perdue"
+# Écart toléré entre la position satellite brute et la position calculée par le robot, quand il est
+# mesurable (coordonnées en double précision) : au-delà, la précision annoncée ne suffit pas.
+ECART_BRUT_MAX_M = 0.30
+ECART_BRUT_AFFICHE_M = 0.20  # au-delà, la carte relie les deux positions par un trait
 
 
 def qualite_position(precision_m: float | None) -> str:
@@ -346,9 +350,19 @@ def texte_precision(precision_m: float | None) -> str:
     return f"±{precision_m:.2f} m".replace(".", ",")
 
 
-def avertissement_position(precision_m: float | None) -> str | None:
-    """SEC-12 : ce que risque une tâche automatique lancée avec cette précision ; rien si elle est fiable."""
+def avertissement_position(precision_m: float | None, ecart_m: float | None = None) -> str | None:
+    """SEC-12 : ce que risque une tâche automatique lancée dans cet état ; rien si la position est fiable.
+
+    Fiable : précision de 0,10 m ou mieux ET, si l'écart entre position satellite brute et position
+    calculée est connu, écart de 0,30 m au plus (constat du 2026-10-12 : la précision est revenue de
+    1,32 m à 0,01 m, robot immobile, sans que la pose bouge — on ne sait pas si le filtre s'est recalé)."""
     if qualite_position(precision_m) == FIABLE:
+        if ecart_m is not None and math.isfinite(ecart_m) and ecart_m > ECART_BRUT_MAX_M:
+            ecart = f"{ecart_m:.2f} m".replace(".", ",")
+            return (
+                f"Le signal est revenu mais la position calculée par le robot s'écarte de {ecart} de sa "
+                "position satellite : recalage conseillé."
+            )
         return None
     cible = f"±{PRECISION_FIABLE_M:.2f} m".replace(".", ",")
     return (
@@ -357,9 +371,9 @@ def avertissement_position(precision_m: float | None) -> str | None:
     )
 
 
-def verifier_precision_pour_reprise(precision_m: float | None) -> None:
+def verifier_precision_pour_reprise(precision_m: float | None, ecart_m: float | None = None) -> None:
     """SEC-12 : pas de reprise à l'aveugle. Une aide, pas un verrou : « reprendre quand même » existe."""
-    avertissement = avertissement_position(precision_m)
+    avertissement = avertissement_position(precision_m, ecart_m)
     if avertissement:
         raise RefusSecurite(f"{avertissement} (SEC-12)")
 

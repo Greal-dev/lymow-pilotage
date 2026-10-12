@@ -209,6 +209,22 @@ TAILLE_TRANCHE_CARTE = 81920
 TRANCHES_CARTE_MAX = 8
 
 
+# Diagnostic RTK (lecture) : demandes 57 et 58 du socle, forme exacte {version, userCtrl}. Le robot
+# n'envoie ces détails (âge des corrections, lien de la base…) qu'à un client qui les demande.
+USER_CTRL_DIAGNOSTIC_RTK = (57, 58)
+PERIODE_DIAGNOSTIC_RTK_S = 5.0  # cadence du socle
+
+
+def trame_diagnostic_rtk(cal: Calibration, niveau: int) -> Trame:
+    """Demande de diagnostic RTK de niveau 1 ou 2 : une lecture, rien n'est modifié."""
+    code = USER_CTRL_DIAGNOSTIC_RTK[niveau - 1] if niveau in (1, 2) else None
+    if code is None:
+        raise ValueError("niveau de diagnostic RTK inconnu")
+    octets = _version(cal.version_protocole) + pb._field_i32(CHAMP_USER_CTRL, code)
+    champs = {"version": cal.version_protocole, "userCtrl": code, "demande": f"diagnostic RTK, niveau {niveau}"}
+    return Trame("demande de diagnostic RTK", Categorie.REQUETE_PURE, octets, champs)
+
+
 def trame_demande_carte(cal: Calibration, index: int = 0) -> Trame:
     """Demande d'une tranche de la carte (userCtrl 19) : une lecture, rien n'est modifié."""
     if not 0 <= index < TRANCHES_CARTE_MAX:
@@ -251,6 +267,7 @@ def est_requete_pure(octets: bytes) -> bool:
     - demande de carte : {version(2), userCtrl(5)=19, champ 23={1: index de tranche, 4: 1}},
       index de 0 à TRANCHES_CARTE_MAX - 1 (lecture d'une grande carte, constat du 2026-10-12) ;
     - présence : {appConnect(7)=2, uuid(27)} ;
+    - diagnostic RTK : {version(2), userCtrl(5)=57 ou 58}, rien d'autre (ajout du 2026-10-12) ;
     - demande de configuration : {version(2), baseInput(9)={champ 10 = 1}}.
     """
     try:
@@ -268,6 +285,12 @@ def est_requete_pure(octets: bytes) -> bool:
                     octets == pb.encode_query_map(index, pb._first(champs, CHAMP_VERSION))
                     for index in range(TRANCHES_CARTE_MAX)
                 )
+            )
+        if numeros == [CHAMP_VERSION, CHAMP_USER_CTRL]:
+            version, code = pb._first(champs, CHAMP_VERSION), pb._first(champs, CHAMP_USER_CTRL)
+            return (
+                version in VERSIONS and code in USER_CTRL_DIAGNOSTIC_RTK
+                and octets == _version(version) + pb._field_i32(CHAMP_USER_CTRL, code)
             )
         if numeros == [CHAMP_VERSION, CHAMP_BASE_INPUT]:
             interne = pb._first(champs, CHAMP_BASE_INPUT)

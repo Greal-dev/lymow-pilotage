@@ -10,6 +10,9 @@
   var Ordres = window.LymowOrdres;
   var occupe = false;
   var liaisonSuspendue = false;
+  var dernierEtat = null;
+  var recalageAvant = null;
+  var recalageResultat = "";
   var objectifSequence = null;
   var noteEmission = "";
   var reprise = null;
@@ -135,6 +138,13 @@
     // Qualité de localisation : la précision en mètres, à chaque trame.
     $("localisation").textContent = image.etat ? image.etat.localisation_texte : "";
     $("localisation").className = "localisation " + (image.etat ? image.etat.localisation : "perdue");
+    $("localisation-detail").textContent = image.etat ? image.etat.localisation_detail : "";
+    $("recalage").hidden = !(image.ordres && image.ordres.recalage_conseille && !occupe);
+    dernierEtat = image.etat;
+    if (recalageAvant && image.resultat && !occupe && JSON.stringify(image.resultat) !== recalageResultat) {
+      $("pause-etat").textContent = Ordres.bilanDeRecalage(recalageAvant, image.etat);  // après l'aller-retour
+      recalageAvant = null;
+    }
     liaisonSuspendue = Boolean(image.liaison_suspendue);
     $("rendre-main").textContent = Ordres.libelleLiaison(liaisonSuspendue);
     afficherAttestation(image.attestation);
@@ -617,6 +627,17 @@
   $("sequence-previsualiser").addEventListener("click", function () { previsualiser(sequence.slice(), false, objectifSequence); });
   $("sequence-vider").addEventListener("click", function () { sequence = []; afficherSequence(); });
   $("emettre").addEventListener("click", emettre);
+  $("recalage").addEventListener("click", function () {
+    // Mode assisté : l'aller-retour est chargé dans la séquence et prévisualisé ; rien n'est émis sans « Émettre ».
+    var pas = Number($("pave-distance").value) || 2;
+    sequence = Ordres.sequenceDeRecalage(pas);
+    objectifSequence = null;
+    recalageAvant = dernierEtat;
+    recalageResultat = dernierResultat;
+    afficherSequence();
+    previsualiser(sequence.slice(), false);
+    $("pause-etat").textContent = "Recalage assisté chargé : à n'émettre qu'en zone dégagée. Effet non garanti (jamais essayé sur ce robot).";
+  });
   // Cadre de droite : deux onglets, « Caméra » et « Carte ».
   function montrerOnglet(nom) {
     ["camera", "carte"].forEach(function (onglet) {

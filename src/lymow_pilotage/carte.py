@@ -249,6 +249,16 @@ def decoder(octets: bytes, recue: float = 0.0) -> Carte:
     return Carte(octets, zones, interdites, passages, station, recue, tuple(manques))
 
 
+def origine(carte: Carte) -> tuple[float, float] | None:
+    """Origine du repère (latitude, longitude) : champ 7 de la carte. Jamais affichée ni journalisée."""
+    brut = _premier(champs_stricts(carte.octets), CHAMP_ORIGINE, 2)
+    if not isinstance(brut, bytes):
+        return None
+    champs = champs_stricts(brut)
+    lat, lon = _premier(champs, 1, 5), _premier(champs, 2, 5)
+    return None if lat is None or lon is None else (_f32(lat), _f32(lon))
+
+
 def _contour_json(points: list[Point]) -> list[list[float]]:
     return [[round(x, 4), round(y, 4)] for x, y in points]
 

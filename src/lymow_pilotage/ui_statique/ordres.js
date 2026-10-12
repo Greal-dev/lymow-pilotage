@@ -150,8 +150,31 @@
       : "Robot en pause : « Reprendre » relance la tâche — les lames peuvent redémarrer.";
   }
 
+  /* Recalage assisté : un aller-retour en ligne droite, chargé dans la séquence (jamais exécuté seul).
+   * Pratique décrite par la communauté pour qu'un robot guidé par satellite retrouve position et cap ;
+   * effet non garanti, jamais essayé sur ce robot. */
+  function sequenceDeRecalage(pas) {
+    var etape = function (nom) { return { nom: nom, valeur: pas, vitesse: null, duree: null }; };
+    return [etape("avancer"), etape("avancer"), etape("reculer"), etape("reculer")];
+  }
+
+  /* Après le recalage : la situation s'est-elle améliorée ? (précision et écart, avant / après) */
+  function bilanDeRecalage(avant, apres) {
+    if (!avant || !apres) { return ""; }
+    var texte = "Recalage : précision " + avant.precision_m + " m → " + apres.precision_m + " m";
+    if (typeof avant.ecart_brut_m === "number" && typeof apres.ecart_brut_m === "number") {
+      texte += ", écart " + avant.ecart_brut_m + " m → " + apres.ecart_brut_m + " m";
+      texte += apres.ecart_brut_m < avant.ecart_brut_m ? " : amélioré." : " : pas d'amélioration (retour à la base, ou redémarrage du robot).";
+    } else {
+      texte += apres.precision_m <= avant.precision_m ? " : stable ou amélioré." : " : dégradé.";
+    }
+    return texte;
+  }
+
   var api = {
     libelleLiaison: libelleLiaison,
+    sequenceDeRecalage: sequenceDeRecalage,
+    bilanDeRecalage: bilanDeRecalage,
     texteSignal: texteSignal,
     conseilDeReprise: conseilDeReprise,
     positionAffichee: positionAffichee,

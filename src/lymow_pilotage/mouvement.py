@@ -638,7 +638,7 @@ async def executer_tache(session: Session, nom: str) -> dict[str, Any]:
             libelle = LIBELLES_STATUT.get(etat.statut, str(etat.statut))
             raise RefusSecurite(f"« reprendre » refusé : rien à reprendre (statut : {libelle})")
         if nom == "reprendre":
-            securite.verifier_precision_pour_reprise(etat.precision_m)  # SEC-12 : pas de reprise à l'aveugle
+            securite.verifier_precision_pour_reprise(etat.precision_m, etat.ecart_pour_la_garde)  # SEC-12
         elif nom == REPRISE_FORCEE:
             session.journal.ecrire(  # SEC-12 : la garde levée par l'opérateur laisse une trace
                 "reprise-forcee", strict=True, precision_m=etat.precision_m,
