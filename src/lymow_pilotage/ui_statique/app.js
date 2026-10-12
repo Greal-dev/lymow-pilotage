@@ -9,6 +9,12 @@
   var previsualisation = null;
   var Ordres = window.LymowOrdres;
   var occupe = false;
+  var liaisonSuspendue = false;
+  var dernieresOrdres = null;
+  var dernierEtat = null;
+  var recalageAvant = null;
+  var recalageResultat = "";
+  var objectifSequence = null;
   var noteEmission = "";
   var reprise = null;
   var modeReel = false;
@@ -120,21 +126,43 @@
     $("liaison").textContent = image.liaison + (image.occupe ? " — ordre en cours" : "");
     // Statut du robot en clair près des ordres, et le refus de mouvement dit avant toute prévisualisation.
     $("ordres-etat").textContent = Ordres.texteEtatDesOrdres(image.ordres);
-    $("ordres-etat").classList.toggle("refuse", Boolean(image.ordres && image.ordres.mouvement_refuse));
+    $("ordres-etat").classList.toggle("refuse", Boolean(image.ordres && image.ordres.mouvement_refuse && !image.ordres.suspendue));
     occupe = Boolean(image.occupe);
     // Refus actionnable : le geste utile est à côté du message (pause), et la reprise reste proposée.
     var gestes = Ordres.gestesProposes(image.ordres, occupe);
     $("pause-raccourci").hidden = !gestes.pause;
     $("reprendre-rappel").hidden = !gestes.reprendre;
     $("pause-etat").textContent = gestes.texte;
+    $("reprise-avertissement").textContent = gestes.avertissementPosition;
+    $("reprise-conseil").textContent = Ordres.conseilDeReprise(image.ordres);
+    $("reprendre-quand-meme").hidden = !gestes.reprendreQuandMeme;
+    // Qualité de localisation : la précision en mètres, à chaque trame.
+    $("localisation").textContent = image.etat ? image.etat.localisation_texte : "";
+    $("localisation").className = "localisation " + (image.etat ? image.etat.localisation : "perdue");
+    $("localisation-detail").textContent = image.etat ? image.etat.localisation_detail : "";
+    $("recalage").hidden = !(image.ordres && image.ordres.recalage_conseille && !occupe);
+    dernierEtat = image.etat;
+    if (recalageAvant && image.resultat && !occupe && JSON.stringify(image.resultat) !== recalageResultat) {
+      $("pause-etat").textContent = Ordres.bilanDeRecalage(recalageAvant, image.etat);  // après l'aller-retour
+      recalageAvant = null;
+    }
+    liaisonSuspendue = Boolean(image.liaison_suspendue);
+    $("diagnostic-rtk").checked = Boolean(image.diagnostic_rtk);
+    dernieresOrdres = image.ordres || null;
+    $("rendre-main").disabled = liaisonSuspendue;
+    $("rendre-main").title = liaisonSuspendue ? "La main est déjà rendue : « Prendre la main » la reprend." : "";
+    avancerRendre();
     afficherAttestation(image.attestation);
     afficherEmission();
     $("appareil").textContent = image.appareil || "";
-    $("etat-resume").textContent = Ordres.resumeEtat(image.etat);
+    $("etat-resume").textContent = Ordres.resumeEtat(image.etat, Boolean(image.liaison_suspendue));
     // Aucun compte connecté (hors démonstration) : la section « Compte » s'ouvre d'elle-même.
     if (window.LymowVolets && image.compte && !demonstration) { window.LymowVolets.compte(image.compte.connecte); }
     afficherCompte(image.compte);
-    if (window.LymowCarte) { window.LymowCarte.robot(image.etat); }
+    if (window.LymowCarte) {
+      window.LymowCarte.robot(image.etat, image.ordres && image.ordres.bord ? image.ordres.bord.texte : "");
+      window.LymowCarte.connue(Boolean(image.carte_connue));
+    }
     if (window.LymowPave) { window.LymowPave.appliquer(image); }
     var bloc = $("bloc-etat");
     var liste = $("etat-liste");
@@ -405,27 +433,29 @@
     $("previsualisation-avertissement").hidden = !avertissement;
   }
 
-  async function previsualiser(ordres, estTache) {
+  async function previsualiser(ordres, estTache, objectif) {
     oublierPrevisualisation("");
     var reponse;
     try {
-      reponse = await appeler("/api/previsualiser", { ordres: ordres });
+      reponse = await appeler("/api/previsualiser", objectif ? { ordres: ordres, objectif: objectif } : { ordres: ordres });
     } catch (erreur) {
       signalerErreur(erreur);
       return;
     }
-    proposer(reponse.ordres, reponse.bilan, reponse.identifiant, estTache, reponse.etapes);
+    proposer(reponse.ordres, reponse.bilan, reponse.identifiant, estTache, reponse.etapes, reponse.garde_carte);
   }
 
   /* Affiche une prévisualisation et arme « Émettre » si le serveur a fourni un identifiant. */
-  function proposer(titre, detail, identifiant, estTache, etapes) {
+  function proposer(titre, detail, identifiant, estTache, etapes, gardeCarte) {
     oublierPrevisualisation("");
     var reponse = { ordres: titre, identifiant: identifiant };
     etapes = etapes && etapes.length ? etapes : [titre];
     $("previsualisation-titre").textContent = etapes.length > 1
       ? "Séquence de " + etapes.length + " étapes, émises dans cet ordre :" : "Un ordre sera émis :";
     // La liste vient du serveur : c'est exactement ce qui partira, étape par étape.
-    afficherEtapes(etapes, Ordres.avertissementOrdreSeul(etapes, estTache ? 0 : sequence.length));
+    // SEC-13 : un pas que le garde-fou carte raccourcira ou refusera est annoncé ici, avant « Émettre ».
+    afficherEtapes(etapes, [(gardeCarte || []).join(" ; "), Ordres.avertissementOrdreSeul(etapes, estTache ? 0 : sequence.length)]
+      .filter(Boolean).join(" — "));
     vider($("previsualisation-detail"));
     rendre(detail, $("previsualisation-detail"));
     if (!reponse.identifiant) {
@@ -463,7 +493,14 @@
   }
 
   async function stop() {
+    // STOP annule TOUT : prévisualisation, séquence composée, flèches et file du direct — puis arrête le robot.
+    // Il ne rend pas la main : on peut repartir aussitôt en réactivant les flèches.
     oublierPrevisualisation("");
+    sequence = [];
+    objectifSequence = null;
+    afficherSequence();
+    $("rendre-choix").hidden = true;
+    if (window.LymowPave) { window.LymowPave.desactiverFleches(false); }
     try {
       var reponse = await appeler("/api/stop");
       if (reponse && reponse.bilan) {
@@ -472,7 +509,7 @@
         vider($("previsualisation-detail"));
         rendre(reponse.bilan, $("previsualisation-detail"));
       } else {
-        noteEmission = "STOP envoyé. Prévisualisez un ordre pour reprendre.";
+        noteEmission = "STOP envoyé : tout est annulé, le robot est arrêté et sa tâche mise en pause. Réactivez les flèches pour repartir.";
       }
     } catch (erreur) {
       noteEmission = "STOP refusé : " + erreur.message;
@@ -604,9 +641,91 @@
   document.querySelectorAll("[data-tache]").forEach(function (bouton) {
     bouton.addEventListener("click", function () { previsualiser([{ nom: bouton.dataset.tache }], true); });
   });
-  $("sequence-previsualiser").addEventListener("click", function () { previsualiser(sequence.slice(), false); });
+  $("sequence-previsualiser").addEventListener("click", function () { previsualiser(sequence.slice(), false, objectifSequence); });
   $("sequence-vider").addEventListener("click", function () { sequence = []; afficherSequence(); });
   $("emettre").addEventListener("click", emettre);
+  $("diagnostic-rtk").addEventListener("change", async function () {
+    // Geste explicite de l'opérateur : le robot n'est interrogé que case cochée.
+    try {
+      await appeler("/api/diagnostic-rtk", { actif: $("diagnostic-rtk").checked });
+    } catch (erreur) {
+      $("diagnostic-rtk").checked = false;
+      $("carte-note").textContent = "Diagnostic de localisation refusé : " + erreur.message;
+    }
+  });
+  $("recalage").addEventListener("click", function () {
+    // Mode assisté : l'aller-retour est chargé dans la séquence et prévisualisé ; rien n'est émis sans « Émettre ».
+    var pas = Number($("pave-distance").value) || 2;
+    sequence = Ordres.sequenceDeRecalage(pas);
+    objectifSequence = null;
+    recalageAvant = dernierEtat;
+    recalageResultat = dernierResultat;
+    afficherSequence();
+    previsualiser(sequence.slice(), false);
+    $("pause-etat").textContent = "Recalage assisté chargé : à n'émettre qu'en zone dégagée. Effet non garanti (jamais essayé sur ce robot).";
+  });
+  // Cadre de droite : deux onglets, « Caméra » et « Carte ».
+  function montrerOnglet(nom) {
+    ["camera", "carte"].forEach(function (onglet) {
+      $("vue-" + onglet).hidden = onglet !== nom;
+      $("onglet-" + onglet).setAttribute("aria-selected", String(onglet === nom));
+    });
+    // Masqué, le cadre de la carte n'a pas de dimension : elle se charge et se redessine à l'affichage.
+    if (nom === "carte" && window.LymowCarte) { window.LymowCarte.montrer(); }
+  }
+  $("onglet-camera").addEventListener("click", function () { montrerOnglet("camera"); });
+  $("onglet-carte").addEventListener("click", function () { montrerOnglet("carte"); });
+  // « Rendre la main » : refusé pendant un mouvement ; flèches, direct et attestation tombent ; le robot en
+  // télécommande est attendu ; puis deux choix — laisser en pause, ou reprendre la tâche (garde SEC-12) —
+  // et la liaison est suspendue pour laisser l'application Lymow se connecter.
+  var rendreSansAttendre = false;
+  function avancerRendre() {
+    if ($("rendre-choix").hidden) { return; }
+    var etape = Ordres.etapeRendreLaMain({
+      suspendue: liaisonSuspendue, occupe: occupe, ordres: dernieresOrdres, sansAttendre: rendreSansAttendre
+    });
+    var attente = etape === "attendre";
+    $("rendre-message").textContent = attente
+      ? "Le robot est encore en télécommande : il revient seul en pause après une trentaine de secondes. Patientez…"
+      : (dernieresOrdres && dernieresOrdres.avertissement_position
+        ? dernieresOrdres.avertissement_position + " « Reprendre la tâche » sera refusé dans cet état."
+        : "Que doit faire le robot une fois la main rendue ? « Reprendre la tâche » redémarre les lames.");
+    $("rendre-pause").disabled = false;
+    $("rendre-pause").textContent = attente ? "Rendre la main sans attendre (robot laissé tel quel)" : "Laisser le robot en pause";
+    $("rendre-reprendre").disabled = attente || !(dernieresOrdres && dernieresOrdres.reprise_possible);
+  }
+  async function rendreLaMain(choix) {
+    rendreSansAttendre = true;
+    try {
+      var reponse = await appeler("/api/liaison/rendre", { sans_attendre: true, choix: choix });
+      if (reponse.suspendue) {
+        $("rendre-choix").hidden = true;
+        $("pause-etat").textContent = "";
+      } else {
+        $("rendre-message").textContent = "La main n'a pas été rendue : " + (reponse.refus || reponse.message || "refus");
+      }
+    } catch (erreur) {
+      $("rendre-message").textContent = "Refusé : " + erreur.message;
+    }
+  }
+  function clicExplicite(evenement) {  // `detail` vaut 0 pour un clic né du clavier (Entrée, Espace)
+    return Ordres.clicRendreAccepte({
+      clavier: evenement.detail === 0, flechesActives: Boolean(window.LymowPave && window.LymowPave.flechesActives())
+    });
+  }
+  $("rendre-main").addEventListener("click", async function (evenement) {
+    if (!clicExplicite(evenement)) { return; }
+    var etape = Ordres.etapeRendreLaMain({ suspendue: liaisonSuspendue, occupe: occupe, ordres: dernieresOrdres, sansAttendre: false });
+    if (etape === "deja") { $("pause-etat").textContent = "La main est déjà rendue : « Prendre la main » la reprend."; return; }
+    if (etape === "refus") { $("pause-etat").textContent = "Un mouvement est en cours : utilisez STOP, puis rendez la main."; return; }
+    if (window.LymowPave) { await window.LymowPave.desactiverFleches(true); }
+    rendreSansAttendre = false;
+    $("rendre-choix").hidden = false;
+    avancerRendre();
+  });
+  $("rendre-pause").addEventListener("click", function (evenement) { if (clicExplicite(evenement)) { rendreLaMain("pause"); } });
+  $("rendre-reprendre").addEventListener("click", function (evenement) { if (clicExplicite(evenement)) { rendreLaMain("reprendre"); } });
+  $("rendre-annuler").addEventListener("click", function () { $("rendre-choix").hidden = true; });
   $("pause-raccourci").addEventListener("click", async function () {
     // Une confirmation, puis la pause seule. Aucun mouvement n'est enchaîné : c'est à vous de rappuyer.
     if (!window.confirm("Mettre la tâche du robot en pause, pour prendre la main ?")) { return; }
@@ -649,12 +768,7 @@
   }
   document.addEventListener("keydown", function (evenement) {
     if (!estToucheStop(evenement)) { return; }
-    // Échap : STOP prioritaire ; il retire seulement le focus des flèches si rien ne bouge ni n'est armé.
-    if (evenement.key === "Escape" && !evenement.repeat && window.LymowPave && window.LymowPave.echap(occupe)) {
-      evenement.preventDefault();
-      evenement.stopPropagation();
-      return;
-    }
+    // Échap = STOP complet, toujours, comme Espace : jamais un simple retrait des flèches.
     evenement.preventDefault();
     evenement.stopPropagation();
     if (!evenement.repeat) { stop(); }
@@ -689,7 +803,10 @@
     sequence: function () { return sequence.slice(); },
     ajouterEtape: function (ordre) { sequence.push(ordre); afficherSequence(); },
     annulerDerniere: function () { sequence.pop(); afficherSequence(); },
-    viderSequence: function () { sequence = []; afficherSequence(); },
-    previsualiserSequence: function () { if (sequence.length) { previsualiser(sequence.slice(), false); } }
+    viderSequence: function () { sequence = []; objectifSequence = null; afficherSequence(); },
+    previsualiserSequence: function () { if (sequence.length) { previsualiser(sequence.slice(), false, objectifSequence); } },
+    // Trajet vers le bon signal : chargé dans LA séquence, avec son objectif (arrêt dès que la précision est fiable).
+    chargerSequence: function (ordres, objectif) { sequence = ordres.slice(); objectifSequence = objectif || null; afficherSequence(); },
+    previsualiser: function (ordres) { previsualiser(ordres, false); }
   };
 })();

@@ -41,7 +41,7 @@ def robot_obeit_a_la_pause(lien, nouveau=EN_PAUSE):
 def test_sections_repliees_par_defaut_et_ecran_principal_dans_un_seul_bloc():
     volets = re.findall(r'<details id="volet-([a-z]+)" class="([^"]+)" data-volet="([a-z]+)"( open)?>\s*<summary>([^<]+)</summary>', PAGE)
     assert [(nom, titre) for nom, _classe, _cle, _ouvert, titre in volets] == [
-        ("details", "Détails de la prévisualisation"), ("carte", "Carte et ajustement de zone"),
+        ("details", "Détails de la prévisualisation"), ("carte", "Ajustement de zone"),
         ("ordres", "Ordres détaillés"), ("calibration", "Calibration"), ("compte", "Compte"),
         ("journal", "Journal et résultat détaillé"),
     ]
@@ -49,7 +49,7 @@ def test_sections_repliees_par_defaut_et_ecran_principal_dans_un_seul_bloc():
     assert "<details open" not in PAGE and " open>" not in PAGE
     # Chaque fonction est toujours là, rangée dans sa section.
     for volet, identifiants in {
-        "carte": ("carte-dessin", "carte-ajustement"), "compte": ("compte-connecter", "un-clic-activer"),
+        "carte": ("carte-ajustement", "carte-zone"), "compte": ("compte-connecter", "un-clic-activer"),
         "journal": ("journal", "resultat-detail", "etat-liste", "actualiser"), "ordres": ("sequence-liste", "sequence-previsualiser"),
     }.items():
         debut = PAGE.index(f'id="volet-{volet}"')
@@ -61,12 +61,23 @@ def test_sections_repliees_par_defaut_et_ecran_principal_dans_un_seul_bloc():
     ordres = PAGE[PAGE.index('id="volet-ordres"') : PAGE.index('id="volet-calibration"')]
     assert all(f'data-ordre="{nom}"' in ordres for nom in ("tourner", "translation", "plateau"))
     assert all(f'data-tache="{nom}"' in ordres for nom in ("pause", "reprendre", "base", "annuler"))
-    # L'écran principal : vidéo, commande, séquence et Émettre dans le même bloc, avant tout volet.
+    # L'écran principal : deux colonnes — commandes à GAUCHE (dans l'ordre demandé), caméra ou carte à DROITE.
     principal = PAGE[PAGE.index('id="bloc-pilotage"') : PAGE.index('id="volet-details"')]
-    ordre_voulu = ["video-demarrer", "video-arreter", "fleches-bascule", "pave-distance", "pave-angle", "direct-interrupteur", "pave-plateau"]
-    positions = [principal.index(f'id="{identifiant}"') for identifiant in ordre_voulu]
-    assert positions == sorted(positions)  # la barre de commande, dans l'ordre demandé
-    for identifiant in ("video", "pave-pastilles", "pave-miniature", "pave-previsualiser", "emettre", "pave-annuler", "pave-vider", "pave-retours"):
+    gauche = principal[principal.index('class="colonne-commandes"') : principal.index('class="colonne-vue"')]
+    droite = principal[principal.index('class="colonne-vue"') :]
+    ordre_voulu = [
+        "ordres-etat", "localisation", "fleches-bascule", "composer", "pave-distance", "pave-angle", "pause-bouton",
+        "reprendre-bouton", "base-bouton", "pave-plateau", "pause-raccourci", "pave-pastilles", "emettre", "pave-retours",
+    ]
+    positions = [gauche.index(f'id="{identifiant}"') for identifiant in ordre_voulu]
+    assert positions == sorted(positions)
+    for identifiant in ("onglet-camera", "onglet-carte", "video", "vue-camera", "vue-carte", "carte-dessin", "carte-suivre", "carte-precision"):
+        assert f'id="{identifiant}"' in droite and f'id="{identifiant}"' not in gauche
+    assert droite.count("data-fleche=") == 4 and 'id="vue-carte" class="vue-carte" role="tabpanel" hidden' in droite
+    style = (ui.STATIQUE / "style.css").read_text(encoding="utf-8")
+    assert "grid-template-columns: minmax(0, 2fr) minmax(0, 3fr)" in style  # ≈ 40 % / 60 %
+    assert "@media (max-width: 1099px)" in style and ".colonne-vue { order: -1; }" in style  # étroit : caméra d'abord
+    for identifiant in ("pave-miniature", "pave-previsualiser", "pave-annuler", "pave-vider"):
         assert f'id="{identifiant}"' in principal
     assert 'id="previsualisation-detail"' not in principal  # trames et hexadécimal : dans le volet « détails »
     assert len(re.findall(r'id="([^"]+)"', PAGE)) == len(set(re.findall(r'id="([^"]+)"', PAGE)))
@@ -77,13 +88,18 @@ def test_une_seule_bascule_pour_les_fleches_et_plus_de_bouton_clavier_separe():
     assert PAGE.count('id="fleches-bascule"') == 1 and "Flèches : activer" in PAGE and 'aria-pressed="false"' in PAGE
     assert "pave-clavier" not in PAGE + script and "Activer le clavier" not in PAGE
     assert PAGE.count("data-fleche=") == 4 and PAGE.count('data-fleche="haut" aria-label="Avancer" disabled') == 1
-    cadre = PAGE[PAGE.index('class="cadre-video"') : PAGE.index('class="barre-commande"')]
-    assert cadre.count("data-fleche=") == 4 and 'id="video"' in cadre  # flèches en surimpression de la vidéo
-    assert 'Fleches.basculer(actives, "bouton")' in script and 'Fleches.basculer(actives, "clic-video")' in script
-    assert 'Fleches.basculer(actives, "sortie")' in script and "bouton.disabled = !actives" in script
-    assert "if (!actives) { return; }" in script and "actives: actives" in script  # clavier et boutons : le même état
+    cadre = PAGE[PAGE.index('id="vue-camera"') : PAGE.index('id="vue-carte"')]
+    assert cadre.count("data-fleche=") == 4 and 'id="video"' in cadre  # flèches en surimpression de la caméra
+    assert "bouton.disabled = !actives" in script and "if (!actives) { return; }" in script and "actives: actives" in script
+    # UN geste : la bascule arme aussi le pilotage direct ; plus de second interrupteur.
+    assert "direct-interrupteur" not in PAGE + script and 'id="composer" type="checkbox"' in PAGE
+    assert "Composer une séquence (ne pas émettre tout de suite)" in PAGE
+    activer = script[script.index("async function activer()") : script.index("function afficherPastilles")]
+    assert "window.confirm(" in activer and '"/api/direct/armer", { confirmer: true }' in activer and "regler(true)" in activer
+    assert "if (!enDirect()) { regler(true);" in activer  # composition : aucune émission, donc aucun armement
+    assert "Simulation : les flèches parcourent le même chemin, rien n'est émis" in activer
     style = (ui.STATIQUE / "style.css").read_text(encoding="utf-8")
-    assert ".cadre-pilotage.actif .cadre-video { border-color" in style  # liseré visible
+    assert ".cadre-video.actif { border-color" in style  # liseré visible
     assert ".haut { position: sticky" in style and "bandeau-demo {\n  position: sticky" not in style  # STOP jamais recouvert
     haut = PAGE[PAGE.index('<div class="haut">') : PAGE.index("<main>")]
     assert all(f'id="{i}"' in haut for i in ("bandeau-demo", "bandeau-reel", "bandeau-direct", "stop", "etat-resume"))
@@ -127,7 +143,8 @@ def test_page_bascule_unique_des_fleches():
     assert js("fleches.js", "M.basculer(true, 'sortie')") is False and js("fleches.js", "M.basculer(true, 'echap')") is False
     assert js("fleches.js", "M.basculer(false, 'armement')") is True and js("fleches.js", "M.basculer(true, 'autre')") is True
     assert js("fleches.js", "M.libelleBascule(false)") == "Flèches : activer"
-    assert js("fleches.js", "M.libelleBascule(true)") == "Flèches : ACTIVES"
+    assert js("fleches.js", "M.libelleBascule(true)") == "Flèches : ACTIVES — désactiver"
+    assert js("fleches.js", "M.modeDesFleches(false)") == "direct" and js("fleches.js", "M.modeDesFleches(true)") == "file"
     # Désactivées : ni le clavier ni les boutons n'agissent, même avec le focus.
     touche = {"key": "ArrowUp", "repeat": False, "balise": "DIV", "dansLePave": True, "actives": False}
     assert js("fleches.js", "M.actionClavier(a[0])", touche) is None
@@ -136,11 +153,13 @@ def test_page_bascule_unique_des_fleches():
 
 
 @sans_node
-def test_page_echap_reste_stop_des_qu_un_mouvement_est_en_cours_ou_que_le_direct_est_arme():
+def test_page_echap_reste_stop_des_qu_un_mouvement_est_en_cours():
     cas = lambda **etat: js("fleches.js", "M.effetEchap(a[0])", {"occupe": False, "directArme": False, "flechesActives": False} | etat)  # noqa: E731
     assert cas(occupe=True, flechesActives=True) == "stop"  # STOP prioritaire
-    assert cas(directArme=True, flechesActives=True) == "stop"
-    assert cas(flechesActives=True) == "desactiver"  # rien ne bouge : Échap retire seulement le focus
+    # Revue du 2026-10-12 : Échap = STOP complet, toujours — la page peut se tromper sur « aucun ordre en cours ».
+    assert cas(flechesActives=True) == "stop" and cas(directArme=True, flechesActives=True) == "stop"
+    app = (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
+    assert "LymowPave.echap" not in app and "echap:" not in (ui.STATIQUE / "pave.js").read_text(encoding="utf-8")
     assert cas() == "stop"  # comme avant
 
 
@@ -159,24 +178,24 @@ def test_page_sections_fermees_par_defaut_et_compte_ouverte_si_non_connecte():
 @sans_node
 def test_page_etat_du_robot_en_une_ligne_et_gestes_proposes():
     etat = {"en_ligne": True, "statut_libelle": "tonte en pause", "tache_libelle": "tonte en cours", "batterie_pct": 80,
-            "rtk": "précision horizontale 0.02 m"}
+            "localisation_texte": "position : ±0,02 m — fiable"}
     assert js("ordres.js", "M.resumeEtat(a[0])", etat) == (
-        "en ligne · tonte en pause (tâche : tonte en cours) · batterie 80 % · précision horizontale 0.02 m"
+        "en ligne · tonte en pause (tâche : tonte en cours) · batterie 80 % · position : ±0,02 m — fiable"
     )
     pres = {"statut": "tonte en pause", "tache": "tonte en cours", "mouvement_refuse": None}
     assert js("ordres.js", "M.texteEtatDesOrdres(a[0])", pres) == "Robot : tonte en pause (tâche : tonte en cours)"
     assert js("ordres.js", "M.resumeEtat(a[0])", etat | {"en_ligne": False, "perime": True}).startswith("HORS LIGNE")
     assert js("ordres.js", "M.resumeEtat(null)") == "état du robot inconnu"
     tonte = {"action": "pause", "reprise_possible": False, "pause": None}
-    assert js("ordres.js", "M.gestesProposes(a[0], false)", tonte) == {"pause": True, "reprendre": False, "texte": ""}
+    gestes = js("ordres.js", "M.gestesProposes(a[0], false)", tonte)
+    assert (gestes["pause"], gestes["reprendre"], gestes["texte"], gestes["reprendreQuandMeme"]) == (True, False, "", False)
     assert js("ordres.js", "M.gestesProposes(a[0], true)", tonte)["pause"] is False  # pas pendant un ordre
     attente = {"action": None, "reprise_possible": False, "pause": {"etat": "en attente", "texte": "Pause demandée…"}}
     assert "attente de confirmation" in js("ordres.js", "M.blocageDesFleches(a[0])", attente)
     confirmee = {"action": None, "reprise_possible": True, "pause": {"etat": "confirmée", "texte": "Pause confirmée : flèches disponibles."}}
     assert js("ordres.js", "M.blocageDesFleches(a[0])", confirmee) == ""
-    assert js("ordres.js", "M.gestesProposes(a[0], false)", confirmee) == {
-        "pause": False, "reprendre": True, "texte": "Pause confirmée : flèches disponibles.",
-    }
+    gestes = js("ordres.js", "M.gestesProposes(a[0], false)", confirmee)
+    assert (gestes["pause"], gestes["reprendre"], gestes["texte"]) == (False, True, "Pause confirmée : flèches disponibles.")
 
 
 # --- refus en clair et actionnables (SEC-01 inchangé, seul l'énoncé change) -----------
@@ -350,3 +369,198 @@ def test_page_propose_pause_et_reprise_au_bon_endroit():
     assert "/api/emettre" not in raccourci and "previsualiser(" not in raccourci and "fleche" not in raccourci  # rien n'est enchaîné
     pave = (ui.STATIQUE / "pave.js").read_text(encoding="utf-8")
     assert "blocageDesFleches(ordresDuRobot)" in pave
+
+
+# --- dix-neuvième avenant : le clavier fait bouger le robot, pas la page --------------------
+
+
+@sans_node
+def test_page_fleche_pressee_ne_fait_jamais_defiler_la_page_quel_que_soit_le_focus():
+    """Régression (2026-10-12) : flèches activées, les touches fléchées faisaient défiler la page."""
+    for balise in ("BODY", "BUTTON", "DIV", "SECTION", "A", "SUMMARY", "VIDEO", ""):
+        for touche, direction in (("ArrowUp", "haut"), ("ArrowDown", "bas"), ("ArrowLeft", "gauche"), ("ArrowRight", "droite")):
+            decision = js("fleches.js", "M.interception(a[0])", {"key": touche, "repeat": False, "balise": balise, "actives": True})
+            assert decision == {"intercepter": True, "action": {"type": "fleche", "direction": direction}}, (balise, touche)
+    # Touche maintenue : toujours retenue (la page ne défile pas), jamais comptée.
+    maintenue = js("fleches.js", "M.interception(a[0])", {"key": "ArrowDown", "repeat": True, "balise": "BODY", "actives": True})
+    assert maintenue == {"intercepter": True, "action": None}
+    for touche, action in (("Enter", {"type": "previsualiser"}), ("Backspace", {"type": "annuler"}), (" ", None)):
+        decision = js("fleches.js", "M.interception(a[0])", {"key": touche, "repeat": False, "balise": "BUTTON", "actives": True})
+        assert decision == {"intercepter": True, "action": action}, touche
+
+
+@sans_node
+def test_page_clavier_jamais_intercepte_dans_une_saisie_ni_fleches_inactives():
+    for balise in ("INPUT", "input", "SELECT", "TEXTAREA"):
+        decision = js("fleches.js", "M.interception(a[0])", {"key": "ArrowUp", "repeat": False, "balise": balise, "actives": True})
+        assert decision == {"intercepter": False, "action": None}, balise
+    editable = {"key": "Backspace", "repeat": False, "balise": "DIV", "editable": True, "actives": True}
+    assert js("fleches.js", "M.interception(a[0])", editable) == {"intercepter": False, "action": None}
+    inactives = {"key": "ArrowUp", "repeat": False, "balise": "BODY", "actives": False}
+    assert js("fleches.js", "M.interception(a[0])", inactives) == {"intercepter": False, "action": None}
+    autre = {"key": "a", "repeat": False, "balise": "BODY", "actives": True}
+    assert js("fleches.js", "M.interception(a[0])", autre) == {"intercepter": False, "action": None}
+
+
+@sans_node
+def test_page_robot_sur_la_carte_des_qu_une_pose_est_connue_sinon_sur_la_station():
+    station = {"est_m": 2.0, "nord_m": 3.0, "cap_deg": 90.0}
+    pose = {"position_est_m": 10.0, "position_nord_m": -4.0, "cap_deg": 45.0, "precision_m": 1.32}
+    assert js("ordres.js", "M.positionAffichee(a[0], a[1])", pose, station) == {
+        "est": 10.0, "nord": -4.0, "cap": 45.0, "rayon": 1.32, "source": "pose", "note": "",
+    }
+    repos = js("ordres.js", "M.positionAffichee(a[0], a[1])", {"position_est_m": None, "precision_m": 0.03}, station)
+    assert (repos["est"], repos["nord"], repos["source"], repos["rayon"]) == (2.0, 3.0, "station", None)
+    assert repos["note"] == "position non transmise au repos : robot placé sur sa station"
+    assert js("ordres.js", "M.positionAffichee(a[0], a[1])", {"position_est_m": None}, None) is None
+    assert js("ordres.js", "M.positionAffichee(null, null)") is None
+    carte = (ui.STATIQUE / "carte.js").read_text(encoding="utf-8")
+    assert "positionAffichee(etatRobot, carte ? carte.station : null)" in carte and '"carte-incertitude"' in carte
+    assert '$("carte-suivre").checked' in carte and "CADRE_ROBOT_M = 40" in carte and "reponse.reference" in carte
+
+
+# --- trois boutons en tête : « Prendre la main », « Rendre la main », « STOP » ----------------
+
+
+def test_page_trois_boutons_toujours_visibles_en_tete_dans_l_ordre():
+    haut = PAGE[PAGE.index('<div class="haut">') : PAGE.index("<main>")]
+    positions = [haut.index(f'id="{identifiant}"') for identifiant in ("prendre-main", "rendre-main", "stop")]
+    assert positions == sorted(positions) and PAGE.count('id="rendre-main"') == 1  # « Rendre la main » : seulement en haut
+    assert ">Prendre la main<" in haut and ">Rendre la main<" in haut and ">STOP <small>Échap ou Espace</small><" in haut
+    for identifiant in ("rendre-choix", "rendre-pause", "rendre-reprendre", "rendre-annuler", "etat-main"):
+        assert f'id="{identifiant}"' in haut
+    assert ">Laisser le robot en pause<" in haut and ">Reprendre la tâche<" in haut
+    pave = (ui.STATIQUE / "pave.js").read_text(encoding="utf-8")
+    app = (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
+    # « Flèches : activer » est le reflet de « Prendre la main » : le même geste, UNE confirmation.
+    assert '$("prendre-main").addEventListener("click", prendreLaMain)' in pave
+    assert "if (actives) { desactiver(\"\"); } else { prendreLaMain(); }" in pave and pave.count("window.confirm(") == 2  # prendre la main ; forcer ce pas
+    stop = app[app.index("  async function stop() {") :][:700]
+    assert "sequence = [];" in stop and "oublierPrevisualisation" in stop and "desactiverFleches(false)" in stop
+    assert '"/api/liaison/rendre", { sans_attendre: true, choix: choix }' in app
+
+
+@sans_node
+def test_page_qui_a_la_main():
+    qui = lambda **c: js("ordres.js", "M.quiALaMain(a[0])", {"suspendue": False, "mainPrise": False, "flechesActives": False} | c)  # noqa: E731
+    assert qui() == "personne" and qui(mainPrise=True) == "outil" and qui(flechesActives=True) == "outil"
+    assert qui(suspendue=True, mainPrise=True, flechesActives=True) == "application"  # liaison suspendue : l'application
+    assert js("ordres.js", "M.texteDeLaMain('outil')") == "Vous avez la main"
+    assert js("ordres.js", "M.texteDeLaMain('application')") == "L'application Lymow a la main — liaison suspendue"
+    assert js("ordres.js", "M.texteDeLaMain('personne')") == ""
+    # STOP ne retire pas la main : flèches tombées, la main reste à l'outil.
+    assert qui(mainPrise=True, flechesActives=False) == "outil"
+
+
+@sans_node
+def test_page_prendre_la_main_pas_a_pas_sans_rien_enchainer_a_l_aveugle():
+    def suite(**c):
+        base = {"suspendue": False, "connecte": True, "occupe": False, "ordres": {}, "flechesActives": False, "pauseDemandee": False,
+                "confirme": True}
+        return js("ordres.js", "M.suitePrendreLaMain(a[0])", base | c)
+
+    tonte = {"action": "pause", "mouvement_refuse": "Le robot tond : mettez la tâche en pause pour prendre la main."}
+    assert suite(suspendue=True) == "liaison"  # (a) rétablir la liaison d'abord
+    assert suite(connecte=False) == "attendre" and suite(occupe=True) == "attendre"
+    assert suite(ordres=tonte) == "pause"  # (b) robot en tonte ou en retour : pause
+    assert suite(ordres=tonte, pauseDemandee=True) == "attendre"  # … et on ATTEND le statut vivant « pause »
+    assert suite(ordres=tonte | {"pause": {"etat": "en attente"}}, pauseDemandee=True) == "attendre"
+    assert suite(ordres=tonte | {"pause": {"etat": "non confirmée"}}, pauseDemandee=True) == "abandon"
+    confirmee = {"action": None, "mouvement_refuse": None, "pause": {"etat": "confirmée"}}
+    assert suite(ordres=confirmee, pauseDemandee=True) == "fleches"  # (c) flèches seulement une fois la pause confirmée
+    assert suite(ordres=confirmee, flechesActives=True) == "fait"
+    urgence = {"action": None, "mouvement_refuse": "Arrêt d'urgence enclenché : levez-le sur le robot."}
+    assert suite(ordres=urgence) == "bloque"  # non pilotable : rien n'est activé (l'attestation est alors proposée)
+    assert suite() == "fleches"
+    # La confirmation vient APRÈS la liaison et la lecture de l'état : son texte dit alors vrai.
+    assert suite(suspendue=True, confirme=False) == "liaison"
+    assert suite(confirme=False) == "attendre"  # état pas encore relu
+    assert suite(confirme=False, ordres=tonte) == "confirmer" and suite(confirme=False, ordres={"statut": "en pause"}) == "confirmer"
+    assert suite(confirme=False, connecte=False, simulation=True) == "confirmer"  # simulation sans robot
+    assert suite(connecte=False, simulation=True) == "fleches"
+    pave = (ui.STATIQUE / "pave.js").read_text(encoding="utf-8")
+    prise = pave[pave.index("async function poursuivrePrise") :][:1400]
+    assert prise.index('suite === "confirmer"') < prise.index('"/api/pause"')  # rien n'est émis avant la confirmation
+
+    annonce = js("ordres.js", "M.annoncePrendreLaMain(a[0])", {"suspendue": True, "ordres": tonte, "composer": False, "simulation": False})
+    assert annonce.startswith("Prendre la main ?") and "liaison avec le robot sera rétablie" in annonce
+    assert "Le robot tond : la tâche sera mise en pause." in annonce and "IMMÉDIATEMENT" in annonce and "STOP : Échap ou Espace." in annonce
+    simulation = js("ordres.js", "M.annoncePrendreLaMain(a[0])", {"suspendue": False, "ordres": {}, "composer": False, "simulation": True})
+    assert "simulation : rien n'est émis" in simulation and "mis en pause" not in simulation
+    composition = js("ordres.js", "M.annoncePrendreLaMain(a[0])", {"suspendue": False, "ordres": {}, "composer": True, "simulation": False})
+    assert "composeront une séquence" in composition and "IMMÉDIATEMENT" not in composition
+
+
+@sans_node
+def test_page_rendre_la_main_refuse_pendant_un_mouvement_et_attend_la_telecommande():
+    def etape(**c):
+        base = {"suspendue": False, "occupe": False, "ordres": {"telecommande": False}, "sansAttendre": False}
+        return js("ordres.js", "M.etapeRendreLaMain(a[0])", base | c)
+
+    assert etape(occupe=True) == "refus"  # STOP d'abord
+    assert etape(ordres={"telecommande": True}) == "attendre"
+    assert etape(ordres={"telecommande": True}, sansAttendre=True) == "choisir"
+    assert etape() == "choisir" and etape(suspendue=True) == "deja"
+
+
+def test_rendre_la_main_avec_reprise_gardee_par_sec12_puis_liaison_suspendue(tmp_path, monkeypatch, session_reelle, lien):
+    from conftest import fragment
+
+    lien.robot = fragment(statut=3, tache=2, precision=1.32)  # en pause, position perdue
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=True, session=session_reelle) as (serveur, http):
+            await poster(http, serveur, "/api/actualiser")
+            # « Reprendre la tâche » refusé par la garde de localisation : la main n'est PAS rendue.
+            statut, corps, _recus = await poster(http, serveur, "/api/liaison/rendre", {"sans_attendre": True, "choix": "reprendre"})
+            assert statut == 200 and corps["suspendue"] is False and "Position imprécise (±1,32 m)" in corps["refus"]
+            assert serveur.session is not None and not serveur.suspendue and lien.ordres == []
+            # Position fiable : la tâche reprend, PUIS la liaison est suspendue.
+            lien.robot = fragment(statut=3, tache=2, precision=0.04)
+            await poster(http, serveur, "/api/actualiser")
+            statut, corps, _recus = await poster(http, serveur, "/api/liaison/rendre", {"sans_attendre": True, "choix": "reprendre"})
+            assert corps["suspendue"] is True and serveur.session is None
+            assert lien.ordres == [bytes.fromhex("10 31 28 04")]  # reprendre, et rien d'autre
+            assert serveur.instantane()["liaison"] == "Liaison suspendue : l'application Lymow a la main"
+
+            # STOP reste disponible main rendue : il rétablit la liaison pour émettre, et ne la suspend pas.
+            lien.publies.clear()
+            statut, _corps, _recus = await poster(http, serveur, "/api/stop")
+            assert statut == 202 and serveur.suspendue is False and serveur.session is not None
+            await attendre(lambda: not serveur.occupe)
+            assert lien.arrets == [ARRET] * 3 and bytes.fromhex("10 31 28 03") in lien.ordres  # consignes nulles ×3, puis pause
+
+    executer(scenario())
+
+
+def test_stop_annule_tout_depuis_chaque_etat_sans_rendre_la_main(tmp_path, monkeypatch, session_reelle, lien):
+    from conftest import fragment
+
+    lien.robot = fragment(statut=3, tache=2, precision=0.04)
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=True, session=session_reelle) as (serveur, http):
+            # État 1 : rien en cours.
+            statut, _corps, _recus = await poster(http, serveur, "/api/stop")
+            assert statut == 202
+            await attendre(lambda: not serveur.occupe)
+            # État 2 : prévisualisation en attente, direct armé, attestation impossible ici — tout tombe.
+            _statut, corps, _recus = await poster(http, serveur, "/api/previsualiser", {"ordres": [{"nom": "avancer", "valeur": 1}]})
+            identifiant = corps["identifiant"]
+            await poster(http, serveur, "/api/direct/armer", {"confirmer": True})
+            await poster(http, serveur, "/api/stop")
+            assert serveur.previsualisation is None and serveur.direct.arme is False
+            await attendre(lambda: not serveur.occupe)
+            statut, _corps, _recus = await poster(http, serveur, "/api/emettre", {"identifiant": identifiant})
+            assert statut == 409  # la prévisualisation annulée ne vaut plus rien
+            # État 3 : mouvement direct en cours, file pleine — interrompu, file vidée, liaison gardée.
+            _statut, corps, _recus = await poster(http, serveur, "/api/direct/armer", {"confirmer": True})
+            _statut, corps, _recus = await poster(http, serveur, "/api/direct/fleche", {"jeton": corps["jeton"], "direction": "haut", "pas": 2})
+            await poster(http, serveur, "/api/direct/fleche", {"jeton": corps["jeton"], "direction": "gauche", "pas": 45})
+            await poster(http, serveur, "/api/stop")
+            image = serveur.instantane()
+            assert image["direct"]["file"] == [] and image["direct"]["arme"] is False and image["liaison_suspendue"] is False
+            await attendre(lambda: not serveur.occupe, delai=6.0)
+            assert serveur.session is not None and serveur.etat_liaison == "connecté"  # la main n'est pas rendue
+
+    executer(scenario())

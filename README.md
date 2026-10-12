@@ -44,6 +44,7 @@ Python 3.12) ; il se régénère avec
 | `lymow stop` | Consigne nulle émise 3 fois, sans précondition, puis mise en pause de la tâche (userCtrl 3 ; 21 si le dernier état connu indique un retour à la base). |
 | `lymow sequence "plateau 90; tourner 45 --vitesse 0.2; reculer --duree 2 --vitesse 0.1"` | Enchaîne ; rien ne part si une étape est refusable ; s'arrête au premier refus, échec ou constat non confirmé. Étapes : `tourner`, `avancer`, `reculer`, `plateau`, `plateau-haut`, `stop`. `--reel` et `essai-arret-auto` y sont interdits. |
 | `lymow pause` | Met la tâche en pause (3), ou le retour à la base (21) : la pause de `stop`, sans les consignes nulles. |
+| `lymow calibration-constat` | Hors ligne : relit les constats vérifiés des ordres réels du journal et donne, par vitesse, le rapport mesuré / commandé, sa dispersion et le facteur suggéré. Ne modifie rien. |
 | `lymow reprendre` / `base` / `annuler` | Reprise de tâche (4), retour base tâche conservée (33), annulation sur place (28). |
 | `lymow ui [--reel \| --demo] [--port N]` | Interface web locale avec retour vidéo (voir « Interface web locale ») ; `--demo` : robot et jardin fictifs, sans compte ni réseau. |
 | `lymow carte` | Carte du robot : zones, zones interdites, passages, station (lecture seule ; contours complets avec `--json`). Une grande carte arrive coupée à 81 920 octets (constat du 2026-10-12) : les tranches suivantes sont demandées une à une (hypothèse à confirmer en réel), et une carte restée tronquée est refusée avec son motif. |
@@ -84,15 +85,50 @@ s'appliquent pas.
 navigateur et s'arrête sur Ctrl+C. `lancer-lymow.cmd` (double-clic) lance
 `lymow ui` en simulation.
 
-La page tient en un écran de pilotage : l'en-tête (mode, état du robot en une
-ligne, STOP toujours visible), puis un bloc unique — la vidéo, sa barre de
-commande (vidéo, « Flèches : activer », pas des flèches, « Direct : armer »,
-« Plateau haut », « Pause ») et la séquence en cours sur une ligne avec
-« Prévisualiser » et « Émettre ». Tout le reste est rangé dans des sections
-repliées par défaut, dont l'état ouvert ou fermé est mémorisé par le
-navigateur (rien d'autre n'y est stocké) : « Carte et ajustement de zone »,
-« Ordres détaillés », « Calibration », « Compte » (ouverte d'elle-même si
-aucun compte n'est connecté), « Journal et résultat détaillé ».
+La page tient en un écran de pilotage, sans défilement en 1366×768. En haut :
+mode, état du robot en une ligne, et **trois boutons toujours visibles** :
+
+- **Prendre la main** — un seul geste, une seule confirmation : rétablit la
+  liaison si elle est suspendue ; si le robot tond ou rentre à sa base, le met
+  en pause et attend que le robot l'annonce ; puis active les flèches. Si le
+  robot reste non pilotable, rien n'est activé et l'attestation de
+  l'opérateur est proposée. « Flèches : activer » fait la même chose.
+- **Rendre la main** — refusé pendant un mouvement (STOP d'abord) ; les
+  flèches, le pilotage direct et l'attestation tombent ; si le robot est
+  encore en télécommande, la page attend son retour en pause ; puis deux
+  choix : « Laisser le robot en pause » ou « Reprendre la tâche » (garde de
+  localisation SEC-12 : refusée, la main n'est pas rendue) ; enfin la
+  liaison est suspendue pour laisser l'application Lymow se connecter.
+  La main n'est rendue que sur ce clic suivi de ce choix — jamais au clavier
+  quand les flèches sont actives, jamais en différé. Tant qu'elle est
+  rendue, l'outil n'ouvre aucune liaison et ne publie rien, par aucun
+  chemin (veille, compte, vidéo, carte, diagnostic : refusés en clair) ;
+  seuls STOP et « Prendre la main » la reprennent.
+- **STOP** (Échap, Espace) — annule tout : mouvement en cours, file du
+  pilotage direct, séquence composée, prévisualisation, armement ; puis
+  émet l'arrêt (consignes nulles ×3) et la mise en pause de la tâche. Il ne
+  rend pas la main et reste disponible main rendue (il rétablit alors la
+  liaison pour émettre).
+
+Dessous, deux
+colonnes sur écran large (une seule, caméra d'abord, sur écran étroit) :
+
+- **à gauche, les commandes** : statut du robot et précision de position, le
+  gros bouton « Flèches », les pas ↑↓ et ←→, les actions (Pause, Reprendre,
+  Retour base, Plateau haut), les autorisations et refus avec
+  leurs boutons, la séquence et le retour des derniers pas ;
+- **à droite, un cadre à deux onglets** : « Caméra » (flèches en
+  surimpression) et « Carte » (position du robot avec son cercle
+  d'incertitude, « suivre le robot », précision relevée).
+
+La carte affichée est la dernière carte complète reçue, gardée sur disque par
+appareil (`carte-reference/`, hors dépôt) : elle s'affiche dès l'ouverture, et
+une réponse partielle du robot pendant une tâche ne la remplace pas — elle
+est seulement signalée. Tout le reste est rangé sous les deux colonnes, dans
+des sections repliées par défaut, dont l'état est mémorisé par le navigateur
+(rien d'autre n'y est stocké) : « Ajustement de zone », « Ordres détaillés »,
+« Calibration », « Compte » (ouverte d'elle-même si aucun compte n'est
+connecté), « Journal et résultat détaillé ».
 
 - Version. Au lancement, l'interface calcule une empreinte de son code et
   charge sa page en mémoire : la page servie reste cohérente avec le serveur,
@@ -180,7 +216,9 @@ aucun compte n'est connecté), « Journal et résultat détaillé ».
   mouvement.
 - Avec un compte enregistré, l'interface ouvre la liaison même en simulation,
   pour afficher l'état : elle n'émet alors que des requêtes pures (présence,
-  demande de configuration, et demande de carte sur « Actualiser la carte »),
+  demande de configuration, et demande de carte : une fois d'office à la
+  première liaison si aucune carte n'est connue, puis sur « Actualiser la
+  carte »),
   jamais un ordre ni une écriture de carte.
 - En mode réel, ne fermez pas la fenêtre du terminal pendant un mouvement
   (voir « Ce que l'arrêt garanti ne couvre pas »).
@@ -228,11 +266,20 @@ premier essai, ouvrir la console du navigateur (F12) et observer :
 But : écrire vite une suite d'étapes — se dégager, rejoindre une zone où le
 réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même.
 
-- **Une seule bascule : « Flèches : activer »** (ou un clic dans la vidéo).
-  Elle active ensemble les quatre boutons affichés sur la vidéo et le
-  clavier ; un liseré orange autour de la vidéo le montre. Cliquer ailleurs
-  ou Échap les désactive — Échap reste STOP dès qu'un mouvement est en cours
-  ou que le pilotage direct est armé.
+- **Un seul geste : « Flèches : activer »** (ou un clic dans la caméra), avec
+  une confirmation. Par défaut c'est le **pilotage direct** : chaque flèche
+  fait bouger le robot tout de suite. La case « Composer une séquence (ne
+  pas émettre tout de suite) » rend l'autre comportement : les flèches
+  ajoutent des étapes, qui ne partent qu'avec « Prévisualiser » puis
+  « Émettre ». Un liseré orange autour de la caméra montre l'activation.
+  Elle ne tombe que par le bouton (qui interrompt aussi le pas en cours), par
+  STOP — Échap ou Espace, toujours un STOP complet — ou par le désarmement du
+  serveur (60 s sans action, refus de sécurité, échec d'émission) — plus en
+  cliquant ailleurs. Un refus de validation (pas hors liste) ne désarme pas.
+- **Clavier.** Flèches actives, les touches ↑ ↓ ← →, Entrée et Retour arrière
+  sont captées au niveau de la page entière : elles ne la font plus défiler,
+  quel que soit l'élément qui a le focus ; elles ne sont pas captées dans un
+  champ de saisie ou une liste. Une touche maintenue vaut un seul appui.
 - **Robot en tonte ou en retour : un mouvement est refusé** (SEC-01), et la
   page le dit avant même d'essayer : « Le robot tond : mettez la tâche en
   pause pour prendre la main », avec le bouton « Mettre en pause » à côté (une
@@ -246,11 +293,11 @@ réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même
   ↓ reculer, ← tourner à gauche, → tourner à droite. Pas choisis dans deux
   listes : 0,25 / 0,5 / 1 (défaut) / 2 m et 15 / 45 (défaut) / 90°. Vitesses
   par défaut de l'outil. STOP reste Échap ou Espace, partout.
-- **Mode file (défaut).** Chaque flèche ajoute une étape à la séquence de la
+- **Composition (case cochée).** Chaque flèche ajoute une étape à la séquence de la
   page (la même liste que le compositeur). Une miniature trace le trajet cumulé
   et donne distance, rotation et durée estimée. Entrée prévisualise la
   séquence ; « Émettre » l'émet. Retour arrière annule la dernière étape.
-- **Mode direct (à armer, avec confirmation).** Chaque flèche émet aussitôt son
+- **Pilotage direct (défaut).** Chaque flèche émet aussitôt son
   étape, sans prévisualisation ; les appuis faits pendant un mouvement
   attendent dans une file de cinq au plus. Bandeau « PILOTAGE DIRECT ARMÉ »
   tant que c'est armé. Désarmement automatique après 60 s sans action, à la
@@ -269,6 +316,109 @@ réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même
   zone de mauvaise couverture, préférez des pas courts (0,25 ou 0,5 m), robot
   à vue ou vidéo ouverte. Non vérifié en réel : ce panneau n'a été testé que
   hors ligne.
+
+## Localisation
+
+Ce qui est **observé** (trames réelles du 2026-10-12) :
+
+- le robot annonce à chaque trame le nombre de satellites, une précision
+  horizontale en mètres, une qualité et l'état de son nœud de localisation ;
+- la précision est passée de 0,03 m (matin, station) à 1,1–1,5 m après une
+  perte de signal, puis est revenue à 0,01 m, robot immobile, sans aucun saut
+  de la pose : on ne peut pas dire si la pose était juste ou si le filtre du
+  robot ne s'est pas recalé ;
+- l'origine de la carte est codée en simple précision.
+
+Ce qui est **documenté par le socle** (ha-lymow), non encore vu dans nos
+captures : le robot n'envoie le détail RTK qu'à un client qui le demande
+(demandes 57 et 58, toutes les 5 s) — âge des corrections de la base, état
+de la base, taux d'erreur du lien radio, motif d'erreur. L'outil sait émettre
+ces deux demandes comme **requêtes pures** (forme exacte, contrôlée à
+l'octet), mais **jamais d'office** : seulement si vous cochez « Diagnostic
+de localisation (interroge le robot toutes les 5 s) » sous la carte —
+décoché par défaut, décoché de nouveau quand la main est rendue, jamais
+pendant un mouvement — ou par `lymow capture --rtk`. Ce que les sources
+établissent : le socle nomme ces codes « QUERY » et les émet tels quels ;
+son relevé d'écrans associe ces octets à l'ouverture de l'écran « RTK
+Diagnostic » de l'application. Nous ne l'avons pas constaté nous-mêmes. La page affiche alors « corrections de la base reçues il y a 2 s »
+ou « plus de corrections depuis 45 s » : c'est ce qui distingue un lien de
+base perdu d'un ciel masqué.
+
+Ce qui est **supposé** : les coordonnées brutes du robot (champ 26 du
+schéma) permettraient de mesurer l'écart entre position satellite et
+position calculée. L'outil le calcule quand elles arrivent, l'affiche, et le
+trace sur la carte au-delà de 0,20 m. La garde de reprise (SEC-12) exige
+alors un écart de 0,30 m au plus — **seulement si ces coordonnées sont en
+double précision** ; en simple précision (cas de l'origine de la carte),
+l'écart n'est qu'indicatif et ne bloque rien. Tant qu'aucune trame réelle
+n'a été capturée, cette partie n'est vérifiée que sur des trames construites
+d'après le schéma.
+
+**Aucune commande de recalage n'est émise.** Les codes 47 et l'entrée de
+localisation du schéma n'ont jamais été essayés par personne : l'outil ne les
+encode pas, et sa liste blanche les refuse. Le « recalage assisté » proposé
+quand l'écart est trop grand ne fait que charger dans la séquence un
+aller-retour en ligne droite (deux pas en avant, deux en arrière), à
+n'émettre qu'en zone dégagée : pratique décrite par la communauté, effet non
+garanti, jamais essayé sur ce robot. Sinon : retour à la base, ou
+redémarrage du robot.
+
+## Obstacles : ce que l'outil protège, ce qu'il ne voit pas
+
+On ignore si le robot garde sa propre détection (ultrasons, vision,
+pare-chocs) en pilotage manuel : rien dans les sources ne le dit, et les
+550 trames reçues pendant les pilotages réels du 2026-10-12 ne portent
+aucun code d'erreur ni d'avertissement, ni aucun champ de perception —
+mais aucun obstacle n'a été approché ce jour-là. L'outil se protège donc
+avec ce qu'il voit :
+
+- **la carte** (SEC-13) : il ne laisse pas un pas sortir des zones connues ;
+- **les indices de choc** (SEC-14) : il s'arrête si le robot annonce un
+  choc ou cesse d'avancer — donc APRÈS le contact, pas avant ;
+- **l'allure** : lente près d'un bord ou quand la position est douteuse.
+
+Il **ne voit pas** : un obstacle absent de la carte (mur non cartographié,
+mobilier, outil laissé au sol), une personne, un animal. Le pilotage se
+fait robot à vue ou caméra ouverte, main sur STOP.
+
+**Essai conseillé, robot à vue** : en pilotage manuel, allure lente, pas de
+0,25 m, approcher un carton vide posé sur la pelouse. Si le robot s'arrête
+de lui-même avant ou au contact, sa détection reste active en pilotage
+manuel ; noter alors le code affiché. S'il pousse le carton, elle ne l'est
+pas : seuls les garde-fous ci-dessus protègent.
+
+## Retour vers le bon signal
+
+But : quand le robot a perdu sa position précise, le ramener là où le signal
+était bon, puis reprendre la tonte. **Mode assisté seulement : rien ne
+s'exécute tout seul.**
+
+- **Relevé.** Tant que l'interface est ouverte et reliée au robot — tonte
+  normale comprise, en écoute seule —, la précision annoncée est relevée par
+  position, avec sa date (`releve-precision.jsonl`, hors dépôt). La carte
+  l'affiche (case « précision relevée ») ; « derniers 30 jours » écarte les
+  relevés anciens.
+- **Bon signal le plus proche** (onglet « Carte »). Les points relevés à
+  0,10 m ou mieux sont regroupés ; la cible proposée est le groupe le plus
+  proche du robot situé dans une zone de tonte (à 0,5 m au moins de son
+  contour) ou sur un passage, hors zones interdites. La carte montre la
+  cible, la distance et le cap à prendre.
+- **Trajet proposé.** Ligne droite si elle tient dans les zones et les
+  passages ; sinon un contournement simple par les sommets des contours ;
+  sinon l'outil le dit et ne propose que le cap. Le trajet est découpé en pas
+  admis par SEC-02 (avances de 2 m au plus, rotations sous l'angle maximal
+  demandable). « Charger le trajet dans la séquence » le place dans la
+  séquence : vous prévisualisez et émettez comme d'habitude, ou vous pilotez
+  à la main en suivant le tracé. Pendant son exécution, la séquence s'arrête
+  d'elle-même dès que la précision redevient fiable (« objectif atteint »).
+- **Ensuite.** Position fiable, robot en pause : la page propose « Reprendre »
+  (la garde SEC-12 passe ; les lames redémarrent).
+- **Limites.** Quand le signal est perdu, la position du robot est
+  incertaine : son point porte un cercle au rayon annoncé et le trajet est
+  dit « indicatif, surveillez la caméra ». Les obstacles non cartographiés
+  sont ignorés. Le calcul est borné à 3 s : sur une grande carte, un détour
+  long à travers plusieurs zones n'est souvent pas trouvé, et seul le cap est
+  proposé. Jamais essayé en réel.
 
 ## Calibration (robot à vue, zone dégagée, main sur le bouton STOP)
 
@@ -289,7 +439,16 @@ réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même
    à 0,25 m/s a produit environ 2 m réels, mesurés à l'œil par le
    propriétaire — facteur de distance voisin de 1,0 à cette vitesse, trame
    variante `mqtt`, version 49. `calibration.toml` n'a pas été modifié ;
-   rotation et autres vitesses restent à mesurer.
+   Constat du même jour, 15 h 32 à 15 h 39 (`lymow calibration-constat` sur le
+   journal réel) : 12 rotations de 45° commandées à 0,35 rad/s, 30 à 42°
+   mesurés, rapport mesuré / commandé 0,788 → **`facteur_angle = 0.79`
+   appliqué** dans `calibration.toml` (décision du propriétaire). « tourner
+   45 » dure donc 2,84 s au lieu de 2,24 s, et l'angle maximal demandable par
+   ordre devient 142° : « tourner 180 » est refusé avec ce maximum (SEC-02 :
+   jamais plus de 180° commandés). Distance : rapport 0,94 sur 11 pas à
+   0,25 m/s (0,81 à 1,02), **non appliqué** — `facteur_distance` reste 1.0.
+   Réserve : ces mesures sont la position annoncée par le robot, alors
+   imprécise de plus d'un mètre ; à reprendre position fiable.
 4. Vérifier à l'œil que les lames sont à l'arrêt dans les statuts pause (3),
    erreur (7) et télécommande (6).
 5. `lymow plateau 60 --reel` puis `lymow plateau-haut --reel` : effet réel de
@@ -399,6 +558,66 @@ réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même
   « émise, non vérifiable »…, pourquoi la séquence s'est arrêtée, et les
   étapes restantes ; la page propose « Reprendre à l'étape N », qui repasse
   par Prévisualiser puis Émettre.
+- **SEC-12 Reprise et qualité de localisation** (constat du 2026-10-12 :
+  après une perte de signal, la position annoncée suit les manœuvres mais
+  reste imprécise de 1,1 à 1,5 m, et la tonte reprise ainsi « fait n'importe
+  quoi »). La qualité se lit sur la précision horizontale en mètres que le
+  robot annonce à chaque trame : **fiable** jusqu'à 0,10 m, **dégradée**
+  jusqu'à 0,50 m, **perdue** au-delà ou si elle est inconnue. Elle est
+  affichée dans l'en-tête et sous la vidéo (« position : ±1,32 m —
+  perdue »). `reprendre` est refusé quand elle n'est pas fiable, avec ce
+  qu'il faut faire ; « Reprendre quand même » (page) ou
+  `lymow reprendre --position-imprecise-acceptee` lève la garde, sur
+  confirmation, et le journal le note (`reprise-forcee`) : c'est une aide,
+  pas un verrou. Le retour à la base porte le même avertissement, sans
+  blocage. Dans les trames réelles, seuls existent : satellites, précision
+  horizontale, précision verticale, qualité, état du nœud de localisation ;
+  ni l'âge des corrections RTK ni l'état du lien radio de la base n'y
+  figurent.
+- **SEC-13 Garde-fou carte** (avance et recul réels). Avant d'émettre, le
+  pas est projeté depuis la pose et le cap connus sur la carte de référence.
+  Le robot doit rester dans les zones de tonte et les passages, hors zones
+  interdites, en gardant devant lui une marge de 0,30 m plus l'incertitude
+  de position annoncée. Sinon le pas est **raccourci** à la plus grande
+  distance sûre, et c'est annoncé (« pas réduit à 0,55 m : bord de zone
+  devant à 0,85 m ») ; s'il reste moins de 0,25 m, il est **refusé**.
+  « Forcer ce pas » (case de la page, une confirmation, un seul pas) ou
+  `lymow avancer 1 --forcer` passe outre — la carte peut être fausse, et il
+  faut pouvoir sortir d'une zone — et le journal le note
+  (`garde-carte-forcee`). Sans pose, sans carte de référence ou robot hors
+  des zones : aucun garde-fou possible, dit en clair (« distance au bord
+  inconnue »), sans blocage. La page affiche « bord de zone devant : 2,4 m ».
+  Limites : seule la distance dans l'axe du pas est jugée (un bord latéral
+  proche ne l'est pas) ; une pose reçue il y a plus de 5 s ne compte plus
+  (« distance au bord inconnue : position du robot trop ancienne ») ; la
+  rotation n'est pas concernée. Le raccourcissement ou le refus est annoncé
+  dès la prévisualisation, étape par étape.
+- **SEC-14 Arrêt sur indice de choc** pendant un mouvement : arrêt immédiat
+  si un code d'erreur ou d'avertissement de choc, pare-chocs, ultrasons,
+  soulèvement, blocage ou patinage **apparaît** (un code déjà présent au
+  départ n'empêche pas de dégager le robot) ; si le statut passe à erreur
+  ou arrêt d'urgence (SEC-01) ; ou si la position n'avance plus alors que
+  les consignes continuent (moins de 20 % de l'attendu sur 1,5 s, après
+  1 s d'élan) : « obstacle ou patinage : arrêt ». Ce dernier contrôle
+  n'opère que si la position arrive au moins chaque seconde ; sinon le
+  bilan dit « surveillance de progression inactive ».
+- **Allure.** Liste « Allure » à côté des pas : auto, lente (0,10 m/s),
+  normale (0,25 m/s). En auto, l'allure lente est prise quand l'arrivée est
+  à moins de 1 m d'un bord de zone ou quand la position est dégradée ou
+  perdue ; c'est annoncé au bilan. Un ordre dure 9 s au plus (SEC-02) : un
+  pas trop long pour 0,10 m/s garde sa longueur et prend la plus faible
+  vitesse qui tient (0,12 m/s pour 1 m, 0,23 m/s pour 2 m). Pour rester
+  vraiment lent, choisir un pas de 0,5 m.
+- **Retrouver le signal.** Après chaque pas, le retour donne la précision et
+  sa tendance (« position ±0,84 m ↘ en amélioration »). La précision est
+  relevée par position dans `releve-precision.jsonl` (dossier de données,
+  hors dépôt ; un point au plus tous les 2 m ou 30 s) et la carte peut
+  l'afficher (case « précision relevée » : vert, orange, rouge).
+- **Rendre la main à l'application** (barre de commande) : ferme la liaison
+  de l'outil et suspend sa reconnexion automatique jusqu'à « Reprendre la
+  liaison » ; retire l'attestation et l'armement direct ; n'émet rien vers
+  le robot ; refusé pendant un mouvement. Si le robot est encore en
+  télécommande, la page propose d'attendre son retour en pause.
 - **Diagnostic des ordres réels** : pendant un ordre réel (et 20 s après,
   depuis la page), les trames reçues sont enregistrées telles quelles dans
   `captures/ordre-<horodatage>/`, au format de `lymow capture`. Jamais
@@ -434,7 +653,8 @@ Secrets : seul le jeton de rafraîchissement est conservé, dans le Gestionnaire
 d'identification Windows (service `lymow-pilotage`), avec la région,
 l'identifiant d'appareil et la méthode de connexion. Rien dans un fichier.
 
-En lecture, trois messages « requête pure » peuvent partir, et eux seuls,
+En lecture, ces messages « requête pure » peuvent partir, et eux seuls
+(avec les deux demandes de diagnostic RTK, voir « Localisation »),
 contrôlés sur la structure exacte de leurs octets : le battement de présence
 (`appConnect = 2` + identifiant de session), la demande de configuration
 (`version` + champ 9 `{10: 1}`) et la demande de carte entière (`version`,

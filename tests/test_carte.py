@@ -95,8 +95,11 @@ def test_zone_par_identifiant_ou_par_nom_jamais_d_a_peu_pres(carte):
 
 def test_reponse_de_trajet_capturee_par_le_socle_n_est_pas_prise_pour_une_carte(session):
     capture = base64.b64decode((Path(__file__).parent / "donnees" / "reponse_trajet_ha_lymow.b64").read_text().strip())
-    brut = pb.extract_raw_map_content(capture)
-    assert isinstance(brut, bytes) and len(brut) > 1000  # même enveloppe f23 → f2 → f3 qu'une carte
+    # Même enveloppe f23 → f2 → f3 qu'une carte, mais avec le drapeau de trajet (f23.f3) : écartée dès le socle.
+    assert pb.extract_raw_map_content(capture) is None
+    champs = pb._decode_fields(pb._first(pb._decode_fields(capture), 23))
+    brut = pb._first(pb._decode_fields(pb._first(champs, 2)), 3)
+    assert isinstance(brut, bytes) and len(brut) > 1000 and pb._first(champs, 3) == 1
     with pytest.raises(cartes.CarteIllisible):
         cartes.decoder(brut)
     session.recevoir_etat({"mapRaw": brut})
@@ -861,12 +864,16 @@ AJUSTEMENT = {"zone": "zoneA1", "de": 0, "a": 2, "cm": 20, "cote": "court", "rac
 def test_page_carte_en_simulation_lecture_et_previsualisation_sans_emission(tmp_path, monkeypatch, session_reelle, lien):
     from test_ui import executer, lire, poster, serveur_ui
 
+    from lymow_pilotage import ui
+
     lien.carte = contenu()
+    # La demande d'office de l'ouverture (testée ailleurs) est neutralisée : ce test part d'un serveur sans carte.
+    monkeypatch.setattr(ui.ServeurUI, "_demander_la_carte_d_office", lambda self: None)
 
     async def scenario():
         async with serveur_ui(tmp_path, monkeypatch, reel=False, session=session_reelle) as (serveur, http):
             statut, texte, _recus = await lire(http, serveur, "/api/carte")
-            assert statut == 200 and json.loads(texte) == {"carte": None}
+            assert statut == 200 and json.loads(texte) == {"carte": None, "note": None}
             statut, corps, _recus = await poster(http, serveur, "/api/carte/previsualiser", AJUSTEMENT)
             assert statut == 409  # pas de carte en mémoire
             statut, corps, recus = await poster(http, serveur, "/api/carte/actualiser")

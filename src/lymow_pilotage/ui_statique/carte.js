@@ -15,9 +15,16 @@
   var PROCHE_PX = 10; // distance maximale d'un clic à un sommet
   var carte = null;
   var robot = null;
+  var etatRobot = null;
+  var chargement = false;
+  var cadreeVisible = false;
+  var dejaCadree = false;
+  var CADRE_ROBOT_M = 40; // cadrage initial : le robot et une quarantaine de mètres autour
   var apercu = null;
   var vue = { x: -10, y: -10, l: 20, h: 15 };
   var glisse = null;
+  var signal = null; // bon signal le plus proche : cible, trajet proposé
+  var releve = []; // précision relevée : [est, nord, précision, qualité]
 
   function $(id) { return document.getElementById(id); }
 
@@ -113,6 +120,13 @@
         }), "station de charge"));
       }
     }
+    if ($("carte-precision").checked) {  // couche optionnelle : où le signal décroche, où il revient
+      releve.forEach(function (point) {
+        dessin.appendChild(titre(svg("circle", "releve " + point[3], {
+          cx: point[0], cy: -point[1], r: 4 * parPixel
+        }), "précision relevée : ±" + point[2] + " m (" + point[3] + ")"));
+      });
+    }
     if (apercu) {
       dessin.appendChild(svg("polygon", "carte-ancien", { points: points(apercu.avant) }));
       dessin.appendChild(svg("polygon", "carte-nouveau", { points: points(apercu.apres) }));
@@ -128,13 +142,35 @@
         dessin.appendChild(titre(svg("circle", "carte-sommet" + (borne ? " borne" : ""), { cx: p[0], cy: -p[1], r: rayon }), "sommet " + indice));
       });
     }
+    if (signal && signal.trajet) {
+      dessin.appendChild(titre(svg("polyline", "carte-trajet", { points: points(signal.trajet) }), "trajet proposé vers le bon signal"));
+    }
+    if (signal && signal.cible) {
+      dessin.appendChild(titre(svg("circle", "carte-cible", {
+        cx: signal.cible.est_m, cy: -signal.cible.nord_m, r: 7 * parPixel
+      }), "bon signal le plus proche : " + signal.cible.distance_m + " m, cap " + signal.cible.cap_deg + "°"));
+    }
+    // Position satellite brute : marqueur distinct, relié à la pose quand l'écart dépasse 0,20 m.
+    if (robot && robot.source === "pose" && etatRobot && etatRobot.position_brute) {
+      var brute = etatRobot.position_brute;
+      if (typeof etatRobot.ecart_brut_m === "number" && etatRobot.ecart_brut_m > 0.20) {
+        dessin.appendChild(svg("line", "carte-ecart", { x1: robot.est, y1: -robot.nord, x2: brute[0], y2: -brute[1] }));
+      }
+      dessin.appendChild(titre(svg("circle", "carte-brute", { cx: brute[0], cy: -brute[1], r: 4 * parPixel }),
+        "position satellite brute — " + (etatRobot.localisation_detail || "")));
+    }
+    if (robot && robot.rayon) {  // cercle d'incertitude, au rayon annoncé par le robot
+      dessin.appendChild(titre(svg("circle", "carte-incertitude", {
+        cx: robot.est, cy: -robot.nord, r: robot.rayon
+      }), "incertitude de position : ±" + robot.rayon + " m"));
+    }
     if (robot) {
       var unite = SYMBOLE_PX * parPixel;
       dessin.appendChild(titre(svg("polygon", "carte-robot", {
         points: [[1.8, 0], [-1.2, 1.1], [-1.2, -1.1]].map(function (p) { return p[0] * unite + "," + p[1] * unite; }).join(" "),
         // Cap mesuré depuis l'est, sens trigonométrique ; l'axe vertical du dessin est inversé.
         transform: "translate(" + robot.est + " " + (-robot.nord) + ") rotate(" + (-robot.cap) + ")"
-      }), "robot"));
+      }), robot.source === "station" ? "robot (sur sa station : position non transmise au repos)" : "robot"));
     }
     afficherEchelle();
   }
@@ -158,6 +194,13 @@
     dessiner();
   }
 
+  /* Le robot apparaît dès qu'une pose est connue ; au repos sans pose, sur sa station, en le disant. */
+  function placerLeRobot() {
+    robot = window.LymowOrdres.positionAffichee(etatRobot, carte ? carte.station : null);
+    var note = robot ? robot.note : (etatRobot ? "position du robot inconnue" : "");
+    $("carte-position").textContent = note;
+  }
+
   function toutVoir() {
     var tous = [];
     if (carte) {
@@ -170,7 +213,7 @@
   }
 
   function cadrerSurLeRobot() {
-    if (robot) { cadrer([[robot.est, robot.nord]], 10); }
+    if (robot) { cadrer([[robot.est, robot.nord]], CADRE_ROBOT_M); }
   }
 
   function zoomer(facteur, centreX, centreY) {
@@ -282,11 +325,16 @@
     var incomplete = carte && carte.complete === false
       ? "CARTE INCOMPLÈTE (" + carte.manques.join(" ; ") + ") : affichage seul, aucune retouche possible — "
       : "";
-    $("carte-etat").textContent = carte
-      ? incomplete + "carte reçue à " + (reponse.heure || "?") + " (il y a " + Math.round(reponse.age_s) + " s)"
-      : "aucune carte : cliquez sur « Actualiser la carte »";
+    // Carte de référence (dernière carte complète, gardée sur disque) : dite comme telle, avec sa date.
+    var origine = reponse.reference
+      ? reponse.reference
+      : "carte reçue à " + (reponse.heure || "?") + (typeof reponse.age_s === "number" ? " (il y a " + Math.round(reponse.age_s) + " s)" : "");
+    $("carte-etat").textContent = carte ? incomplete + origine : "aucune carte reçue pour l'instant : elle est demandée à l'ouverture ; « Actualiser la carte » la redemande";
+    $("carte-note").textContent = reponse.note || "";
     afficherPossibilite();
-    toutVoir();
+    placerLeRobot();
+    // Premier affichage : le robot et ~40 m autour, pas tout le jardin ; « Tout voir » reste là.
+    if (carte && !dejaCadree) { dejaCadree = true; if (robot) { cadrerSurLeRobot(); } else { toutVoir(); } }
     dessiner();
   }
 
@@ -330,6 +378,34 @@
   $("carte-recadrer").addEventListener("click", toutVoir);
   $("carte-robot-cadrer").addEventListener("click", cadrerSurLeRobot);
   $("carte-noms").addEventListener("change", dessiner);
+  function lireReleve() {
+    if (!$("carte-precision").checked) { dessiner(); return; }
+    fetch("/api/releve", { credentials: "same-origin", cache: "no-store" })
+      .then(function (reponse) { return reponse.json(); })
+      .then(function (corps) { releve = corps.points || []; dessiner(); })
+      .catch(function () { return undefined; });
+  }
+  $("carte-precision").addEventListener("change", lireReleve);
+  // Bon signal le plus proche : proposition seulement (mode assisté) ; rien n'est émis d'ici.
+  $("signal-chercher").addEventListener("click", function () {
+    $("signal-etat").textContent = "recherche…";
+    fetch("/api/signal" + ($("signal-recent").checked ? "?jours=30" : ""), { credentials: "same-origin", cache: "no-store" })
+      .then(function (reponse) { return reponse.json(); })
+      .then(function (proposition) {
+        signal = proposition;
+        $("signal-etat").textContent = window.LymowOrdres.texteSignal(proposition) || "aucune proposition";
+        $("signal-charger").hidden = !(proposition.ordres && proposition.ordres.length);
+        dessiner();
+      })
+      .catch(function () { $("signal-etat").textContent = "proposition indisponible"; });
+  });
+  $("signal-charger").addEventListener("click", function () {
+    if (!signal || !signal.ordres) { return; }
+    page.chargerSequence(signal.ordres, "signal");
+    $("signal-etat").textContent = "Trajet chargé dans la séquence (" + signal.ordres.length
+      + " pas) : cochez « Composer une séquence », prévisualisez, puis émettez — ou suivez le tracé à la main.";
+  });
+  window.setInterval(function () { if ($("carte-precision").checked) { lireReleve(); } }, 15000);
   $("carte-zone").addEventListener("change", zoneChangee);
   ["carte-de", "carte-a"].forEach(function (id) { $(id).addEventListener("input", function () { apercu = null; dessiner(); }); });
   $("carte-ajustement").addEventListener("submit", previsualiserAjustement);
@@ -364,18 +440,38 @@
   window.addEventListener("resize", dessiner);
 
   window.LymowCarte = {
-    robot: function (etat) {
-      var connu = etat && typeof etat.position_est_m === "number" && typeof etat.position_nord_m === "number";
-      robot = connu ? { est: etat.position_est_m, nord: etat.position_nord_m, cap: etat.cap_deg || 0 } : null;
-      $("carte-rtk").textContent = etat && etat.rtk ? "— RTK : " + etat.rtk : "";
+    /* Le serveur connaît une carte que la page n'a pas encore (demandée d'office à l'ouverture) : la charger. */
+    connue: function (oui) { if (oui && !carte) { charger(); } },
+    /* L'onglet « Carte » vient d'être affiché : premier cadrage à sa taille réelle, puis dessin. */
+    montrer: function () {
+      if (!carte) { charger(); return; }
+      if (!cadreeVisible) { cadreeVisible = true; if (robot) { cadrerSurLeRobot(); } else { toutVoir(); } }
+      dessiner();
+    },
+    robot: function (etat, bord) {
+      etatRobot = etat;
+      placerLeRobot();
+      // SEC-13 : la distance au bord de zone dans l'axe du robot est dite sur la carte.
+      $("carte-rtk").textContent = (etat && etat.localisation_texte ? "— " + etat.localisation_texte : "") + (bord ? " — " + bord : "");
       $("carte-robot-cadrer").disabled = !robot;
       $("carte-robot-cadrer").title = robot ? "" : "position du robot inconnue";
+      // « Suivre le robot » : la vue reste centrée sur lui, sans changer le zoom.
+      if (robot && robot.source === "pose" && $("carte-suivre").checked && !glisse) {
+        vue.x = robot.est - vue.l / 2;
+        vue.y = -robot.nord - vue.h / 2;
+      }
       dessiner();
     }
   };
 
-  fetch("/api/carte", { credentials: "same-origin", cache: "no-store" })
-    .then(function (reponse) { return reponse.json(); })
-    .then(recevoir)
-    .catch(function () { return undefined; });
+  function charger() {
+    if (chargement) { return; }
+    chargement = true;
+    fetch("/api/carte", { credentials: "same-origin", cache: "no-store" })
+      .then(function (reponse) { return reponse.json(); })
+      .then(recevoir)
+      .catch(function () { return undefined; })
+      .then(function () { chargement = false; });
+  }
+  charger();
 })();

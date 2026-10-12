@@ -113,12 +113,13 @@ def test_direct_armement_expire_apres_soixante_secondes_sans_action(tmp_path, mo
         {"direction": "haut", "pas": 1, "ordres": [{"nom": "reprendre"}]}, {"direction": "haut", "pas": 1, "duree": 9},
     ],
 )
-def test_direct_ordre_ou_pas_hors_liste_refuse_et_desarme(tmp_path, monkeypatch, session_reelle, lien, demande):
+def test_direct_ordre_ou_pas_hors_liste_refuse_sans_desarmer(tmp_path, monkeypatch, session_reelle, lien, demande):
+    # Revue du 2026-10-12 : un refus de validation ne désarme pas (seuls un refus de sécurité ou un échec d'émission).
     async def scenario():
         async with serveur_ui(tmp_path, monkeypatch, reel=True, session=session_reelle) as (serveur, http):
             jeton = await armer(http, serveur)
             statut, _corps, _recus = await poster(http, serveur, "/api/direct/fleche", {"jeton": jeton} | demande)
-            assert statut == 400 and serveur.instantane()["direct"]["arme"] is False
+            assert statut == 400 and serveur.instantane()["direct"]["arme"] is True
             assert lien.ordres == [] and serveur.tache is None
 
     executer(scenario())
@@ -150,7 +151,7 @@ def test_direct_emet_chaque_fleche_par_le_chemin_des_ordres_et_enchaine_la_file(
             assert statut == 202 and corps["jeton"] != jeton
             statut, corps, _recus = await fleche(http, serveur, corps["jeton"], "gauche", 15)  # pendant le mouvement
             assert statut == 202 and corps["file"] == ["tourner 15"]
-            assert serveur.instantane()["direct"]["file"] == [{"nom": "tourner", "valeur": 15.0, "vitesse": None, "duree": None}]
+            assert serveur.instantane()["direct"]["file"] == [{"nom": "tourner", "valeur": 15.0, "vitesse": None, "duree": None, "force": False}]
             await attendre(lambda: not serveur.occupe, delai=8.0)
             direct = serveur.instantane()["direct"]
             assert direct["arme"] is True and direct["file"] == []  # toujours armé après deux pas réussis
@@ -259,20 +260,23 @@ def test_page_du_pave_etat_complet_et_garde_fous_visibles(tmp_path, monkeypatch)
     assert executer(scenario()) == {
         "distances_m": [0.25, 0.5, 1.0, 2.0], "angles_deg": [15.0, 45.0, 90.0],
         "distance_defaut_m": 1.0, "angle_defaut_deg": 45.0, "file_max": 5, "armement_s": 60.0,
+        "allures": {"auto": None, "lente": 0.10, "normale": 0.25},
     }
     page = (ui.STATIQUE / "index.html").read_text(encoding="utf-8")
     script = (ui.STATIQUE / "pave.js").read_text(encoding="utf-8")
     assert "PILOTAGE DIRECT ARMÉ" in page and 'id="bandeau-direct"' in page and "Échap ou Espace" in page
-    # La vidéo et les flèches partagent le même cadre, dans le bloc principal.
+    # Commandes à gauche, puis la caméra à droite, flèches en surimpression de la caméra.
     assert page.index('id="bloc-pilotage"') < page.index('id="bloc-fleches"') < page.index('id="video"') < page.index('data-fleche=')
-    for identifiant in ("pave-miniature", "pave-total", "pave-retours", "pave-file", "direct-interrupteur", "fleches-bascule"):
+    for identifiant in ("pave-miniature", "pave-total", "pave-retours", "pave-file", "composer", "fleches-bascule"):
         assert f'id="{identifiant}"' in page and f'"{identifiant}"' in script
     assert page.count("data-fleche=") == 4
     # Mode file : la flèche écrit dans LA séquence de la page ; aucune émission sans les deux temps.
     assert "page.ajouterEtape(etape)" in script and "/api/emettre" not in script and "/api/previsualiser" not in script
     assert "window.confirm(" in script and '"/api/direct/armer", { confirmer: true }' in script
-    assert "Fleches.actionClavier(touche)" in script and "evenement.repeat" in script
-    assert 'panneau.addEventListener("keydown"' in script and 'document.addEventListener("keydown"' not in script
+    # Clavier : capté au niveau du document, en phase de capture ; la décision est dans fleches.js.
+    assert "Fleches.interception({" in script and "repeat: evenement.repeat" in script
+    assert 'document.addEventListener("keydown", function (evenement) {' in script and "}, true);" in script
+    assert 'panneau.addEventListener("keydown"' not in script and "focusout" not in script and ".focus()" not in script
     assert 'navigator.sendBeacon("/api/direct/desarmer")' in script
 
 

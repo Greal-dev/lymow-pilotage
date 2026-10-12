@@ -60,7 +60,10 @@ class Session:
         self.etat = Etat()
         self.carte_brute: tuple[bytes, float] | None = None
         self.tranche_carte: tuple[bytes, float] | None = None  # dernière réponse de carte, telle quelle
+        self.sur_etat: Callable[[Any, float], None] | None = None  # observateur facultatif de chaque état reçu
         self.arret_en_cours = False
+        # SEC-13 : carte de référence posée par l'appelant (page ou commande) ; absente, pas de garde-fou carte.
+        self.carte_reference: Any = None
         # SEC-01b : posée par l'appelant (page ou commande), jamais par la session elle-même.
         self.attestation: Attestation | None = None
         self._differes: list[tuple[str, dict[str, Any]]] = []
@@ -89,15 +92,20 @@ class Session:
         carte = fragment.pop("mapRaw", None)
         if isinstance(carte, bytes):
             # Octets gardés tels quels : la sauvegarde (SEC-09) et la comparaison (SEC-11) en dépendent.
+            # Une réponse n'est qu'une tranche, et pas forcément une carte : seul `carte.demander`, qui
+            # assemble et décode strictement, pose `carte_brute`. Une réponse non demandée ne chasse
+            # donc jamais la carte en mémoire (constat du 2026-10-12 : trajets diffusés pendant une tâche).
             self.tranche_carte = (carte, instant)
-            # Une réponse pleine (81 920 octets) n'est qu'une tranche : `carte.demander` assemble.
-            if len(carte) < protocole.TAILLE_TRANCHE_CARTE:
-                self.carte_brute = (carte, instant)
             self.journaliser("carte-recue", octets=len(carte))
         self.etat.appliquer(fragment, instant)
         # Un état émis à l'instant par le robot vaut preuve de présence.
         self.etat.en_ligne = True
         self.journaliser("etat-recu", **self.etat.resume(instant))  # SEC-06
+        if self.sur_etat is not None and not self.arret_en_cours:  # SEC-03 : rien d'autre pendant un arrêt
+            try:
+                self.sur_etat(self.etat, instant)
+            except Exception:  # noqa: BLE001 — un observateur (relevé de précision) ne gêne jamais la réception
+                self.sur_etat = None
         self._controler_attestation()
 
     def recevoir_presence(self, en_ligne: bool, retenu: bool = False) -> None:

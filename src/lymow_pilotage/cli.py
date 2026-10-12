@@ -19,7 +19,7 @@ from typing import Any
 
 import aiohttp
 
-from . import auth, capture, carte, compte, conduite, config, journal, liaison, mouvement, rappel, retouche, securite
+from . import auth, calibrage, capture, carte, compte, conduite, config, journal, liaison, mouvement, protocole, rappel, reference, retouche, securite
 from .conduite import CODE_ARRET_NON_CONFIRME, CODE_REFUS
 from .journal import Journal, masquer
 from .mouvement import ErreurSaisie, Ordre
@@ -94,6 +94,10 @@ def construire_analyseur() -> argparse.ArgumentParser:
     )
     ecoute.add_argument("--carte", action="store_true", help="demander aussi la carte entière (lecture)")
     ecoute.add_argument(
+        "--rtk", action="store_true",
+        help="demander aussi le diagnostic RTK toutes les 5 s (lecture : âge des corrections, lien de la base…)",
+    )
+    ecoute.add_argument(
         "--dossier", default=None, metavar="D",
         help=f"dossier des captures (défaut : {capture.DOSSIER}/ du dossier de données)",
     )
@@ -111,6 +115,11 @@ def construire_analyseur() -> argparse.ArgumentParser:
     for nom, aide, unite, unite_vitesse, plafond in mouvements:
         fils_mouvement = ajouter(nom, f"{aide} : <{unite}> ou --duree S")
         fils_mouvement.add_argument("valeur", type=nombre, nargs="?", default=None, metavar=unite)
+        if nom != "tourner":
+            fils_mouvement.add_argument(
+                "--forcer", action="store_true",
+                help="passer outre le garde-fou carte (SEC-13) pour ce pas : la carte peut être fausse ; journalisé",
+            )
         fils_mouvement.add_argument(
             "--vitesse", type=nombre, default=None, metavar="V",
             help=f"vitesse en {unite_vitesse}, de 0.05 à {plafond:g} (défaut : {plafond:g})"
@@ -146,7 +155,16 @@ def construire_analyseur() -> argparse.ArgumentParser:
         "annuler": "annuler la tâche, arrêt sur place",
     }
     for nom in _ORDRES_SIMPLES:
-        ajouter(nom, aides[nom])
+        simple = ajouter(nom, aides[nom])
+        if nom == "reprendre":
+            simple.add_argument(
+                "--position-imprecise-acceptee", action="store_true",
+                help="reprendre même si la position du robot est imprécise (SEC-12 : sinon refusé ; journalisé)",
+            )
+    ajouter(
+        "calibration-constat",
+        "hors ligne : rapport mesuré / commandé des ordres réels du journal, et facteurs suggérés (rien n'est modifié)",
+    )
     sequence = ajouter(
         "sequence", 'enchaîner : "plateau 90; tourner 45 --vitesse 0.2; reculer --duree 2 --vitesse 0.1"'
     )
@@ -232,7 +250,9 @@ def _ordres(args: argparse.Namespace) -> list[Ordre]:
     if args.commande == "sequence":
         return mouvement.analyser_sequence(args.etapes)
     lire = lambda nom: getattr(args, nom, None)  # noqa: E731
-    return [Ordre(args.commande, lire("valeur"), lire("vitesse"), lire("duree"))]
+    if args.commande == "reprendre" and lire("position_imprecise_acceptee"):
+        return [Ordre(mouvement.REPRISE_FORCEE)]  # SEC-12 : garde levée explicitement
+    return [Ordre(args.commande, lire("valeur"), lire("vitesse"), lire("duree"), bool(lire("forcer")))]
 
 
 def _sans_echec(fonction: Any) -> Any:
@@ -258,6 +278,8 @@ async def _emettre(ordres: list[Ordre], ctx: Contexte, attestee: bool = False) -
     try:
         async with liaison.ouvrir_session(ctx.journal, ctx.cal, _AUTORISEES_ORDRES, brut=brut) as session:
             en_arret[0] = lambda: session.arret_en_cours
+            lue = None if ctx.dossier is None else reference.charger(ctx.dossier, session.appareil)
+            session.carte_reference = None if lue is None else lue[0]  # SEC-13
             if not attestee:
                 return await conduite.emettre_ordres(session, ordres, ctx.journal)
             # SEC-01b : attestation de cette invocation seulement ; elle meurt avec la commande.
@@ -290,6 +312,11 @@ async def _commande_ordres(args: argparse.Namespace, ctx: Contexte) -> tuple[Any
     return {"mode": bilan["mode"], "ordre": str(ordres[0]), "echec": bilan["motif"]} | resume, code
 
 
+async def _commande_calibration(_args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
+    resultat = calibrage.constat(ctx.dossier, ctx.cal)
+    return resultat, 0 if resultat["constats"] else 1
+
+
 async def _commande_etat(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
     autorisees = frozenset() if args.passif else _LECTURE
     async with liaison.ouvrir_session(ctx.journal, ctx.cal, autorisees) as session:
@@ -316,7 +343,16 @@ async def _commande_capture(args: argparse.Namespace, ctx: Contexte) -> tuple[An
             except (EchecOrdre, carte.CarteIllisible) as erreur:
                 verdict = str(erreur)
         fin = session.horloge() + args.secondes
+        prochaine = session.horloge()
         while session.horloge() < fin and session.lien.connecte:
+            if args.rtk and session.horloge() >= prochaine:  # requêtes pures, à la cadence du socle
+                prochaine = session.horloge() + protocole.PERIODE_DIAGNOSTIC_RTK_S
+                try:
+                    await session.publier(protocole.trame_presence(session._identifiant), 3.0)
+                    for niveau in (1, 2):
+                        await session.publier(protocole.trame_diagnostic_rtk(session.cal, niveau), 3.0)
+                except EchecOrdre:
+                    pass
             await session.dormir(min(1.0, fin - session.horloge()))
         coupee = not session.lien.connecte
     bilan = ecoute.resume() | {"secondes": args.secondes, "carte_demandee": args.carte}
@@ -518,7 +554,7 @@ _COMMANDES = {
     "carte": _commande_carte, "ajuster-zone": _commande_ajuster, "restaurer-zone": _commande_restaurer,
     "connexion": _commande_connexion, "deconnexion": _commande_deconnexion,
     "diagnostic": _commande_diagnostic, "etat": _commande_etat, "capture": _commande_capture,
-    "ui": _commande_ui,
+    "ui": _commande_ui, "calibration-constat": _commande_calibration,
 }
 
 def _lignes(objet: Any, retrait: int = 0) -> list[str]:

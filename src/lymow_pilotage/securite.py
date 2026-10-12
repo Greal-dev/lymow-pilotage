@@ -202,7 +202,9 @@ def _vitesse(demande: float | None, plafond: float, plancher: float, nom: str, s
     return demande
 
 
-def _duree(consigne: float, vitesse: float, facteur: float, plafond: float) -> float:
+def _duree(
+    consigne: float, vitesse: float, facteur: float, plafond: float, affichage: tuple[float, str, int] | None = None
+) -> float:
     """Durée d'émission ; `consigne` et `plafond` dans la même unité (m ou rad)."""
     facteur = _nombre_fini(facteur, "facteur de calibration")
     if facteur <= 0:
@@ -211,9 +213,20 @@ def _duree(consigne: float, vitesse: float, facteur: float, plafond: float) -> f
     commande = consigne / facteur
     if commande > plafond * (1 + 1e-9):
         raise RefusSecurite(
-            "déplacement commandé au-dessus du plafond une fois le facteur de calibration appliqué (SEC-02)"
+            "déplacement commandé au-dessus du plafond une fois le facteur de calibration appliqué"
+            + _maximum_demandable(facteur, affichage)
+            + " (SEC-02)"
         )
     return _duree_bornee(commande / vitesse)
+
+
+def _maximum_demandable(facteur: float, affichage: tuple[float, str, int] | None) -> str:
+    """« … le maximum demandable par ordre est 142° » : plafond × facteur, arrondi vers le bas."""
+    if affichage is None:
+        return ""
+    plafond, unite, pas_par_unite = affichage
+    valeur = math.floor(plafond * facteur * pas_par_unite + 1e-9) / pas_par_unite
+    return f" : avec le facteur {facteur:g}, le maximum demandable par ordre est {valeur:g}{unite}"
 
 
 def _duree_bornee(duree: float) -> float:
@@ -257,7 +270,10 @@ def consigne_translation(
     metres = _nombre_fini(metres, "distance")
     if metres == 0 or abs(metres) > DISTANCE_MAX_M:
         raise RefusSecurite(f"distance refusée : entre 0 (exclu) et {DISTANCE_MAX_M:g} m par ordre (SEC-02)")
-    tenue = _duree(abs(metres), v, facteur_distance, DISTANCE_MAX_M)
+    tenue = _duree(
+        abs(metres), v, facteur_distance, DISTANCE_MAX_M,
+        (DISTANCE_MAX_M, " m", 100),
+    )
     return Consigne(math.copysign(v, metres), 0.0, tenue, "translation", metres)
 
 
@@ -285,7 +301,10 @@ def consigne_rotation(
     degres = _nombre_fini(degres, "angle")
     if degres == 0 or abs(degres) > ANGLE_MAX_DEG:
         raise RefusSecurite(f"angle refusé : entre 0 (exclu) et {ANGLE_MAX_DEG:g}° par ordre (SEC-02)")
-    tenue = _duree(math.radians(abs(degres)), v, facteur_angle, math.radians(ANGLE_MAX_DEG))
+    tenue = _duree(
+        math.radians(abs(degres)), v, facteur_angle, math.radians(ANGLE_MAX_DEG),
+        (ANGLE_MAX_DEG, "°", 1),
+    )
     return Consigne(0.0, math.copysign(v, degres) * signe, tenue, "rotation", degres)
 
 
@@ -303,6 +322,60 @@ def consigne_essai(vitesse: float | None, observation: float | None) -> Consigne
         )
     return Consigne(v, 0.0, fenetre, "translation", v * fenetre)
 
+
+
+# SEC-12 — qualité de localisation, jugée sur la PRÉCISION HORIZONTALE en mètres annoncée par le robot
+# (sous-champ 2 de la localisation). Constat du 2026-10-12 : 0,03 m le matin sur la station ; 1,14 à
+# 1,55 m pendant un pilotage après perte du signal, et la tonte reprise ensuite « fait n'importe quoi ».
+# Fiable jusqu'à 0,10 m ; dégradée jusqu'à 0,50 m ; perdue au-delà, ou inconnue.
+PRECISION_FIABLE_M = 0.10
+PRECISION_DEGRADEE_M = 0.50
+FIABLE, DEGRADEE, PERDUE = "fiable", "dégradée", "perdue"
+# Écart toléré entre la position satellite brute et la position calculée par le robot, quand il est
+# mesurable (coordonnées en double précision) : au-delà, la précision annoncée ne suffit pas.
+ECART_BRUT_MAX_M = 0.30
+ECART_BRUT_AFFICHE_M = 0.20  # au-delà, la carte relie les deux positions par un trait
+
+
+def qualite_position(precision_m: float | None) -> str:
+    if precision_m is None or not math.isfinite(precision_m) or precision_m < 0:
+        return PERDUE
+    return FIABLE if precision_m <= PRECISION_FIABLE_M else DEGRADEE if precision_m <= PRECISION_DEGRADEE_M else PERDUE
+
+
+def texte_precision(precision_m: float | None) -> str:
+    """« ±1,32 m », ou « précision inconnue » ; virgule décimale, comme le reste de la page."""
+    if precision_m is None or not math.isfinite(precision_m) or precision_m < 0:
+        return "précision inconnue"
+    return f"±{precision_m:.2f} m".replace(".", ",")
+
+
+def avertissement_position(precision_m: float | None, ecart_m: float | None = None) -> str | None:
+    """SEC-12 : ce que risque une tâche automatique lancée dans cet état ; rien si la position est fiable.
+
+    Fiable : précision de 0,10 m ou mieux ET, si l'écart entre position satellite brute et position
+    calculée est connu, écart de 0,30 m au plus (constat du 2026-10-12 : la précision est revenue de
+    1,32 m à 0,01 m, robot immobile, sans que la pose bouge — on ne sait pas si le filtre s'est recalé)."""
+    if qualite_position(precision_m) == FIABLE:
+        if ecart_m is not None and math.isfinite(ecart_m) and ecart_m > ECART_BRUT_MAX_M:
+            ecart = f"{ecart_m:.2f} m".replace(".", ",")
+            return (
+                f"Le signal est revenu mais la position calculée par le robot s'écarte de {ecart} de sa "
+                "position satellite : recalage conseillé."
+            )
+        return None
+    cible = f"±{PRECISION_FIABLE_M:.2f} m".replace(".", ",")
+    return (
+        f"Position imprécise ({texte_precision(precision_m)}) : la tonte reprendrait au mauvais endroit. "
+        f"Conduisez le robot vers un endroit dégagé jusqu'à {cible}, ou renvoyez-le à la base."
+    )
+
+
+def verifier_precision_pour_reprise(precision_m: float | None, ecart_m: float | None = None) -> None:
+    """SEC-12 : pas de reprise à l'aveugle. Une aide, pas un verrou : « reprendre quand même » existe."""
+    avertissement = avertissement_position(precision_m, ecart_m)
+    if avertissement:
+        raise RefusSecurite(f"{avertissement} (SEC-12)")
 
 
 # Statuts où la mise en pause rend la main : tonte (2, 8, 9), retour à la base (4), dégagement (14).

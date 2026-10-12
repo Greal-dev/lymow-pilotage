@@ -136,7 +136,7 @@ def test_liste_blanche_inchangee_et_appliquee_au_statut_vivant():
 
 
 def test_reprendre_et_pause_jugent_aussi_le_statut_vivant(session, lien):
-    lien.robot = etat_decode(3, 2)  # en pause, tâche de tonte : « reprendre » a quelque chose à reprendre
+    lien.robot = etat_decode(3, 2) | {"rtkEastM": 0.03}  # en pause, position fiable : « reprendre » peut partir
     assert lancer(mouvement.executer(session, Ordre("reprendre")))["codes_emis"] == [4]
     lien.robot = etat_decode(2, 2)
     lancer(session.solliciter())  # le robot annonce son nouvel état

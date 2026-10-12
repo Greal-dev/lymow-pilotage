@@ -21,71 +21,145 @@
     <h1>Lymow <small id="appareil"></small></h1>
     <p><span id="mode" class="pastille">…</span> <strong id="etat-resume"></strong> <span id="liaison"></span>
       <small id="version-serveur" class="version"></small></p>
-    <button id="stop" type="button" class="stop">STOP <small>Échap ou Espace</small></button>
+    <div class="main-boutons">
+      <span id="etat-main" class="etat-main" role="status"></span>
+      <button id="prendre-main" type="button" class="prendre" title="Un seul geste : rétablit la liaison si elle est suspendue, met le robot en pause s'il tond ou rentre à sa base, puis active les flèches.">Prendre la main</button>
+      <button id="rendre-main" type="button" class="rendre" title="Désactive les flèches, propose de laisser le robot en pause ou de reprendre la tâche, puis suspend la liaison pour laisser l'application Lymow se connecter.">Rendre la main</button>
+      <button id="stop" type="button" class="stop" title="Annule tout — mouvement, file d'attente, séquence, prévisualisation — puis arrête le robot et met la tâche en pause.">STOP <small>Échap ou Espace</small></button>
+    </div>
   </header>
+  </div>
+
+  <div id="rendre-choix" class="rendre-choix" role="alertdialog" aria-labelledby="rendre-titre" hidden>
+    <p id="rendre-titre"><strong>Rendre la main à l'application Lymow</strong></p>
+    <p id="rendre-message" class="note"></p>
+    <p class="actions">
+      <button id="rendre-pause" type="button">Laisser le robot en pause</button>
+      <button id="rendre-reprendre" type="button">Reprendre la tâche</button>
+      <button id="rendre-annuler" type="button">Annuler</button>
+    </p>
   </div>
 
   <main>
     <section id="bloc-pilotage" class="large-bloc" aria-labelledby="titre-pilotage">
       <h2 id="titre-pilotage" class="masque">Pilotage</h2>
-      <div id="bloc-fleches" class="cadre-pilotage" tabindex="0">
-        <div class="cadre-video" title="Cliquer dans la vidéo active les flèches">
-          <video id="video" muted playsinline></video>
-          <span id="video-etat" class="etat-video">arrêtée</span>
-          <div class="pave" role="group" aria-label="Flèches : avancer, reculer, tourner">
-            <button type="button" class="fleche haut" data-fleche="haut" aria-label="Avancer" disabled>↑</button>
-            <button type="button" class="fleche gauche" data-fleche="gauche" aria-label="Tourner à gauche" disabled>←</button>
-            <button type="button" class="fleche droite" data-fleche="droite" aria-label="Tourner à droite" disabled>→</button>
-            <button type="button" class="fleche bas" data-fleche="bas" aria-label="Reculer" disabled>↓</button>
+      <div class="deux-colonnes">
+        <div id="bloc-fleches" class="colonne-commandes">
+          <p class="etat-robot">
+            <span id="ordres-etat" class="etat-ordres" role="status"></span>
+            <strong id="localisation" class="localisation" role="status" title="Qualité de localisation, jugée sur la précision horizontale annoncée par le robot : fiable jusqu'à 0,10 m, dégradée jusqu'à 0,50 m, perdue au-delà."></strong>
+          </p>
+          <p id="localisation-detail" class="note" role="status"></p>
+          <button id="fleches-bascule" type="button" class="bascule" aria-pressed="false" title="Active les flèches du clavier et de la caméra. Par défaut chaque flèche fait bouger le robot tout de suite (une confirmation à l'activation ; désactivé après 60 s sans action, sur STOP ou sur un refus).">Flèches : activer</button>
+          <label class="case" title="Cochée : les flèches ajoutent des étapes à une séquence, qui ne part qu'avec « Prévisualiser » puis « Émettre »."><input id="composer" type="checkbox"> Composer une séquence (ne pas émettre tout de suite)</label>
+          <p id="pave-focus" class="note" role="status"></p>
+          <p class="pas">
+            <label title="Pas des flèches ↑ et ↓">Pas ↑↓ <select id="pave-distance"></select></label>
+            <label title="Pas des flèches ← et →">Pas ←→ <select id="pave-angle"></select></label>
+            <label title="Allure des flèches ↑ et ↓. Auto : lente près d'un bord de zone ou quand la position n'est pas fiable, normale sinon.">Allure <select id="pave-allure">
+              <option value="auto" selected>auto</option><option value="lente">lente 0,10 m/s</option><option value="normale">normale 0,25 m/s</option>
+            </select></label>
+            <label title="Lève le garde-fou carte pour le PROCHAIN pas seulement : la carte peut être fausse, et il faut pouvoir sortir d'une zone. Journalisé."><input id="pave-forcer" type="checkbox"> Forcer ce pas</label>
+          </p>
+          <p id="bord-zone" class="note" role="status"></p>
+          <p class="actions-robot">
+            <button id="pause-bouton" type="button" data-tache="pause" title="Met la tâche (ou le retour à la base) en pause : se prévisualise, puis « Émettre ».">Pause</button>
+            <button id="reprendre-bouton" type="button" data-tache="reprendre" title="Reprend la tâche en pause : les lames peuvent redémarrer. Se prévisualise, puis « Émettre ».">Reprendre</button>
+            <button id="base-bouton" type="button" data-tache="base" title="Retour à la base, tâche conservée. Se prévisualise, puis « Émettre ».">Retour base</button>
+            <button id="pave-plateau" type="button" title="Plateau de coupe au plus haut : ajouté à la séquence si elle est en composition, sinon prévisualisé.">Plateau haut</button>
+          </p>
+          <div class="avis">
+            <p class="ligne-etat">
+              <button id="pause-raccourci" type="button" class="raccourci" hidden>Mettre en pause</button>
+              <span id="pause-etat" class="note" role="status"></span>
+            </p>
+            <p class="ligne-etat">
+              <span class="attestation-proposition" hidden>
+                <span class="avertissement" data-attestation="message" role="status"></span>
+                <button type="button" data-attestation="poser">Je vois le robot, lames à l'arrêt : autoriser le pilotage 10 min</button>
+              </span>
+              <span id="attestation-erreur" class="avertissement" role="alert"></span>
+            </p>
+            <p class="ligne-etat" id="reprendre-rappel" hidden>
+              <span id="reprise-conseil" class="note">Robot en pause : « Reprendre » relance la tâche — les lames peuvent redémarrer.</span>
+              <span id="reprise-avertissement" class="avertissement" role="alert"></span>
+              <button id="reprendre-quand-meme" type="button" data-tache="reprendre-quand-meme" hidden>Reprendre quand même</button>
+              <button id="recalage" type="button" hidden title="Charge dans la séquence un aller-retour en ligne droite (deux pas en avant, deux en arrière, au pas choisi). À n'exécuter qu'en zone dégagée. Effet non garanti : jamais essayé sur ce robot.">Recalage assisté : aller-retour</button>
+            </p>
+            <p id="pave-signal" class="avertissement" role="alert"></p>
+            <p id="direct-etat" class="note" role="status"></p>
+            <p id="pave-file" class="note" role="status"></p>
           </div>
+          <div class="ligne-sequence">
+            <svg id="pave-miniature" class="miniature" role="img" aria-label="Tracé schématique du trajet cumulé"></svg>
+            <div class="suite">
+              <ol id="pave-pastilles" class="pastilles" aria-label="Séquence en cours"></ol>
+              <p id="pave-total" class="note ligne"></p>
+              <p class="actions">
+                <button id="pave-previsualiser" type="button" disabled>Prévisualiser (Entrée)</button>
+                <button id="emettre" type="button" class="emettre" disabled>Émettre l'ordre</button>
+                <button id="pave-annuler" type="button" disabled title="Retour arrière">Annuler la dernière</button>
+                <button id="pave-vider" type="button" disabled>Vider</button>
+              </p>
+              <p id="emettre-note" class="note" role="status">Prévisualisez un ordre ou la séquence : « Émettre » s'active ensuite.</p>
+              <p id="previsualisation-avertissement" class="avertissement" role="alert" hidden></p>
+              <p id="pave-boutons-note" class="note" role="status"></p>
+            </div>
+          </div>
+          <ol id="pave-retours" class="retours" aria-label="Retour des derniers pas"></ol>
+          <p class="actions" id="reprise-bloc" hidden>
+            <button id="reprise" type="button" title="Recharge les étapes restantes dans la séquence et les prévisualise ; rien n'est émis sans « Émettre ».">Reprendre</button>
+          </p>
         </div>
-        <div class="barre-commande">
-          <button id="video-demarrer" type="button" title="Contacte le cloud Lymow et active la caméra du robot, même en simulation. Rien ne démarre tout seul.">Démarrer la vidéo</button>
-          <button id="video-arreter" type="button" disabled>Arrêter</button>
-          <button id="fleches-bascule" type="button" class="bascule" aria-pressed="false" title="Active les quatre flèches (boutons sur la vidéo et clavier). Chaque flèche ajoute une étape à la séquence ; rien n'est émis sans « Émettre ».">Flèches : activer</button>
-          <label title="Pas des flèches ↑ et ↓">↑↓ <select id="pave-distance"></select></label>
-          <label title="Pas des flèches ← et →">←→ <select id="pave-angle"></select></label>
-          <label class="case discret" title="Pilotage direct : chaque flèche émet tout de suite, sans prévisualisation. Confirmation demandée ; désarmé après 60 s sans action, sur STOP, sur tout refus."><input id="direct-interrupteur" type="checkbox"> Direct : armer</label>
-          <button id="pave-plateau" type="button" title="Ajoute « plateau au plus haut » à la séquence">Plateau haut</button>
-          <button id="pause-bouton" type="button" data-tache="pause" title="Met la tâche (ou le retour à la base) en pause : se prévisualise, puis « Émettre ».">Pause</button>
-        </div>
-        <p id="pave-focus" class="note ligne" role="status"></p>
-        <p class="actions ligne-etat">
-          <span id="ordres-etat" class="etat-ordres" role="status"></span>
-          <button id="pause-raccourci" type="button" class="raccourci" hidden>Mettre en pause</button>
-          <span id="pause-etat" class="note" role="status"></span>
-          <span class="attestation-proposition" hidden>
-            <span class="avertissement" data-attestation="message" role="status"></span>
-            <button type="button" data-attestation="poser">Je vois le robot, lames à l'arrêt : autoriser le pilotage 10 min</button>
-          </span>
-          <span id="attestation-erreur" class="avertissement" role="alert"></span>
-          <span id="reprendre-rappel" hidden>
-            <button id="reprendre-bouton" type="button" data-tache="reprendre">Reprendre la tâche</button>
-            <span class="note">les lames peuvent redémarrer</span>
-          </span>
-        </p>
-
-        <div class="ligne-sequence">
-          <svg id="pave-miniature" class="miniature" role="img" aria-label="Tracé schématique du trajet cumulé"></svg>
-          <div class="suite">
-            <ol id="pave-pastilles" class="pastilles" aria-label="Séquence en cours"></ol>
-            <p id="pave-total" class="note ligne"></p>
+        <div class="colonne-vue">
+          <p class="onglets" role="tablist">
+            <button id="onglet-camera" type="button" role="tab" aria-selected="true" aria-controls="vue-camera">Caméra</button>
+            <button id="onglet-carte" type="button" role="tab" aria-selected="false" aria-controls="vue-carte">Carte</button>
+            <button id="video-demarrer" type="button" title="Contacte le cloud Lymow et active la caméra du robot, même en simulation. Rien ne démarre tout seul.">Démarrer la vidéo</button>
+            <button id="video-arreter" type="button" disabled>Arrêter</button>
+          </p>
+          <div id="vue-camera" class="cadre-video" role="tabpanel" title="Cliquer dans la vidéo active les flèches">
+            <video id="video" muted playsinline></video>
+            <span id="video-etat" class="etat-video">arrêtée</span>
+            <div class="pave" role="group" aria-label="Flèches : avancer, reculer, tourner">
+              <button type="button" class="fleche haut" data-fleche="haut" aria-label="Avancer" disabled>↑</button>
+              <button type="button" class="fleche gauche" data-fleche="gauche" aria-label="Tourner à gauche" disabled>←</button>
+              <button type="button" class="fleche droite" data-fleche="droite" aria-label="Tourner à droite" disabled>→</button>
+              <button type="button" class="fleche bas" data-fleche="bas" aria-label="Reculer" disabled>↓</button>
+            </div>
+          </div>
+          <div id="vue-carte" class="vue-carte" role="tabpanel" hidden>
             <p class="actions">
-              <button id="pave-previsualiser" type="button" disabled>Prévisualiser (Entrée)</button>
-              <button id="emettre" type="button" class="emettre" disabled>Émettre l'ordre</button>
-              <button id="pave-annuler" type="button" disabled title="Retour arrière">Annuler la dernière</button>
-              <button id="pave-vider" type="button" disabled>Vider</button>
+              <button id="carte-actualiser" type="button">Actualiser la carte</button>
+              <button id="carte-zoom-plus" type="button" aria-label="Zoomer">+</button>
+              <button id="carte-zoom-moins" type="button" aria-label="Dézoomer">−</button>
+              <button id="carte-recadrer" type="button">Tout voir</button>
+              <button id="carte-robot-cadrer" type="button" disabled title="position du robot inconnue">Cadrer sur le robot</button>
+              <label class="case" title="La carte reste centrée sur le robot"><input id="carte-suivre" type="checkbox" checked> suivre le robot</label>
+              <label class="case"><input id="carte-noms" type="checkbox" checked> noms</label>
+              <label class="case" title="Précision de position relevée au fil des passages : vert jusqu'à 0,10 m, orange jusqu'à 0,50 m, rouge au-delà."><input id="carte-precision" type="checkbox"> précision relevée</label>
+              <span id="carte-etat" class="note">aucune carte : cliquez sur « Actualiser la carte »</span>
             </p>
-            <p id="emettre-note" class="note ligne" role="status">Prévisualisez un ordre ou la séquence : « Émettre » s'active ensuite.</p>
-            <p id="previsualisation-avertissement" class="avertissement ligne" role="alert" hidden></p>
-            <p id="pave-signal" class="avertissement ligne" role="alert"></p>
-            <ol id="pave-retours" class="retours" aria-label="Retour de la dernière étape"></ol>
-            <p id="pave-file" class="note ligne" role="status"></p>
-            <p id="pave-boutons-note" class="note ligne" role="status"></p>
-            <p id="direct-etat" class="note ligne" role="status"></p>
-            <p class="actions" id="reprise-bloc" hidden>
-              <button id="reprise" type="button" title="Recharge les étapes restantes dans la séquence et les prévisualise ; rien n'est émis sans « Émettre ».">Reprendre</button>
+            <div class="cadre-carte">
+              <svg id="carte-dessin" role="img" aria-label="Carte du terrain, nord en haut"></svg>
+              <span class="nord" aria-hidden="true">N ↑</span>
+              <span class="echelle"><span id="carte-barre"></span><span id="carte-echelle"></span></span>
+            </div>
+            <ul class="legende">
+              <li><span class="pastille-zone"></span> zone de tonte</li>
+              <li><span class="pastille-interdite"></span> zone interdite</li>
+              <li><span class="pastille-passage"></span> passage (tirets : passage de station)</li>
+              <li><span class="pastille-station"></span> station</li>
+              <li><span class="pastille-robot"></span> robot (pointe = cap) <span id="carte-rtk"></span></li>
+            </ul>
+            <p class="actions">
+              <button id="signal-chercher" type="button" title="Cherche, dans le relevé de précision, l'endroit de bon signal le plus proche du robot, à l'intérieur d'une zone ou d'un passage.">Bon signal le plus proche</button>
+              <label class="case" title="N'utiliser que les relevés des 30 derniers jours"><input id="signal-recent" type="checkbox"> derniers 30 jours</label>
+              <button id="signal-charger" type="button" hidden title="Charge les pas du trajet dans la séquence : vous prévisualisez puis émettez, ou vous pilotez à la main en suivant le tracé.">Charger le trajet dans la séquence</button>
+              <span id="signal-etat" class="note" role="status"></span>
             </p>
+            <p class="note"><span id="carte-note" role="status"></span> <span id="carte-position" role="status"></span></p>
+            <p class="note"><label title="Décoché par défaut. Coché : l'outil demande au robot, toutes les 5 s, le détail de sa localisation (âge des corrections, état de la base). Jamais pendant un mouvement, jamais main rendue."><input id="diagnostic-rtk" type="checkbox"> Diagnostic de localisation (interroge le robot toutes les 5 s)</label></p>
           </div>
         </div>
       </div>
@@ -97,29 +171,8 @@
       </details>
     </section>
     <details id="volet-carte" class="volet large-bloc" data-volet="carte">
-      <summary>Carte et ajustement de zone</summary>
-    <section id="bloc-carte" aria-label="Carte et ajustement de zone">
-      <p class="actions">
-        <button id="carte-actualiser" type="button">Actualiser la carte</button>
-        <button id="carte-zoom-plus" type="button" aria-label="Zoomer">+</button>
-        <button id="carte-zoom-moins" type="button" aria-label="Dézoomer">−</button>
-        <button id="carte-recadrer" type="button">Tout voir</button>
-        <button id="carte-robot-cadrer" type="button" disabled title="position du robot inconnue">Cadrer sur le robot</button>
-        <label class="case"><input id="carte-noms" type="checkbox" checked> noms</label>
-        <span id="carte-etat" class="note">aucune carte : cliquez sur « Actualiser la carte »</span>
-      </p>
-      <div class="cadre-carte">
-        <svg id="carte-dessin" role="img" aria-label="Carte du terrain, nord en haut"></svg>
-        <span class="nord" aria-hidden="true">N ↑</span>
-        <span class="echelle"><span id="carte-barre"></span><span id="carte-echelle"></span></span>
-      </div>
-      <ul class="legende">
-        <li><span class="pastille-zone"></span> zone de tonte</li>
-        <li><span class="pastille-interdite"></span> zone interdite</li>
-        <li><span class="pastille-passage"></span> passage (tirets : passage de station)</li>
-        <li><span class="pastille-station"></span> station</li>
-        <li><span class="pastille-robot"></span> robot (pointe = cap) <span id="carte-rtk"></span></li>
-      </ul>
+      <summary>Ajustement de zone</summary>
+    <section id="bloc-carte" aria-label="Ajustement de zone">
       <form id="carte-ajustement" class="ordre">
         <h3>Ajuster la bordure d'une zone</h3>
         <p class="note" title="Molette : zoom ; glisser : déplacer ; double-clic sur une zone : la choisir et cadrer dessus. Les sommets apparaissent quand le zoom permet de les distinguer.">Jamais essayé sur ce robot : commencez par +5 cm sur une zone sans enjeu. Choisissez la zone, puis cliquez deux sommets de son contour.</p>

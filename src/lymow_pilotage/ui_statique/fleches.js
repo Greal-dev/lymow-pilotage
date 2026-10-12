@@ -13,12 +13,23 @@
   var SYMBOLES = { haut: "↑", bas: "↓", gauche: "←", droite: "→" };
 
   /* Flèche et pas → l'étape, sous la forme des ordres de la page ; null si la flèche est inconnue. */
-  function ordreDe(direction, distance, angle) {
-    if (direction === "haut") { return { nom: "avancer", valeur: distance, vitesse: null, duree: null }; }
-    if (direction === "bas") { return { nom: "reculer", valeur: distance, vitesse: null, duree: null }; }
+  /* `vitesse` : allure choisie (null = auto, l'outil choisit) ; `force` : garde-fou carte levé pour ce pas. */
+  function ordreDe(direction, distance, angle, vitesse, force) {
+    var pas = function (nom) {
+      var etape = { nom: nom, valeur: distance, vitesse: vitesse === undefined ? null : vitesse, duree: null };
+      if (force) { etape.force = true; }
+      return etape;
+    };
+    if (direction === "haut") { return pas("avancer"); }
+    if (direction === "bas") { return pas("reculer"); }
     if (direction === "gauche") { return { nom: "tourner", valeur: angle, vitesse: null, duree: null }; }
     if (direction === "droite") { return { nom: "tourner", valeur: -angle, vitesse: null, duree: null }; }
     return null;
+  }
+
+  /* Allure lente : 0,10 m/s, ou la plus faible vitesse qui tient dans les 9 s d'un ordre (SEC-02). */
+  function vitesseLente(distance, lente) {
+    return Math.min(0.25, Math.max(lente, Math.ceil(distance / 9 * 100 - 1e-9) / 100));
   }
 
   function directionDe(ordre) {
@@ -102,6 +113,21 @@
     return Boolean(DIRECTIONS[evenement.key]) || evenement.key === "Backspace";
   }
 
+  function metres(valeur) { return "±" + valeur.toFixed(2).replace(".", ",") + " m"; }
+
+  /* Aide à retrouver le signal : la précision de position évolue-t-elle dans le bon sens ? */
+  function tendance(avant, apres) {
+    if (typeof avant !== "number" || typeof apres !== "number") { return ""; }
+    if (Math.abs(apres - avant) < 0.05) { return "→ stable"; }
+    return apres < avant ? "↘ en amélioration" : "↗ en dégradation";
+  }
+
+  function textePrecision(rapport) {
+    if (!rapport || typeof rapport.precision_m !== "number") { return ""; }
+    var sens = tendance(rapport.precision_avant_m, rapport.precision_m);
+    return " — position " + metres(rapport.precision_m) + (sens ? " " + sens : "");
+  }
+
   /* Retour court après une étape : « ↑ 1 m : émise, arrêt acquitté — position non fournie ». */
   function ligneRetour(ordre, rapport) {
     var debut = symbole(ordre) + " : ";
@@ -111,7 +137,7 @@
     var suite = rapport.constat || "";
     if (rapport.verification === "non vérifiable") { suite = "position non fournie"; }
     if (rapport.verification === "vérifiée") { suite = "déplacement constaté"; }
-    return debut + "émise, arrêt acquitté" + (suite ? " — " + suite : "");
+    return debut + "émise, arrêt acquitté" + (suite ? " — " + suite : "") + textePrecision(rapport);
   }
 
   /* Bascule unique des flèches : un seul état pour les boutons sur la vidéo ET le clavier. */
@@ -123,20 +149,42 @@
   }
 
   function libelleBascule(actives) {
-    return actives ? "Flèches : ACTIVES" : "Flèches : activer";
+    return actives ? "Flèches : ACTIVES — désactiver" : "Flèches : activer";
   }
 
-  /* Échap : STOP d'abord. Il ne fait que retirer le focus des flèches si rien ne bouge et rien n'est armé. */
-  function effetEchap(etat) {
-    if (etat.occupe || etat.directArme) { return "stop"; }
-    return etat.flechesActives ? "desactiver" : "stop";
+  /* Échap = STOP complet, toujours, comme Espace (revue du 2026-10-12 : la page peut croire qu'aucun ordre
+   * n'est en cours alors qu'un pas vient de partir). Retirer seulement les flèches passe par leur bouton. */
+  function effetEchap() {
+    return "stop";
   }
+
+  /* Clavier, flèches actives : la touche fait bouger le robot, PAS la page (constat du 2026-10-12 : la
+   * page défilait). L'interception vaut quel que soit l'élément qui a le focus — `body`, un bouton — et
+   * jamais dans un champ de saisie, une liste déroulante ou une zone éditable. Une touche maintenue
+   * (`repeat`) est retenue mais ne compte pas. Espace reste STOP, traité ailleurs. */
+  function interception(evenement) {
+    var balise = String(evenement.balise || "").toUpperCase();
+    var saisie = balise === "INPUT" || balise === "SELECT" || balise === "TEXTAREA" || Boolean(evenement.editable);
+    if (!evenement.actives || saisie) { return { intercepter: false, action: null }; }
+    var action = null;
+    if (DIRECTIONS[evenement.key]) { action = { type: "fleche", direction: DIRECTIONS[evenement.key] }; }
+    else if (evenement.key === "Enter") { action = { type: "previsualiser" }; }
+    else if (evenement.key === "Backspace") { action = { type: "annuler" }; }
+    else if (evenement.key !== " " && evenement.key !== "Spacebar") { return { intercepter: false, action: null }; }
+    return { intercepter: true, action: evenement.repeat ? null : action };
+  }
+
+  /* Une seule activation : pilotage direct par défaut, composition de séquence si la case est cochée. */
+  function modeDesFleches(composer) { return composer ? "file" : "direct"; }
 
   var api = {
     ordreDe: ordreDe,
+    vitesseLente: vitesseLente,
     basculer: basculer,
     libelleBascule: libelleBascule,
     effetEchap: effetEchap,
+    interception: interception,
+    modeDesFleches: modeDesFleches,
     directionDe: directionDe,
     symbole: symbole,
     trace: trace,
@@ -145,7 +193,8 @@
     annulerDerniere: annulerDerniere,
     actionClavier: actionClavier,
     retientLaTouche: retientLaTouche,
-    ligneRetour: ligneRetour
+    ligneRetour: ligneRetour,
+    tendance: tendance
   };
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;

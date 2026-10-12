@@ -19,7 +19,7 @@ from collections.abc import Coroutine
 from dataclasses import dataclass
 from typing import Any
 
-from . import protocole, securite
+from . import garde_carte, protocole, securite
 from .config import Calibration
 from .etat import LIBELLES_STATUT, Pose
 from .securite import Consigne, RefusSecurite
@@ -50,7 +50,10 @@ TACHES = {
     "annuler": socle.USER_CTRL_FORCE_REINIT,
     # Mise en pause de la tâche, seule : la même pause que celle de `stop`, sans les consignes nulles.
     "pause": socle.USER_CTRL_PAUSE,
+    # SEC-12 : la reprise malgré une position imprécise — même ordre, garde levée explicitement.
+    "reprendre-quand-meme": socle.USER_CTRL_RESUME,
 }
+REPRISE_FORCEE = "reprendre-quand-meme"
 ETAPES_SEQUENCE = (*MOUVEMENTS, *PLATEAUX, "stop")
 OPTIONS_MOUVEMENT = ("--vitesse", "--duree")
 _STATUTS_REPRISE = (socle.WORK_STATUS_PAUSE, socle.WORK_STATUS_REMOTE_CONTROL)
@@ -75,6 +78,7 @@ class Ordre:
     valeur: float | None = None
     vitesse: float | None = None
     duree: float | None = None
+    force: bool = False  # SEC-13 : « Forcer ce pas » — le garde-fou carte est levé pour cet ordre, et journalisé
 
     def __str__(self) -> str:
         mots = [self.nom]
@@ -84,6 +88,8 @@ class Ordre:
             mots.append(f"{'--observation' if self.nom == ESSAI else '--duree'} {self.duree:g}")
         if self.vitesse is not None:
             mots.append(f"--vitesse {self.vitesse:g}")
+        if self.force:
+            mots.append("--forcer")
         return " ".join(mots)
 
 
@@ -220,6 +226,8 @@ def simuler(ordre: Ordre, cal: Calibration, appareil: str | None) -> dict[str, A
         }
     else:
         trame = protocole.trame_tache(TACHES[ordre.nom], cal)
+        if ordre.nom == "reprendre":
+            resultat["garde"] = "refusé en réel si la position du robot est imprécise (SEC-12)"
         if ordre.nom == "pause":
             resultat["variante"] = f"userCtrl {socle.USER_CTRL_PAUSE_DOCK} si le robot rentre à sa base"
         elif ordre.nom != "annuler":
@@ -451,12 +459,77 @@ def _surveiller(session: Session, attestable: bool = False) -> None:
         raise EchecOrdre(f"mouvement interrompu en cours de route : {refus}") from None
 
 
+def _age_de_la_pose(session: Session) -> float | None:
+    recue = session.etat.recu_pose
+    return None if recue is None else session.horloge() - recue
+
+
+def _garder_le_pas(session: Session, ordre: Ordre) -> tuple[Ordre, dict[str, Any]]:
+    """SEC-13 : une avance ou un recul est projeté sur la carte de référence avant d'être émis.
+
+    Hors des zones et passages, ou dans une zone interdite (marge 0,30 m + incertitude annoncée) : le pas
+    est raccourci à la plus grande distance sûre, ou refusé. « Forcer ce pas » passe outre (la carte peut
+    être fausse, et il faut pouvoir sortir d'une zone) : c'est journalisé. Sans pose ou sans carte, aucun
+    garde-fou n'est possible : dit au bilan, sans bloquer. L'allure lente est choisie près d'un bord ou
+    quand la position n'est pas fiable, sauf vitesse choisie par l'opérateur."""
+    if ordre.nom not in ("avancer", "reculer") or ordre.valeur is None:
+        return ordre, {}
+    pose, precision = session.etat.pose, session.etat.precision_m
+    sens = 1.0 if ordre.nom == "avancer" else -1.0
+    jugement = garde_carte.juger_pas(
+        session.carte_reference, None if pose is None else (pose.est_m, pose.nord_m),
+        None if pose is None else pose.cap_deg, sens * ordre.valeur, precision, _age_de_la_pose(session),
+    )
+    infos: dict[str, Any] = {"garde_carte": jugement.motif}
+    if jugement.decision in (garde_carte.RACCOURCI, garde_carte.REFUS):
+        if ordre.force:
+            session.journal.ecrire("garde-carte-forcee", strict=True, ordre=str(ordre), motif=jugement.motif)
+            infos["garde_carte"] = f"pas forcé par l'opérateur malgré : {jugement.motif}"
+        elif jugement.bloque:
+            raise RefusSecurite(f"{jugement.motif} — « Forcer ce pas » passe outre (SEC-13)")
+        else:
+            ordre = dataclasses.replace(ordre, valeur=jugement.distance_m)
+    vitesse, annonce = garde_carte.allure(ordre.vitesse, jugement, precision)
+    if vitesse is not None:
+        # SEC-02 borne la durée d'un ordre : un pas trop long pour l'allure lente garde sa longueur (la suite d'une
+        # séquence en dépend) et prend la plus faible vitesse qui tient dans cette durée — c'est annoncé.
+        vitesse = garde_carte.vitesse_lente(ordre.valeur, session.cal.facteur_distance)
+        retenue = garde_carte.annonce_vitesse(vitesse, ordre.valeur)
+        annonce = f"{annonce} — {retenue}" if retenue else annonce
+        ordre = dataclasses.replace(ordre, vitesse=vitesse)
+        infos["allure"] = annonce
+    return ordre, infos
+
+
+def _surveiller_choc(session: Session, chocs_au_depart: frozenset[tuple[str, int]], suivi: Any) -> None:
+    """SEC-14 : un indice de choc apparu pendant le mouvement arrête tout (l'arrêt suit, garanti par SEC-03).
+
+    (a) code d'erreur ou d'avertissement de choc, pare-chocs, ultrasons, soulèvement ou patinage, absent au
+    départ ; (b) statut passé à erreur ou arrêt d'urgence : déjà couvert par `_surveiller` (SEC-01) ;
+    (c) pose qui n'avance plus alors que les consignes continuent."""
+    nouveaux = garde_carte.codes_de_choc(session.etat.donnees) - chocs_au_depart
+    if nouveaux:
+        codes = ", ".join(f"{nature} {code}" for nature, code in sorted(nouveaux))
+        raise EchecOrdre(f"indice de choc annoncé par le robot ({codes}) : arrêt (SEC-14)")
+    pose = session.etat.pose
+    if suivi is not None and pose is not None and session.etat.recu_pose is not None:
+        suivi.noter(session.etat.recu_pose, pose.est_m, pose.nord_m)
+        if suivi.bloque(session.horloge()):
+            raise EchecOrdre("obstacle ou patinage : arrêt — la position n'avance plus (SEC-14)")
+
+
 # --- exécution ------------------------------------------------------------------
 
 
 async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
     consigne = consigne_de(ordre, session.cal)  # SEC-02
     avant = await _exiger_lames_arret(session, attestable=True)  # SEC-01, SEC-01b
+    precision_avant = session.etat.precision_m
+    ordre, garde_fou = _garder_le_pas(session, ordre)  # SEC-13 : pas raccourci, refusé, ou forcé
+    if garde_fou:
+        consigne = consigne_de(ordre, session.cal)  # SEC-02, sur le pas retenu
+    chocs_au_depart = garde_carte.codes_de_choc(session.etat.donnees)
+    suivi = None
     # SEC-01b : tout ordre émis pendant qu'une attestation est active le dit, au journal et au bilan.
     sous_attestation: dict[str, Any] = {}
     if _attestee(session):
@@ -465,12 +538,14 @@ async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
     session.journal.ecrire(  # SEC-06 : sans trace possible, pas d'ordre
         "ordre-emis", strict=True, ordre=str(ordre), sujet=session.sujet,
         trame=trame.description(), duree_s=round(consigne.duree, 2), cadence_hz=securite.CADENCE_HZ,
-        **sous_attestation,
+        **sous_attestation, **garde_fou,
     )
     periode = 1.0 / securite.CADENCE_HZ
     emissions = 0
     with _Garde(session, en_arret=False) as garde:
         debut = session.horloge()
+        if consigne.lineaire:
+            suivi = garde_carte.SuiviDeProgression(consigne.lineaire, debut)
         try:
             # SEC-03 : consigne republiée à cadence fixe ; toute publication manquée
             # ou liaison tombée lève (homme mort) et passe par l'arrêt ci-dessous.
@@ -479,6 +554,7 @@ async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
             maximum = math.ceil(round(consigne.duree * securite.CADENCE_HZ, 6))
             while emissions < maximum and consigne.duree - (session.horloge() - debut) > 0.001:
                 _surveiller(session, attestable=True)
+                _surveiller_choc(session, chocs_au_depart, suivi)  # SEC-14
                 await session.publier(trame, securite.DELAI_CONSIGNE_S)
                 emissions += 1
                 attente = min(debut + emissions * periode, debut + consigne.duree) - session.horloge()
@@ -492,7 +568,11 @@ async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
                 await arreter(session)
             finally:
                 session.journal.ecrire("ordre-termine", ordre=str(ordre), emissions=emissions)
-    return {"mode": "réel", "ordre": str(ordre), "emissions": emissions} | sous_attestation | await constater(
+    depart = {"precision_avant_m": None if precision_avant is None else round(precision_avant, 2)}
+    # SEC-14 (c) n'opère que si la pose arrive assez souvent (télécommande : ~0,6 s) : sinon c'est dit.
+    if suivi is not None:
+        garde_fou["surveillance_progression"] = "active" if suivi.active else "inactive : position reçue trop rarement"
+    return {"mode": "réel", "ordre": str(ordre), "emissions": emissions} | depart | sous_attestation | garde_fou | await constater(
         session, avant, instant_arret, consigne
     )
 
@@ -627,9 +707,16 @@ async def executer_tache(session: Session, nom: str) -> dict[str, Any]:
         age = etat.age_statut(session.horloge())
         if etat.statut is None or age is None or age > securite.AGE_MAX_ETAT_S:
             raise RefusSecurite(f"« {nom} » refusé : aucun état frais du robot")
-        if nom == "reprendre" and etat.statut not in _STATUTS_REPRISE:
+        if nom in ("reprendre", REPRISE_FORCEE) and etat.statut not in _STATUTS_REPRISE:
             libelle = LIBELLES_STATUT.get(etat.statut, str(etat.statut))
             raise RefusSecurite(f"« reprendre » refusé : rien à reprendre (statut : {libelle})")
+        if nom == "reprendre":
+            securite.verifier_precision_pour_reprise(etat.precision_m, etat.ecart_pour_la_garde)  # SEC-12
+        elif nom == REPRISE_FORCEE:
+            session.journal.ecrire(  # SEC-12 : la garde levée par l'opérateur laisse une trace
+                "reprise-forcee", strict=True, precision_m=etat.precision_m,
+                localisation=securite.qualite_position(etat.precision_m),
+            )
         if nom == "pause":
             codes = [code_pause(etat.statut)]  # 21 pendant un retour à la base, 3 sinon : comme `stop`
         elif etat.statut == socle.WORK_STATUS_REMOTE_CONTROL:
@@ -642,7 +729,13 @@ async def executer_tache(session: Session, nom: str) -> dict[str, Any]:
             "ordre-emis", strict=True, ordre=nom, sujet=session.sujet, trame=trame.description()
         )
         await session.publier(trame, securite.DELAI_ARRET_S)
-    return {"mode": "réel", "ordre": nom, "codes_emis": codes} | await constater(session, avant, instant, None)
+    rapport: dict[str, Any] = {"mode": "réel", "ordre": nom, "codes_emis": codes}
+    if nom in ("base", REPRISE_FORCEE) and securite.avertissement_position(etat.precision_m):
+        # SEC-12 : avertissement sans blocage — le retour à la base aussi part d'une position incertaine.
+        rapport["avertissement"] = (
+            f"position imprécise ({securite.texte_precision(etat.precision_m)}) : le trajet automatique peut être erratique"
+        )
+    return rapport | await constater(session, avant, instant, None)
 
 
 # --- SEC-04 : constat -------------------------------------------------------------
@@ -696,7 +789,10 @@ async def constater(
         await session.attendre("pose", instant, max(0.0, reste))
     recu_pose = session.etat.recu_pose
     apres = session.etat.pose if recu_pose is not None and recu_pose > instant else None
+    precision = session.etat.precision_m if rafraichi else None
     rapport: dict[str, Any] = {
+        # Aide à retrouver le signal : la précision de position après chaque pas.
+        "precision_m": None if precision is None else round(precision, 2),
         "etat_rafraichi": rafraichi,
         "avant": _pose(avant),
         "apres": _pose(apres),
@@ -764,7 +860,7 @@ def _reprise(ordres: list[Ordre], rang: int) -> dict[str, Any]:
     }
 
 
-async def executer_sequence(session: Session, ordres: list[Ordre]) -> dict[str, Any]:
+async def executer_sequence(session: Session, ordres: list[Ordre], objectif_signal: bool = False) -> dict[str, Any]:
     """SEC-07 (révisé le 2026-10-12, décision du pilote au vu du réel) : mêmes règles par étape.
 
     La séquence s'arrête si (a) un ordre est refusé ou échoue, (b) l'arrêt n'est pas confirmé,
@@ -795,6 +891,14 @@ async def executer_sequence(session: Session, ordres: list[Ordre]) -> dict[str, 
         bilan["etapes"].append(rapport)
         if not ordres[rang + 1 :]:
             break
+        if objectif_signal and securite.qualite_position(session.etat.precision_m) == securite.FIABLE:
+            # Trajet « vers le bon signal » : la précision est redevenue fiable — arrêt NORMAL, annoncé.
+            reste = [str(o) for o in ordres[rang + 1 :]]
+            return bilan | {
+                "objectif_atteint": True, "non_executees": reste,
+                "motif": f"précision retrouvée ({securite.texte_precision(session.etat.precision_m)}) : objectif atteint, "
+                         f"séquence arrêtée — {len(reste)} étape(s) non exécutée(s)",
+            }
         motif = None
         if rapport.get("verification") in (ANOMALIE, AUCUN_ETAT):
             motif = rapport["constat"]

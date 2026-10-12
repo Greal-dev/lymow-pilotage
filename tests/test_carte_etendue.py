@@ -304,8 +304,12 @@ def test_capture_reelle_locale_tranches_et_invariants():
         donnees = json.loads(fiche.read_text(encoding="utf-8"))
         if "charge_b64" not in donnees:
             continue
-        brut = pb.extract_raw_map_content(pb.unwrap_envelope(base64.b64decode(donnees["charge_b64"])))
-        if brut:
+        try:
+            brut = pb.extract_raw_map_content(pb.unwrap_envelope(base64.b64decode(donnees["charge_b64"])))
+        except ValueError:
+            continue  # présence, ou autre message qui n'est pas une enveloppe protobuf
+        # Seules les captures de carte (`lymow capture --carte`) : celles d'un ordre portent d'autres réponses.
+        if brut and not fiche.parent.name.startswith("ordre-"):
             tranches.append((fiche.parent, brut))
     if not tranches:
         pytest.skip("aucune capture réelle sur ce poste (dossier captures/ absent)")
