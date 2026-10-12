@@ -86,7 +86,9 @@
         <button id="carte-actualiser" type="button">Actualiser la carte</button>
         <button id="carte-zoom-plus" type="button" aria-label="Zoomer">+</button>
         <button id="carte-zoom-moins" type="button" aria-label="Dézoomer">−</button>
-        <button id="carte-recadrer" type="button">Recadrer</button>
+        <button id="carte-recadrer" type="button">Tout voir</button>
+        <button id="carte-robot-cadrer" type="button" disabled title="position du robot inconnue">Cadrer sur le robot</button>
+        <label class="case"><input id="carte-noms" type="checkbox" checked> noms</label>
         <span id="carte-etat" class="note">aucune carte : cliquez sur « Actualiser la carte »</span>
       </p>
       <div class="cadre-carte">
@@ -104,8 +106,11 @@
       <form id="carte-ajustement" class="ordre">
         <h3>Ajuster la bordure d'une zone</h3>
         <p class="note">Jamais essayé sur ce robot : commencez par +5 cm sur une zone sans enjeu. Choisissez la zone,
-          puis cliquez deux sommets de son contour sur la carte (début et fin de la portion).</p>
+          puis cliquez deux sommets de son contour sur la carte (début et fin de la portion). Molette : zoom ;
+          glisser : déplacer ; double-clic sur une zone : la choisir et cadrer dessus. Les sommets
+          apparaissent quand le zoom permet de les distinguer.</p>
         <label>Zone <select id="carte-zone"></select></label>
+        <p id="carte-possible" class="note" role="status"></p>
         <label>Du sommet <input id="carte-de" inputmode="numeric" autocomplete="off"></label>
         <label>au sommet <input id="carte-a" inputmode="numeric" autocomplete="off"></label>
         <label>Côté de la boucle
@@ -116,7 +121,7 @@
           <small>de −50 à 50 ; positif = élargir vers l'extérieur, négatif = rogner</small></label>
         <label>Raccords (m) <input id="carte-raccord" inputmode="decimal" autocomplete="off">
           <small>0 à 5 (défaut 0,5) : longueur sur laquelle la bande s'efface à chaque extrémité</small></label>
-        <p class="actions"><button type="submit">Prévisualiser l'ajustement</button></p>
+        <p class="actions"><button id="carte-previsualiser" type="submit">Prévisualiser l'ajustement</button></p>
       </form>
     </section>
 

@@ -26,7 +26,7 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
-from . import auth, compte, conduite, demo, liaison, mouvement, rappel, retouche, securite
+from . import auth, compte, conduite, demo, geometrie, liaison, mouvement, rappel, retouche, securite
 from . import carte as cartes
 from .config import Calibration
 from .journal import Journal, assainir, declarer_secret, masquer
@@ -130,6 +130,7 @@ class ServeurUI:
         self.emet = reel or demonstration
         self.dossier = dossier if dossier is not None else journal._dossier.parent  # sauvegardes de carte
         self.carte_heure: str | None = None
+        self._liste: tuple[bytes, list[dict[str, Any]]] = (b"", [])
         # Deux secrets de 256 bits, neufs à chaque lancement : le jeton d'adresse sert UNE fois,
         # puis seul le témoin (valeur distincte, jamais dans une adresse) authentifie la page.
         self.jeton: str | None = secrets.token_urlsafe(32)
@@ -573,9 +574,15 @@ class ServeurUI:
         if carte is None:
             return {"carte": None}
         return {
-            "carte": cartes.vers_json(carte), "heure": self.carte_heure,
+            "carte": cartes.vers_json(carte) | {"liste": self._liste_zones(carte)}, "heure": self.carte_heure,
             "age_s": round(self.session.horloge() - carte.recue, 1),
         }
+
+    def _liste_zones(self, carte: cartes.Carte) -> list[dict[str, Any]]:
+        """Zones pour la liste déroulante, triées, avec la possibilité de retouche de chacune."""
+        if self._liste[0] != carte.octets:  # le diagnostic des contours coûte : une fois par carte
+            self._liste = (carte.octets, liste_zones(carte))
+        return self._liste[1]
 
     async def _carte(self, _requete: web.Request) -> web.StreamResponse:
         return web.json_response(self._carte_json())
@@ -846,6 +853,24 @@ def _en_demonstration(objet: Any) -> Any:
     if isinstance(objet, list):
         return [_en_demonstration(element) for element in objet]
     return objet
+
+
+def liste_zones(carte: cartes.Carte) -> list[dict[str, Any]]:
+    """Nommées d'abord (ordre alphabétique), puis les autres par surface décroissante."""
+    lignes = []
+    for zone in carte.zones:
+        surface = round(abs(geometrie.aire_signee(zone.contour)), 2) if len(zone.contour) >= 3 else 0.0
+        motif = retouche.empechement(carte, zone)
+        lignes.append({
+            "identifiant": zone.identifiant,
+            "libelle": f"{zone.libelle} — {surface:g} m², {len(zone.contour)} sommets",
+            "nommee": bool(zone.nom), "surface_m2": surface,
+            "retouche_possible": motif is None, "motif": motif,
+            "sommets_confondus": len(zone.contour) - len(geometrie.reduire(zone.contour)[0]),
+        })
+    nommees = sorted((ligne for ligne in lignes if ligne["nommee"]), key=lambda ligne: ligne["libelle"].casefold())
+    autres = sorted((ligne for ligne in lignes if not ligne["nommee"]), key=lambda ligne: -ligne["surface_m2"])
+    return nommees + autres
 
 
 def _refus(statut: int, message: str) -> web.Response:

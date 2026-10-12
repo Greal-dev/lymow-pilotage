@@ -134,7 +134,9 @@ section, .ordre {
 .carte-ancien { fill: none; stroke: #777777; stroke-dasharray: 4 4; }
 .carte-nouveau { fill: #ef6c0022; stroke: #ef6c00; stroke-width: 2.5px; }
 .cadre-carte svg * { vector-effect: non-scaling-stroke; }
-.carte-nom { fill: var(--texte); stroke: none; text-anchor: middle; }
+.carte-nom { fill: var(--texte); stroke: var(--carte); stroke-width: 3px; paint-order: stroke; text-anchor: middle;
+  dominant-baseline: middle; pointer-events: none; }
+.case { display: inline-flex; align-items: center; gap: 0.3rem; }
 .legende { list-style: none; display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; padding: 0; margin: 0.5rem 0;
   font-size: 0.9rem; }
 .legende span[class^="pastille-"] { display: inline-block; width: 0.9rem; height: 0.9rem; vertical-align: middle;

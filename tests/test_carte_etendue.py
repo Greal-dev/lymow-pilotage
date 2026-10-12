@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import dataclasses
 import json
 import random
 from pathlib import Path
@@ -37,17 +38,21 @@ def verifier_invariants(carte: cartes.Carte) -> None:
     zones = {zone.identifiant: zone.contour for zone in carte.zones}
     fautes = {
         "identifiants de zone en double": len(carte.zones) - len(zones),
-        "contours de zone non simples": sum(not geometrie.est_simple(geometrie.sans_doublons(c)) for c in zones.values()),
+        "contours de zone non simples": sum(not geometrie.est_simple(geometrie.reduire(c)[0]) for c in zones.values()),
         "zones à surface négative": sum(geometrie.aire_signee(c) <= 0 for c in zones.values()),
         "zones interdites non simples": sum(
-            not geometrie.est_simple(geometrie.sans_doublons(z.contour)) for z in carte.interdites
+            not geometrie.est_simple(geometrie.reduire(z.contour)[0]) for z in carte.interdites
         ),
         "zones interdites sans zone de la carte": sum(z.parent not in zones for z in carte.interdites),
         "zones interdites qui ne touchent pas leur zone": sum(
             z.parent in zones and not geometrie.touche(zones[z.parent], z.contour) for z in carte.interdites
         ),
+        "zones dont la retouche serait refusée d'emblée": sum(
+            retouche.empechement(carte, zone) is not None for zone in carte.zones if carte.complete
+        ),
         "passages qui ne touchent pas leurs zones": sum(
-            not all(i in zones and geometrie.touche(zones[i], p.trace) for i in (p.zone1, p.zone2))
+            # Le passage de station ne relie qu'UNE zone : son autre extrémité n'en est pas une.
+            not all(i in zones and geometrie.touche(zones[i], p.trace) for i in (p.zone1, p.zone2)[: 1 if p.station else 2])
             for p in carte.passages
         ),
     }
@@ -57,7 +62,9 @@ def verifier_invariants(carte: cartes.Carte) -> None:
 def test_jeu_d_essai_de_la_forme_de_la_carte_reelle():
     assert TAILLE_TRANCHE_CARTE < len(CONTENU) < 2 * TAILLE_TRANCHE_CARTE
     carte = cartes.decoder(CONTENU)
-    assert (len(carte.zones), len(carte.interdites), len(carte.passages)) == (55, 19, 54) and carte.complete
+    assert (len(carte.zones), len(carte.interdites), len(carte.passages)) == (55, 19, 55) and carte.complete
+    assert [p.station for p in carte.passages].count(True) == 1
+    assert not any(geometrie.touche(zone.contour, [carte.station[:2]]) for zone in carte.zones)
     sommets = sorted(len(zone.contour) for zone in carte.zones)
     assert sommets[0] == 23 and sommets[-1] == 600 and sum(bool(zone.nom) for zone in carte.zones) == 5
     assert sum(zone.contour[0] == zone.contour[-1] for zone in carte.zones) == 25
@@ -135,14 +142,123 @@ def test_demande_de_tranche_requete_pure_et_bornee():
     assert not est_requete_pure(pb.encode_query_map(protocole.TRANCHES_CARTE_MAX, 49))
 
 
-def test_retouche_d_un_contour_a_sommets_repetes_refusee_avec_le_motif():
+def test_reduction_ne_reunit_que_les_sommets_exactement_confondus_et_consecutifs():
+    a, b, c, d = (0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)
+    assert geometrie.reduire([a, b, c, d]) == ([a, b, c, d], [0, 1, 2, 3])
+    assert geometrie.reduire([a, b, c, d, a]) == ([a, b, c, d], [0, 1, 2, 3, 0])  # fermé sur son premier point
+    assert geometrie.reduire([a, b, b, b, c, d]) == ([a, b, c, d], [0, 1, 1, 1, 2, 3])  # doublons consécutifs
+    assert geometrie.reduire([a, a, b, c, d, a, a]) == ([a, b, c, d], [0, 0, 1, 2, 3, 0, 0])
+    presque = (4.0, 0.00001)
+    assert geometrie.reduire([a, b, presque, c, d])[1] == [0, 1, 2, 3, 4]  # proche n'est pas confondu
+    repris, _rangs = geometrie.reduire([a, b, c, a, d])  # point repris plus loin : distinct, donc non simple
+    assert len(repris) == 5 and not geometrie.est_simple(repris)
+
+
+@pytest.mark.parametrize("k", [0, 1, 7, 19, 40, 5])  # fermées, doublées, et une zone sans répétition
+def test_retouche_deplace_ensemble_les_sommets_confondus_et_garde_la_structure(k):
     carte = cartes.decoder(CONTENU)
-    fermee = carte.zone_exacte(jardin_etendu.identifiant_zone(0))
-    with pytest.raises(RefusSecurite, match="répète des sommets"):
-        retouche.preparer_ajustement(carte, fermee.identifiant, 2, 6, 10.0)
-    ouverte = carte.zone_exacte(jardin_etendu.identifiant_zone(5))  # ni fermée ni doublée
-    operation = retouche.preparer_ajustement(carte, ouverte.identifiant, 2, 6, 10.0)
-    assert operation.resume["sommets_deplaces"] >= 1
+    zone = carte.zone_exacte(jardin_etendu.identifiant_zone(k))
+    reduit, rangs = geometrie.reduire(zone.contour)
+    operation = retouche.preparer_ajustement(carte, zone.identifiant, 2, 9, 10.0)
+    avant, apres = operation.avant, operation.apres
+    assert avant == zone.contour and len(apres) == len(avant)  # même nombre de points renvoyé au robot
+    assert [i for i in range(len(avant)) if avant[i] == avant[i - 1]] == [i for i in range(len(apres)) if apres[i] == apres[i - 1]]
+    assert geometrie.reduire(apres)[1] == rangs  # mêmes doublons, aux mêmes rangs
+    deplaces = [i for i in range(len(avant)) if avant[i] != apres[i]]
+    assert deplaces and all(2 <= i <= 9 for i in deplaces)
+    assert operation.resume["sommets_confondus"] == len(avant) - len(reduit)
+    assert ("déplacés ensemble" in " ".join(operation.resume["avertissements"])) == (len(avant) != len(reduit))
+
+
+def test_portion_qui_passe_par_la_fermeture_deplace_les_deux_copies_du_premier_point():
+    carte = cartes.decoder(CONTENU)
+    zone = carte.zone_exacte(jardin_etendu.identifiant_zone(0))  # fermée : dernier sommet = premier
+    dernier = len(zone.contour) - 1
+    operation = retouche.preparer_ajustement(carte, zone.identifiant, dernier - 3, 3, 10.0, raccord_m=0.0)
+    assert operation.apres[0] == operation.apres[dernier] != zone.contour[0]
+    # Désigner le premier point par l'un ou l'autre de ses deux rangs revient au même.
+    par_le_dernier = retouche.preparer_ajustement(carte, zone.identifiant, dernier, 4, 10.0)
+    par_le_premier = retouche.preparer_ajustement(carte, zone.identifiant, 0, 4, 10.0)
+    assert par_le_dernier.apres == par_le_premier.apres
+
+
+def test_controle_refuse_de_desunir_des_sommets_confondus_et_tout_autre_cas():
+    carte = cartes.decoder(CONTENU)
+    zone = carte.zone_exacte(jardin_etendu.identifiant_zone(0))
+    desuni = list(zone.contour)
+    x, y = desuni[-1]
+    desuni[-1] = (x + 0.05, y)
+    with pytest.raises(RefusSecurite, match="sommets confondus du contour seraient désunis"):
+        retouche.controler(carte, zone, desuni, None)
+    with pytest.raises(RefusSecurite, match="nombre de sommets modifié"):
+        retouche.controler(carte, zone, zone.contour[:-1], None)
+    croise = dataclasses.replace(zone, contour=[(0.0, 0.0), (4.0, 3.0), (4.0, 0.0), (0.0, 3.0)])
+    assert retouche.empechement(carte, croise) == "le contour actuel de la zone n'est pas un polygone simple"
+    with pytest.raises(RefusSecurite, match="n'est pas un polygone simple"):
+        retouche.controler(carte, croise, croise.contour, None)
+    partielle = dataclasses.replace(carte, manques=("origine absente",))
+    assert retouche.empechement(partielle, zone) == "carte incomplète (origine absente)"
+
+
+def test_ecriture_d_une_zone_fermee_renvoie_la_meme_structure_au_robot():
+    from lymow_pilotage.config import Calibration
+
+    carte = cartes.decoder(CONTENU)
+    zone = carte.zone_exacte(jardin_etendu.identifiant_zone(1))  # 599 sommets + la fermeture
+    operation = retouche.preparer_ajustement(carte, zone.identifiant, 10, 30, 10.0)
+    trame = protocole.trame_contour_zone(zone.identifiant, operation.apres, Calibration())
+    envoyee = cartes.decoder(cartes.champs_stricts(trame.octets)[-1][2] + pb._field_bytes(4, b"")).zones[0]
+    assert len(envoyee.contour) == 600 and envoyee.contour == operation.apres and envoyee.contour[0] == envoyee.contour[-1]
+
+
+def test_liste_des_zones_nommees_d_abord_puis_par_surface_avec_la_possibilite_de_retouche():
+    from lymow_pilotage import ui
+
+    carte = cartes.decoder(CONTENU)
+    liste = ui.liste_zones(carte)
+    assert len(liste) == 55 and [ligne["nommee"] for ligne in liste] == [True] * 5 + [False] * 50
+    noms = [ligne["libelle"].split(" — ")[0] for ligne in liste[:5]]
+    assert noms == ["Zone E", "Zone fictive A", "Zone fictive B", "Zone fictive C", "Zone fictive D"]
+    surfaces = [ligne["surface_m2"] for ligne in liste[5:]]
+    assert surfaces == sorted(surfaces, reverse=True)
+    assert all(" m², " in ligne["libelle"] and ligne["libelle"].endswith(" sommets") for ligne in liste)
+    assert all(ligne["retouche_possible"] and ligne["motif"] is None for ligne in liste)
+    assert sum(ligne["sommets_confondus"] > 0 for ligne in liste) == 28  # 25 fermées + 3 doublées
+    partielle = dataclasses.replace(carte, manques=("station de charge absente",))
+    assert {ligne["motif"] for ligne in ui.liste_zones(partielle)} == {"carte incomplète (station de charge absente)"}
+
+
+def test_page_carte_donne_la_liste_triee_et_le_motif_par_zone(tmp_path, monkeypatch, session_reelle, lien):
+    from test_ui import executer, poster, serveur_ui
+
+    lien.carte = CONTENU
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False, session=session_reelle) as (serveur, http):
+            statut, corps, _recus = await poster(http, serveur, "/api/carte/actualiser")
+            liste = corps["carte"]["liste"]
+            assert statut == 200 and len(liste) == 55 and liste[0]["nommee"] and liste[0]["retouche_possible"] is True
+            assert {ligne["identifiant"] for ligne in liste} == {zone["identifiant"] for zone in corps["carte"]["zones"]}
+            fermee = jardin_etendu.identifiant_zone(0)
+            statut, corps, _recus = await poster(
+                http, serveur, "/api/carte/previsualiser", {"zone": fermee, "de": 2, "a": 9, "cm": 10, "cote": "court", "raccord": 0.5},
+            )
+            assert statut == 200 and "refus" not in corps and corps["resume"]["sommets_confondus"] == 1
+            assert corps["apres"][0] == corps["apres"][-1]
+
+    executer(scenario())
+
+
+def test_page_carte_lisible_sur_un_grand_terrain():
+    from lymow_pilotage import ui
+
+    script = (ui.STATIQUE / "carte.js").read_text(encoding="utf-8")
+    page = (ui.STATIQUE / "index.html").read_text(encoding="utf-8")
+    for identifiant in ("carte-noms", "carte-robot-cadrer", "carte-recadrer", "carte-possible"):
+        assert f'id="{identifiant}"' in page and f'"{identifiant}"' in script
+    assert "Tout voir" in page and "Cadrer sur le robot" in page
+    assert "dblclick" in script and "POLICE_PX" in script and "SOMMET_PX" in script and "carte.liste" in script
+    assert "unite * 2.2" not in script  # plus de taille d'étiquette en unités de carte
 
 
 def test_page_carte_refusee_repond_vite_avec_le_motif_exact(tmp_path, monkeypatch, session_reelle, lien):
