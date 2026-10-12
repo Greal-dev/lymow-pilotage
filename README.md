@@ -128,7 +128,11 @@ navigateur et s'arrête sur Ctrl+C. `lancer-lymow.cmd` (double-clic) lance
   gestionnaire du protocole `myapp` : une clé `HKCU\Software\Classes\myapp` dans
   le registre de votre session, dont la commande est
   `"<chemin de lymow.exe>" rappel "%1"`. Rien d'autre n'est modifié ; une clé
-  `myapp` qui appartiendrait à un autre programme n'est ni écrasée ni retirée.
+  `myapp` qui appartiendrait à un autre programme (dans votre session ou dans
+  le registre de la machine) n'est ni écrasée ni retirée : son contenu est
+  affiché. Si le dossier de l'outil a été déplacé, la clé est signalée « à
+  réparer » : le bouton « Réparer » (ou `lymow rappel-installer`) la réécrit
+  vers le `lymow.exe` courant.
   Pour annuler : bouton « Désactiver », ou `lymow rappel-desinstaller`. Une fois
   actif : « Se connecter avec Google », accepter quand Windows propose d'ouvrir
   Lymow, et la page se met à jour seule. `lymow rappel <adresse>` n'accepte

@@ -152,7 +152,8 @@ class ServeurUI:
         self._derniere_reouverture: float | None = None
         self._dernier_rappel: float | None = None
         self.registre: Any = None  # None : registre Windows réel ; les tests y mettent un double
-        self.un_clic: dict[str, Any] = {"pris_en_charge": False, "actif": False, "etranger": None}
+        self.un_clic: dict[str, Any] = {"pris_en_charge": False, "actif": False, "perime": False, "etranger": None}
+        self._battement: asyncio.Task[None] | None = None  # démonstration : état périodique du robot fictif
         self.video_ouverte = False
         # Connexion au compte : vérificateur PKCE et `state` ne quittent jamais la mémoire du serveur.
         self.tentative: tuple[auth.DemandeOAuth, float] | None = None
@@ -237,6 +238,9 @@ class ServeurUI:
         self.ferme = True
         self._stop_demande = True
         await self._interrompre()
+        if self._battement is not None:
+            self._battement.cancel()
+            await asyncio.gather(self._battement, return_exceptions=True)
         await self._pile.aclose()
         self.session = None
         if self._lanceur is not None:
@@ -258,6 +262,9 @@ class ServeurUI:
             robot.session = self.session
             self.session.signaler = self._signaler
             self.ident, self.etat_liaison = None, demo.MENTION
+            if self._battement is not None:
+                self._battement.cancel()
+            self._battement = asyncio.create_task(robot.battre())  # l'état ne se grise pas tout seul
             await self.session.solliciter()
             return
         # Identifiants relus dans le coffre à chaque connexion : le jeton stocké a pu tourner.
@@ -521,6 +528,8 @@ class ServeurUI:
         """Le mouvement vit ici : aucune requête de la page n'est nécessaire pour qu'il s'arrête."""
         try:
             bilan, code = await travail()
+            if self.demonstration:  # « émis » vers le robot fictif : ne jamais afficher « réel »
+                bilan = _en_demonstration(bilan)
             self.resultat = assainir(bilan | {"code_sortie": code})  # filtré comme le journal
             if code == conduite.CODE_ARRET_NON_CONFIRME:
                 self._signaler("ARRÊT NON CONFIRMÉ : arrêtez le robot par son bouton STOP ou par l'application.")
@@ -706,13 +715,10 @@ class ServeurUI:
         Acceptée seulement si une tentative est active et que son `state` correspond ;
         un `state` étranger ne consomme pas la tentative. La réponse ne dit que « ok » ou non.
         """
-        reponse = {"interface": "lymow", "ok": False}
+        reponse: dict[str, Any] = {"interface": "lymow", "ok": False}
         if self.demonstration:
             return web.json_response(reponse, status=409)
         maintenant = self.horloge()
-        if self._dernier_rappel is not None and maintenant - self._dernier_rappel < DELAI_RAPPEL_S:
-            return web.json_response(reponse, status=429)
-        self._dernier_rappel = maintenant
         try:
             corps = await requete.json()
         except (ValueError, RecursionError):
@@ -726,10 +732,17 @@ class ServeurUI:
             return web.json_response(reponse, status=409)
         etat_recu = parse_qs(urlparse(adresse).query).get("state", [""])[0]
         if not self._egaux(etat_recu, tentative[0].etat):  # comparaison en temps constant
+            # La fréquence n'est limitée qu'APRÈS un `state` refusé : une adresse fausse ne doit
+            # jamais faire perdre le vrai rappel, qui passe sans attendre.
+            if self._dernier_rappel is not None and maintenant - self._dernier_rappel < DELAI_RAPPEL_S:
+                return web.json_response(reponse, status=429)
+            self._dernier_rappel = maintenant
             self._noter("connexion en un clic : adresse refusée")
             return web.json_response(reponse, status=403)
         resultat = await self._terminer_connexion(adresse)
         reponse["ok"] = resultat.status == 200
+        if not reponse["ok"]:
+            reponse["motif"] = "connexion-refusee"
         return web.json_response(reponse, status=200 if reponse["ok"] else 400)
 
     async def _compte_un_clic(self, requete: web.Request) -> web.StreamResponse:
@@ -824,6 +837,14 @@ class ServeurUI:
         return web.json_response({"video": "arrêtée"})
 
 
+def _en_demonstration(objet: Any) -> Any:
+    if isinstance(objet, dict):
+        return {c: MODES[2] if c == "mode" and v == MODES[1] else _en_demonstration(v) for c, v in objet.items()}
+    if isinstance(objet, list):
+        return [_en_demonstration(element) for element in objet]
+    return objet
+
+
 def _refus(statut: int, message: str) -> web.Response:
     return web.json_response({"erreur": message}, status=statut)
 
@@ -872,12 +893,12 @@ async def servir(
     except OSError:  # port déjà pris (WinError 10048) : une interface tourne peut-être déjà
         await serveur.arreter()
         return await rejoindre(port, reel, demonstration)
-    rappel.noter_port(dossier, serveur.port, True)
+    rappel.noter_port(rappel.dossier_ports(), serveur.port, True)
     try:
         print(f"Interface en mode {serveur.mode.upper() if reel else serveur.mode} sur {serveur.adresse} — Ctrl+C pour arrêter.")
         serveur.ouvrir_page()  # en cas d'échec : adresse affichée, et la fenêtre reste ouverte
         await serveur.fin.wait()
     finally:
-        rappel.noter_port(dossier, serveur.port, False)
+        rappel.noter_port(rappel.dossier_ports(), serveur.port, False)
         await serveur.arreter()
     return "interface arrêtée"

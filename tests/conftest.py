@@ -121,6 +121,7 @@ class FauxRegistre:
     """Double du module `winreg` : un dictionnaire en mémoire, jamais le registre de la machine."""
 
     HKEY_CURRENT_USER = "HKCU"
+    HKEY_CLASSES_ROOT = "HKCR"
     REG_SZ = 1
 
     class _Cle:
@@ -134,10 +135,16 @@ class FauxRegistre:
             return False
 
     def __init__(self) -> None:
-        self.cles: dict[str, dict[str, str]] = {}
+        self.cles: dict[str, dict[str, str]] = {}  # registre de l'utilisateur (HKCU)
+        self.machine: dict[str, dict[str, str]] = {}  # classes de la machine (HKLM\Software\Classes)
         self.ecritures = 0
 
-    def OpenKey(self, _racine, chemin):  # noqa: N802 — noms de l'API Windows
+    def OpenKey(self, racine, chemin):  # noqa: N802 — noms de l'API Windows
+        if racine == self.HKEY_CLASSES_ROOT:  # vue fusionnée : l'utilisateur d'abord, la machine ensuite
+            fusion = self.cles.get("Software\\Classes\\" + chemin, self.machine.get(chemin))
+            if fusion is None:
+                raise FileNotFoundError(chemin)
+            return self._Cle(fusion)
         if chemin not in self.cles:
             raise FileNotFoundError(chemin)
         return self._Cle(self.cles[chemin])
@@ -168,12 +175,15 @@ class FauxRegistre:
 
 
 @pytest.fixture(autouse=True)
-def registre(monkeypatch) -> FauxRegistre:
-    """Aucun test ne lit ni n'écrit le registre Windows réel."""
+def registre(monkeypatch, tmp_path_factory) -> FauxRegistre:
+    """Aucun test ne lit ni n'écrit le registre Windows réel, ni le fichier de ports du projet."""
     from lymow_pilotage import rappel
 
     faux = FauxRegistre()
     monkeypatch.setattr(rappel, "_registre_reel", lambda: faux)
+    ports = tmp_path_factory.mktemp("ports")
+    faux.dossier_ports_reel = rappel.dossier_ports
+    monkeypatch.setattr(rappel, "dossier_ports", lambda: ports)
     return faux
 
 

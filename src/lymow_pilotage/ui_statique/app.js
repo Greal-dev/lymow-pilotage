@@ -177,10 +177,12 @@
     unClicActif = Boolean(unClic.actif);
     $("un-clic-etat").textContent = !unClic.pris_en_charge
       ? "connexion en un clic : non prise en charge sur ce système"
-      : "connexion en un clic : " + (unClic.actif ? "active" : "inactive")
+      : "connexion en un clic : " + (unClic.actif ? "active" : unClic.perime
+        ? "à réparer (elle pointe vers un autre emplacement de lymow.exe)" : "inactive")
         + (unClic.etranger ? " (un autre programme occupe déjà le protocole myapp)" : "");
     $("un-clic-activer").hidden = !unClic.pris_en_charge || unClic.actif || Boolean(unClic.etranger);
-    $("un-clic-desactiver").hidden = !unClic.actif;
+    $("un-clic-activer").textContent = unClic.perime ? "Réparer la connexion en un clic" : "Activer la connexion en un clic";
+    $("un-clic-desactiver").hidden = !(unClic.actif || unClic.perime);
     var choix = $("compte-choix");
     choix.hidden = !compte.choix;
     var liste = $("compte-appareils");

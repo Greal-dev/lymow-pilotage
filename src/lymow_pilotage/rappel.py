@@ -27,7 +27,6 @@ ADRESSE = re.compile(r"myapp://callback/\?[A-Za-z0-9=&%._~\-]{1,2048}")
 CLE = r"Software\Classes\myapp"
 SOUS_CLES = (CLE + r"\shell\open\command", CLE + r"\shell\open", CLE + r"\shell", CLE)
 LIBELLE = "URL:Lymow, retour de connexion"
-_FIN_DE_NOTRE_COMMANDE = 'lymow.exe" rappel "%1"'
 
 
 class EchecRappel(Exception):
@@ -64,70 +63,100 @@ def commande_attendue(executable: Path) -> str:
     return f'"{executable}" rappel "%1"'
 
 
-def _lire_commande(registre: Any) -> str | None:
+def _lire(registre: Any, racine: Any, chemin: str) -> str | None:
+    """Valeur par défaut d'une clé ; None si la clé n'existe pas, « » si elle est vide."""
     try:
-        with registre.OpenKey(registre.HKEY_CURRENT_USER, SOUS_CLES[0]) as cle:
-            return str(registre.QueryValueEx(cle, "")[0])
+        with registre.OpenKey(racine, chemin) as cle:
+            try:
+                return str(registre.QueryValueEx(cle, "")[0])
+            except OSError:
+                return ""
     except OSError:
         return None
 
 
-def _cle_presente(registre: Any) -> bool:
-    try:
-        with registre.OpenKey(registre.HKEY_CURRENT_USER, CLE):
-            return True
-    except OSError:
-        return False
+def etat(registre: Any = None, executable: Path | None = None) -> dict[str, Any]:
+    """Lecture seule. `actif` : notre commande, à l'identique. `perime` : notre clé, autre exécutable.
 
-
-def etat(registre: Any = None) -> dict[str, Any]:
-    """Lecture seule : pris en charge ? actif ? une clé étrangère occupe-t-elle déjà `myapp` ?"""
+    `etranger` : une clé `myapp` qui n'est pas la nôtre, dans le registre de l'utilisateur ou,
+    vue par HKEY_CLASSES_ROOT, dans celui de la machine. Elle n'est jamais écrasée.
+    """
+    constat: dict[str, Any] = {"pris_en_charge": False, "actif": False, "perime": False, "etranger": None}
     try:
         registre = registre or _registre_reel()
     except EchecRappel:
-        return {"pris_en_charge": False, "actif": False, "etranger": None}
-    commande = _lire_commande(registre)
-    notre = commande is not None and commande.endswith(_FIN_DE_NOTRE_COMMANDE)
-    etranger = None
-    if not notre and _cle_presente(registre):
-        etranger = commande or "(clé myapp sans commande)"
-    return {"pris_en_charge": True, "actif": notre, "etranger": etranger}
+        return constat
+    constat["pris_en_charge"] = True
+    libelle = _lire(registre, registre.HKEY_CURRENT_USER, CLE)
+    commande = _lire(registre, registre.HKEY_CURRENT_USER, SOUS_CLES[0])
+    if libelle is None:  # rien chez l'utilisateur : la vue fusionnée montre une éventuelle clé machine
+        machine = _lire(registre, registre.HKEY_CLASSES_ROOT, "myapp")
+        if machine is not None:
+            en_place = _lire(registre, registre.HKEY_CLASSES_ROOT, r"myapp\shell\open\command")
+            constat["etranger"] = f"clé de la machine : {en_place or machine or 'myapp sans commande'}"
+        return constat
+    if libelle != LIBELLE:  # seul notre libellé désigne notre clé
+        constat["etranger"] = commande or "(clé myapp sans commande)"
+        return constat
+    try:
+        attendue = commande_attendue(executable or executable_lymow())
+    except EchecRappel:
+        attendue = None
+    constat["actif"] = commande is not None and commande == attendue  # égalité exacte, pas un suffixe
+    constat["perime"] = not constat["actif"]
+    return constat
 
 
 def installer(registre: Any = None, executable: Path | None = None) -> str:
-    """Écrit HKCU\\Software\\Classes\\myapp ; refuse d'écraser une clé qui ne pointe pas vers cet outil."""
+    """Écrit (ou répare) HKCU\\Software\\Classes\\myapp ; refuse d'écraser une clé qui n'est pas la nôtre."""
     registre = registre or _registre_reel()
-    constat = etat(registre)
+    executable = executable or executable_lymow()
+    constat = etat(registre, executable)
     if constat["etranger"] is not None:
         raise EchecRappel(
             f"une clé « myapp » existe déjà et ne pointe pas vers cet outil ({constat['etranger']}) : rien n'a été modifié"
         )
-    commande = commande_attendue(executable or executable_lymow())
+    commande = commande_attendue(executable)
     with registre.CreateKey(registre.HKEY_CURRENT_USER, CLE) as cle:
         registre.SetValueEx(cle, "", 0, registre.REG_SZ, LIBELLE)
         registre.SetValueEx(cle, "URL Protocol", 0, registre.REG_SZ, "")
     with registre.CreateKey(registre.HKEY_CURRENT_USER, SOUS_CLES[0]) as cle:
         registre.SetValueEx(cle, "", 0, registre.REG_SZ, commande)
-    return f"connexion en un clic activée : HKCU\\{CLE} lance désormais {commande}"
+    action = "réparée" if constat["perime"] else "activée"
+    return f"connexion en un clic {action} : HKCU\\{CLE} lance désormais {commande}"
 
 
 def desinstaller(registre: Any = None) -> str:
-    """Ne retire que NOTRE clé ; une clé étrangère est laissée intacte."""
+    """Ne retire que la clé qui porte NOTRE libellé (active ou périmée) ; rien d'une clé étrangère."""
     registre = registre or _registre_reel()
     constat = etat(registre)
     if constat["etranger"] is not None:
         raise EchecRappel(f"la clé « myapp » présente n'est pas la nôtre ({constat['etranger']}) : rien n'a été retiré")
-    if not constat["actif"]:
+    if not (constat["actif"] or constat["perime"]):
         return "connexion en un clic déjà inactive : rien à retirer"
-    for chemin in SOUS_CLES:  # de la plus profonde à la racine
+    for chemin in SOUS_CLES:  # de la plus profonde à la racine : jamais de clé `myapp` vide laissée derrière
         try:
             registre.DeleteKey(registre.HKEY_CURRENT_USER, chemin)
-        except OSError:
-            break  # une sous-clé étrangère subsiste : on s'arrête là
+        except FileNotFoundError:
+            continue  # clé périmée incomplète : on poursuit vers la racine
+        except OSError as erreur:
+            raise EchecRappel(
+                f"retrait incomplet ({type(erreur).__name__}) : la clé HKCU\\{CLE} contient autre chose que notre commande"
+            ) from None
     return f"connexion en un clic désactivée : HKCU\\{CLE} retirée"
 
 
 # --- remise de l'adresse à l'interface locale -----------------------------------------
+
+
+def dossier_ports() -> Path:
+    """Dossier fixe, indépendant du répertoire courant et de `--donnees` : l'interface et
+    `lymow rappel` (lancé par Windows depuis un autre répertoire) doivent lire le même fichier."""
+    depart = Path(__file__).resolve().parent
+    for dossier in (depart, *depart.parents):
+        if (dossier / "pyproject.toml").is_file():
+            return dossier
+    return Path.home()
 
 
 def ports_connus(dossier: Path | None) -> list[int]:
@@ -153,8 +182,11 @@ def noter_port(dossier: Path | None, port: int, present: bool) -> None:
         pass
 
 
-async def transmettre(adresse: str, ports: list[int]) -> bool:
-    """POST local, sans Origin ni Referer. Vrai si une interface en attente a accepté l'adresse."""
+REUSSIE, REFUSEE, AUCUNE = "réussie", "refusée", "aucune"
+
+
+async def transmettre(adresse: str, ports: list[int]) -> str:
+    """POST local, sans Origin ni Referer. Rend l'issue réelle : réussie, refusée, ou aucune interface."""
     delai = aiohttp.ClientTimeout(total=30)
     for port in ports:
         try:
@@ -163,6 +195,10 @@ async def transmettre(adresse: str, ports: list[int]) -> bool:
                     corps = await r.json(content_type=None)
         except Exception:  # noqa: BLE001 — port fermé ou autre programme : on essaie le suivant
             continue
-        if isinstance(corps, dict) and corps.get("interface") == "lymow" and corps.get("ok") is True:
-            return True
-    return False
+        if not isinstance(corps, dict) or corps.get("interface") != "lymow":
+            continue
+        if corps.get("ok") is True:
+            return REUSSIE
+        if corps.get("motif") == "connexion-refusee":  # la bonne interface a tenté l'échange, en vain
+            return REFUSEE
+    return AUCUNE

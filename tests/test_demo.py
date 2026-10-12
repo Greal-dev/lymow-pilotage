@@ -90,7 +90,9 @@ def test_demonstration_de_bout_en_bout_sans_reseau_ni_coffre(tmp_path, monkeypat
             statut, _corps, _recus = await poster(http, serveur, "/api/emettre", {"identifiant": corps["identifiant"]})
             assert statut == 202
             await attendre(lambda: not serveur.occupe, delai=8.0)
+            assert serveur.resultat["mode"] == "démonstration"  # jamais « réel » à l'écran
             etape = serveur.resultat["etapes"][0]
+            assert etape["mode"] == "démonstration"
             assert etape["constat"] == "déplacement constaté" and etape["deplacement_m"] == pytest.approx(0.2, abs=0.03)
             assert serveur.session.etat.pose.est_m == pytest.approx(depart.est_m + 0.2, abs=0.03)
 
@@ -111,6 +113,7 @@ def test_demonstration_de_bout_en_bout_sans_reseau_ni_coffre(tmp_path, monkeypat
             assert statut == 202
             await attendre(lambda: not serveur.occupe, delai=12.0)
             assert serveur.resultat["verdict"] == "appliqué" and serveur.resultat["code_sortie"] == 0
+            assert serveur.resultat["mode"] == "démonstration"
             statut, corps, _recus = await poster(http, serveur, "/api/carte/actualiser")
             apres = corps["carte"]["zones"][1]["contour"]
             assert apres != avant and apres[2] == pytest.approx([8.0, 11.8], abs=0.001)
@@ -177,3 +180,23 @@ def test_page_porte_le_bandeau_de_demonstration():
     script = (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
     assert 'id="bandeau-demo"' in page and "DÉMONSTRATION — robot fictif" in page and demo.MENTION in page
     assert '$("bandeau-demo").hidden = !demonstration' in script and '$("video-demarrer").hidden = demonstration' in script
+
+
+def test_robot_fictif_publie_son_etat_periodiquement_l_affichage_ne_se_grise_pas(tmp_path, monkeypatch):
+    assert 1 <= demo.PERIODE_ETAT_S <= 10  # bien en deçà des 30 s de fraîcheur
+    monkeypatch.setattr(demo, "PERIODE_ETAT_S", 0.05)
+
+    async def scenario():
+        async with serveur_demo(tmp_path, monkeypatch) as (serveur, _http):
+            await attendre(lambda: serveur.session.etat.recu_statut is not None)
+            premier = serveur.session.etat.recu_statut
+            recues = len(serveur.session.lien.recues)
+            await asyncio.sleep(0.4)  # aucune demande de la page pendant ce temps
+            assert len(serveur.session.lien.recues) == recues
+            assert serveur.session.etat.recu_statut > premier + 0.2
+            image = serveur.instantane()
+            assert image["etat"]["perime"] is False and image["etat"]["age_etat_s"] < 0.3
+            battement = serveur._battement
+        assert battement.done()  # arrêté avec le serveur
+
+    executer(scenario())

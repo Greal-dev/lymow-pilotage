@@ -20,6 +20,8 @@ APPAREIL = "robot-fictif"
 MENTION = "DÉMONSTRATION — robot fictif"
 # Délai de réponse du robot fictif : une réponse doit être datée APRÈS la demande.
 DELAI_REPONSE_S = 0.03
+# Comme le vrai, le robot fictif donne de ses nouvelles sans qu'on le lui demande.
+PERIODE_ETAT_S = 5.0
 
 
 # --- construction d'une carte brute (sert aussi de jeu d'essai aux tests) ------------
@@ -110,6 +112,12 @@ class RobotFictif:
             "poseThetaRad": self.cap, "rtkStatus": 3, "rtkSatellites": 24, "lteSignalQuality": 4,
             "wifiSignalQuality": 3, "rcCutHeight": self.hauteur_mm, "softwareVersion": "démonstration",
         }
+
+    async def battre(self) -> None:
+        """État publié périodiquement : sans cela l'affichage se griserait au bout de 30 s."""
+        while True:
+            await asyncio.sleep(PERIODE_ETAT_S)
+            self.session.recevoir_etat(self.etat())
 
     async def publier(self, _sujet: str, charge: str, *, delai: float) -> None:
         octets = pb.unwrap_envelope(charge)
