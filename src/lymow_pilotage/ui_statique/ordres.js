@@ -217,6 +217,13 @@
     return { possible: true, motif: "" };
   }
 
+  /* Bouton à bascule des phares : il propose le contraire de l'état connu (transmis, sinon dernier ordre). */
+  function boutonPhares(phares) {
+    var p = phares || {};
+    var allumer = p.en_attente === true || p.en_attente === false ? !p.en_attente : p.allumes !== true;
+    return { allumer: allumer, libelle: allumer ? "Phares : allumer" : "Phares : éteindre", texte: p.texte || "" };
+  }
+
   function enErreur(ordres) {
     return Boolean(ordres && ordres.erreur && !ordres.erreur.resolue);
   }
@@ -306,6 +313,7 @@
     alerteBord: alerteBord,
     etatDuRecalage: etatDuRecalage,
     textePlateau: textePlateau,
+    boutonPhares: boutonPhares,
     essaiPlateauPossible: essaiPlateauPossible,
     CONFIRMATION_ESSAI_PLATEAU: CONFIRMATION_ESSAI_PLATEAU,
     texteDeLaMain: texteDeLaMain,

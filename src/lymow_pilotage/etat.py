@@ -182,6 +182,12 @@ class Etat:
         return " ; ".join(morceaux)
 
     @property
+    def phares(self) -> bool | None:
+        """Phares du robot d'après sa configuration ; inconnu tant qu'aucune configuration n'a été reçue."""
+        valeur = self.donnees.get("isOpenLed")
+        return valeur if isinstance(valeur, bool) else None
+
+    @property
     def hauteur_coupe_mm(self) -> int | None:
         return self.donnees.get("rcCutHeight")
 
@@ -222,6 +228,7 @@ class Etat:
             "signal_wifi": d.get("wifiSignalQuality"),
             "wifi_rssi_dbm": d.get("wifiRssiDbm"),
             "hauteur_coupe_mm": self.hauteur_coupe_mm,
+            "phares": self.phares,
             "micrologiciel": d.get("softwareVersion") or d.get("fwVersion"),
             "age_etat_s": None if age is None else round(age, 1),
         }

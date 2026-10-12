@@ -416,6 +416,40 @@ de lui-même avant ou au contact, sa détection reste active en pilotage
 manuel ; noter alors le code affiché. S'il pousse le carton, elle ne l'est
 pas : seuls les garde-fous ci-dessus protègent.
 
+## Phares
+
+« Phares : allumer / éteindre » : un bouton à bascule dans les actions du
+pilotage, et `lymow phares allumer|eteindre`. Un clic émet l'ordre, sans
+prévisualisation (ordre sans mouvement) ; demandé pendant un pas, il part à
+la fin du pas — jamais entre deux consignes, jamais devant un STOP, qui
+l'annule. Refusé main rendue. Forme émise : celle que le socle a capturée
+sur le bouton « Vehicle LED » de l'application (configuration du robot,
+signal 10 pour allumer, 11 pour éteindre). L'éclairage propre à la caméra
+(autres numéros de la même énumération) n'est attesté par aucune capture :
+il n'est pas proposé. État affiché : celui de la configuration du robot
+quand elle est reçue (champ absent = éteints, à confirmer au premier
+allumage), sinon « dernier ordre envoyé : allumés (état réel non
+transmis) ».
+
+## Ce que le diagnostic de localisation a réellement répondu
+
+169 réponses réelles, le 2026-10-12 de 20:41 à 20:53 (85 de niveau 1, 84 de
+niveau 2), relues hors ligne :
+
+- âge des corrections de la base : 2 s (79 fois), 4 s (5 fois) ;
+- base en ligne, taux d'erreur du lien radio 0 %, sur toutes ;
+- précision annoncée de 0,03 à 0,105 m (médiane 0,046 m), identique à
+  celle des trames d'état ; 23 à 29 satellites ;
+- **aucune position** : ni le niveau 1 ni le niveau 2 ne portent la position
+  satellite brute, et aucune trame ne porte les coordonnées du robot.
+
+L'écart « position satellite / position calculée » **ne peut donc pas être
+calculé** avec ce que le robot transmet : ce n'est ni une erreur de
+décodage, ni une affaire de repère. La question « le robot se recale-t-il ? »
+reste sans réponse directe ; ce que ces réponses établissent, c'est que ce
+soir-là les corrections arrivaient normalement — un décalage constaté à ce
+moment ne vient pas d'un lien de base perdu.
+
 ## Hauteur du plateau
 
 Le robot **ne transmet aucune hauteur mesurée du plateau** : dans les

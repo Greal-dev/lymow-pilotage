@@ -10,6 +10,7 @@
   var Ordres = window.LymowOrdres;
   var occupe = false;
   var liaisonSuspendue = false;
+  var dernierPhares = { allumer: true };
   var dernieresOrdres = null;
   var dernierEtat = null;
   var recalageAvant = null;
@@ -159,6 +160,9 @@
     var essai = Ordres.essaiPlateauPossible({ mode: image.mode, occupe: occupe });
     document.querySelectorAll("[data-plateau-essai]").forEach(function (bouton) { bouton.disabled = !essai.possible; });
     if (!essai.possible) { $("plateau-essai-etat").textContent = essai.motif; }
+    dernierPhares = Ordres.boutonPhares(image.phares);
+    $("phares-bouton").textContent = dernierPhares.libelle;
+    $("phares-etat").textContent = dernierPhares.texte;
     var plateau = Ordres.textePlateau(image.plateau);
     $("plateau-etat").textContent = plateau.texte;
     $("plateau-jauge").hidden = !plateau.jauge;
@@ -667,6 +671,15 @@
   $("sequence-previsualiser").addEventListener("click", function () { previsualiser(sequence.slice(), false, objectifSequence); });
   $("sequence-vider").addEventListener("click", function () { sequence = []; afficherSequence(); });
   $("emettre").addEventListener("click", emettre);
+  $("phares-bouton").addEventListener("click", async function () {
+    // Un clic, sans prévisualisation : ordre sans mouvement. Pendant un pas, le serveur le met en attente.
+    try {
+      var reponse = await appeler("/api/phares", { allumer: dernierPhares.allumer });
+      if (reponse.simulation) { $("phares-etat").textContent = "Phares : simulation, rien n'est émis."; }
+    } catch (erreur) {
+      $("phares-etat").textContent = "Phares : refusé — " + erreur.message;
+    }
+  });
   document.querySelectorAll("[data-plateau-essai]").forEach(function (bouton) {
     bouton.addEventListener("click", async function () {
       if (!window.confirm(bouton.textContent + "\n\n" + Ordres.CONFIRMATION_ESSAI_PLATEAU)) { return; }

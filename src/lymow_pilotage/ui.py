@@ -246,6 +246,8 @@ class ServeurUI:
         self._recalage = recalage.Memoire(self.dossier)
         self._station = recalage.SuiviStation()
         self._liaison_lente = False  # pilotage direct : en attente d'une trame fraîche du robot
+        self._phares_dernier: bool | None = None  # dernier ordre de phares envoyé (l'état réel peut ne pas être transmis)
+        self._phares_attente: bool | None = None  # demandé pendant un pas : émis à sa fin
         self._plateau_suite: str | None = None  # ce que la relecture a montré après le dernier ordre de plateau
         self._direct_en_cours = False
         # « Rendre la main à l'application » : liaison fermée, reconnexion automatique suspendue.
@@ -291,6 +293,7 @@ class ServeurUI:
                 web.post("/api/pause", self._pause_raccourci),
                 web.post("/api/erreur/annuler", self._erreur_annuler),
                 web.post("/api/plateau/essai", self._plateau_essai),
+                web.post("/api/phares", self._phares),
                 web.post("/api/liaison/rendre", self._liaison_rendre),
                 web.post("/api/liaison/reprendre", self._liaison_reprendre),
                 web.post("/api/diagnostic-rtk", self._diagnostic_rtk),
@@ -500,7 +503,15 @@ class ServeurUI:
         etat, depuis = session.etat, self._diagnostic_depuis
         if etat.recu_rtk is not None and etat.recu_rtk >= depuis:
             detail = etat.detail_localisation() or "réponse reçue, sans détail exploitable"
+            l1 = etat.donnees.get("rtkL1") or {}
+            if l1.get("baseStationStatus") == "online":
+                detail += " ; base en ligne"
+            if isinstance(l1.get("dataErrorRatePct"), (int, float)):
+                detail += f" ; lien radio de la base : {l1['dataErrorRatePct']:g} % d'erreur"
+            if isinstance(l1.get("gnssSatellites"), int):
+                detail += f" ; {l1['gnssSatellites']} satellites"
             if etat.ecart_brut_m is None:
+                # Constat du 2026-10-12 (169 réponses réelles) : ni le niveau 1 ni le niveau 2 ne portent de position.
                 detail += " ; écart position satellite / position calculée : non mesurable (position brute non transmise)"
             return detail
         if session.horloge() - depuis > ATTENTE_DIAGNOSTIC_S:
@@ -745,6 +756,7 @@ class ServeurUI:
             "arret_aux_bords": self.arret_aux_bords,
             "recalage": self._recalage.resume(),
             "plateau": self._etat_du_plateau(),
+            "phares": self._etat_des_phares(),
             "carte_connue": self._carte_affichee()[0] is not None,  # la page la charge alors d'elle-même
             "direct": {
                 "arme": self.direct.arme, "reste_s": self.direct.reste_s,
@@ -1092,6 +1104,8 @@ class ServeurUI:
             self._noter(f"ordre en échec : {self.resultat['echec']}")
         finally:
             self.version += 1
+            if self._phares_attente is not None and not (self.ferme or self.suspendue or self._stop_demande):
+                asyncio.get_running_loop().call_soon(self._lancer_les_phares_en_attente)
             if self._ecoute is not None and not self.ferme:
                 self._fin_ecoute = asyncio.get_running_loop().call_later(SUITE_CAPTURE_S, self._fermer_ecoute)
 
@@ -1113,6 +1127,7 @@ class ServeurUI:
                 return _refus(503, f"robot injoignable : {self.etat_liaison}")
             self._noter("STOP demandé")
             self._desarmer("STOP")  # la file du pilotage direct est vidée avant tout
+            self._phares_attente = None
             self.previsualisation = None
             self._stop_demande = True
             try:
@@ -1142,6 +1157,69 @@ class ServeurUI:
         self.previsualisation = None
         self._lancer([Ordre("pause")])
         return web.json_response({"accepte": True}, status=202)
+
+    def _etat_des_phares(self) -> dict[str, Any]:
+        transmis = self.session.etat.phares if self.session is not None else None
+        # Un ordre plus récent que la configuration relue l'emporte tant que le robot ne l'a pas confirmé.
+        allumes = transmis if transmis is not None else self._phares_dernier
+        texte = mouvement.texte_phares(transmis, self._phares_dernier)
+        if self._phares_attente is not None:
+            texte += f" — {'allumage' if self._phares_attente else 'extinction'} en attente de la fin du pas"
+        return {"allumes": allumes, "transmis": transmis is not None, "en_attente": self._phares_attente, "texte": "Phares : " + texte}
+
+    async def _phares_entre_deux_pas(self) -> None:
+        """Demande faite pendant un pas direct : émise ici, entre deux pas — un message, sans relecture."""
+        allumer, self._phares_attente = self._phares_attente, None
+        if allumer is None or self.session is None or self.suspendue:
+            return
+        try:
+            await mouvement.executer_phares(self.session, allumer, relire=False)
+            self._phares_dernier = allumer
+        except Exception as erreur:  # noqa: BLE001 — les phares ne font jamais échouer un pas
+            self._noter(f"phares : ordre non émis ({masquer(str(erreur)) or type(erreur).__name__})")
+        self.version += 1
+
+    def _lancer_les_phares_en_attente(self) -> None:
+        allumer = self._phares_attente
+        if allumer is None or self.occupe or self.session is None or self.suspendue or self.ferme:
+            return
+        self._phares_attente = None
+        self._lancer_les_phares(allumer)
+
+    def _lancer_les_phares(self, allumer: bool) -> None:
+        session = self.session
+
+        async def travail() -> tuple[dict[str, Any], int]:
+            bilan, code = await conduite.emettre_ordres(session, [Ordre("phares-allumer" if allumer else "phares-eteindre")], self.journal)
+            if code == 0:
+                self._phares_dernier = allumer
+            return bilan, code
+
+        self._lancer_travail("phares : allumer" if allumer else "phares : éteindre", travail)
+
+    async def _phares(self, requete: web.Request) -> web.StreamResponse:
+        """« Phares : allumer / éteindre » : un clic, sans prévisualisation (ordre sans mouvement). Pendant un
+        pas, la demande attend sa fin : elle ne retarde ni les consignes ni le STOP."""
+        corps = await self._corps(requete)
+        allumer = corps.get("allumer") if isinstance(corps, dict) else None
+        if not isinstance(allumer, bool) or set(corps) != {"allumer"}:
+            raise ErreurSaisie("« allumer » attendu : vrai ou faux")
+        self._refuser_si_main_rendue()
+        ordre = Ordre("phares-allumer" if allumer else "phares-eteindre")
+        if not self.emet:  # SEC-05 : simulation — rien n'est émis
+            bilan, _code = conduite.simuler_ordres([ordre], self.cal, self.journal, self._appareil_fictif())
+            self._noter(f"phares : {'allumer' if allumer else 'éteindre'} (simulation)")
+            return web.json_response({"accepte": True, "simulation": True, "bilan": bilan})
+        if self.session is None or not self.session.lien.connecte:
+            return _refus(503, f"robot injoignable : {self.etat_liaison}")
+        if self._stop_demande:
+            return _refus(409, "un STOP est en cours")
+        if self.occupe:  # un ordre est en cours : la demande attend sa fin (ou l'entre-deux-pas du pilotage direct)
+            self._phares_attente = allumer
+            self.version += 1
+            return web.json_response({"accepte": True, "en_attente": True}, status=202)
+        self._lancer_les_phares(allumer)
+        return web.json_response({"accepte": True, "en_attente": False}, status=202)
 
     async def _plateau_essai(self, requete: web.Request) -> web.StreamResponse:
         """ESSAI — « Plateau : position de nettoyage » / « redescendre » : mode réel seulement, sur confirmation
@@ -1365,6 +1443,7 @@ class ServeurUI:
         code = 0
         try:
             while self.direct.file:
+                await self._phares_entre_deux_pas()  # jamais pendant un pas : ni consigne ni STOP retardés
                 ordre = self.direct.file.pop(0)
                 self.version += 1
                 self._munir_du_garde_fou([ordre])

@@ -11,7 +11,8 @@ Modifications par rapport à l'original :
 - ``decode_pboutput`` : cartes, chemins, planifications, rapports de tonte et
   diagnostics RTK retirés ; du profil d'appareil seules les versions logicielles
   sont lues (adresse IP, adresse MAC, numéro de série, SSID jamais décodés) ;
-  de la configuration robot seule la hauteur de coupe (``rcCutHeight``) est lue ;
+  de la configuration robot seules la hauteur de coupe (``rcCutHeight``) et, depuis le
+  2026-10-12, l'état des phares (``isOpenLed``, champ 7) sont lus ;
 - ``encode_query_robot_config`` : version de protocole en paramètre (défaut
   inchangé : 49) ;
 - ``encode_userctrl`` (générique, tout code) non recopié : les seuls codes
@@ -267,6 +268,8 @@ def decode_pboutput(pb_bytes: bytes) -> dict[str, Any]:
         cut_height = _first(_decode_fields(robot_config_raw), 3)
         if isinstance(cut_height, int):
             state["rcCutHeight"] = _signed32(cut_height)
+        # Phares du robot : champ 7 (booléen). Un booléen faux n'est pas transmis : absent = éteints.
+        state["isOpenLed"] = _first(_decode_fields(robot_config_raw), 7) == 1
 
     # GPS / RTK (field 6 of outer PbOutput):
     #   f1=satellites(int), f2=eastM(float32), f3=northM(float32), f4=rtkStatus(int)
