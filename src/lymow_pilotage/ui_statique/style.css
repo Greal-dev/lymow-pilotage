@@ -227,8 +227,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
   .cadre-video { height: min(46vh, 26rem); }
 }
 .etat-robot { display: flex; flex-wrap: wrap; gap: 0.3rem 0.6rem; align-items: center; }
-.pas { display: flex; gap: 0.8rem; }
-.pas label { display: inline-flex; align-items: center; gap: 0.3rem; margin: 0; }
+.pas { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; margin: 0.2rem 0; }
+.pas label { display: inline-flex; align-items: center; gap: 0.3rem; margin: 0; white-space: nowrap; }
+#bord-zone { margin: 0; }
 .pas select { width: auto; }
 .actions-robot { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.35rem; }
 .avis p:empty { display: none; }
