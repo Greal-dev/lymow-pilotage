@@ -126,6 +126,7 @@
     $("appareil").textContent = image.appareil || "";
     afficherCompte(image.compte);
     if (window.LymowCarte) { window.LymowCarte.robot(image.etat); }
+    if (window.LymowPave) { window.LymowPave.appliquer(image); }
     var bloc = $("bloc-etat");
     var liste = $("etat-liste");
     vider(liste);
@@ -458,6 +459,7 @@
     $("sequence-vide").hidden = sequence.length > 0;
     $("sequence-previsualiser").disabled = sequence.length === 0;
     $("sequence-vider").disabled = sequence.length === 0;
+    if (window.LymowPave) { window.LymowPave.sequenceChangee(); } // le pavé de flèches montre la même liste
   }
 
   // --- vidéo (non vérifié en réel : voir le README) -------------------------
@@ -602,6 +604,7 @@
       libelles = image.libelles || {};
       bornes = image.bornes || {};
       afficherBornes();
+      if (window.LymowPave) { window.LymowPave.configurer(image.fleches, bornes); }
       remplirRegions(image.regions, image.region_defaut);
       appliquer(image);
       var flux = new EventSource("/api/flux");
@@ -615,5 +618,13 @@
     .catch(function () { $("liaison").textContent = "serveur local injoignable"; });
   afficherSequence();
   // Outils partagés avec le panneau « Carte » (carte.js), sans variable globale de plus.
-  window.LymowPage = { appeler: appeler, element: element, vider: vider, proposer: proposer, signalerErreur: signalerErreur };
+  window.LymowPage = {
+    appeler: appeler, element: element, vider: vider, proposer: proposer, signalerErreur: signalerErreur,
+    // Pavé de flèches (pave.js) : il écrit dans LA séquence de cette page, jamais dans une seconde liste.
+    sequence: function () { return sequence.slice(); },
+    ajouterEtape: function (ordre) { sequence.push(ordre); afficherSequence(); },
+    annulerDerniere: function () { sequence.pop(); afficherSequence(); },
+    viderSequence: function () { sequence = []; afficherSequence(); },
+    previsualiserSequence: function () { if (sequence.length) { previsualiser(sequence.slice(), false); } }
+  };
 })();

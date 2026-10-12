@@ -212,6 +212,39 @@ premier essai, ouvrir la console du navigateur (F12) et observer :
 6. « Arrêter » ferme la signalisation et la liaison ; aucune commande d'arrêt
    de canal n'est connue côté service.
 
+## Pilotage par flèches
+
+But : écrire vite une suite d'étapes — se dégager, rejoindre une zone où le
+réseau revient — et non piloter à vue. Le panneau est à côté de la vidéo.
+
+- Quatre flèches (boutons, ou clavier quand le panneau a le focus) : ↑ avancer,
+  ↓ reculer, ← tourner à gauche, → tourner à droite. Pas choisis dans deux
+  listes : 0,25 / 0,5 / 1 (défaut) / 2 m et 15 / 45 (défaut) / 90°. Vitesses
+  par défaut de l'outil. STOP reste Échap ou Espace, partout.
+- **Mode file (défaut).** Chaque flèche ajoute une étape à la séquence de la
+  page (la même liste que le compositeur). Une miniature trace le trajet cumulé
+  et donne distance, rotation et durée estimée. Entrée prévisualise la
+  séquence ; « Émettre » l'émet. Retour arrière annule la dernière étape.
+- **Mode direct (à armer, avec confirmation).** Chaque flèche émet aussitôt son
+  étape, sans prévisualisation ; les appuis faits pendant un mouvement
+  attendent dans une file de cinq au plus. Bandeau « PILOTAGE DIRECT ARMÉ »
+  tant que c'est armé. Désarmement automatique après 60 s sans action, à la
+  fermeture de la page, sur STOP (qui vide la file), sur tout refus, échec ou
+  constat contraire. La route du serveur n'accepte que ces quatre ordres aux
+  pas des listes — ni plateau, ni tâche, ni vitesse, ni séquence libre — et
+  chaque pas passe par les mêmes règles que tout ordre (SEC-01 à SEC-03, un
+  mouvement à la fois, journal). Sans `--reel` : même parcours, rien n'est
+  émis.
+- Le clavier n'agit que si le panneau a le focus (clic dedans, ou « Activer le
+  clavier »), jamais pendant une saisie ; une touche maintenue vaut un appui.
+- **Avertissement.** L'essai d'arrêt automatique (`essai-arret-auto`) n'a pas
+  encore été fait sur ce robot : on ignore s'il s'arrête seul quand les
+  consignes cessent. Si la liaison tombe pendant un pas, son comportement est
+  donc inconnu, et l'arrêt garanti de l'outil ne peut plus l'atteindre. En
+  zone de mauvaise couverture, préférez des pas courts (0,25 ou 0,5 m), robot
+  à vue ou vidéo ouverte. Non vérifié en réel : ce panneau n'a été testé que
+  hors ligne.
+
 ## Calibration (robot à vue, zone dégagée, main sur le bouton STOP)
 
 1. **`lymow essai-arret-auto --reel` en premier.** But : savoir si le robot
