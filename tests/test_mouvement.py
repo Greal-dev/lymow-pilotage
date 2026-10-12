@@ -20,7 +20,8 @@ AVANCER_1 = Ordre("avancer", 1.0)
 CONSIGNE_AVANT = bytes.fromhex("10 31 52 0a 0d 00 00 80 3e 15 00 00 00 00")
 PAUSE = bytes.fromhex("10 31 28 03")
 IMMOBILE = "le robot n'a pas bougé (patinage ou ordre ignoré)"
-NON_RAFRAICHI = "état non rafraîchi depuis l'ordre : déplacement non vérifié"
+NON_RAFRAICHI = "aucune trame d'état fraîche reçue en 12 s après l'ordre : liaison douteuse"
+SANS_POSE = {"workStatus": 1, "battery": 80}  # le robot réel au repos : un état, jamais de position
 
 
 def au_premier_arret(action):
@@ -508,7 +509,7 @@ def test_sec04_position_de_depart_non_fraiche_constat_impossible(session, lien):
     lien.sur_publication = robot_ensuite(fragment(est=6.0))
     rapport = lancer(mouvement.executer_mouvement(session, AVANCER_1))
     assert rapport["avant"] is None and rapport["verifie"] is False
-    assert rapport["constat"].startswith("constat impossible")
+    assert rapport["constat"] == mouvement.POSITION_NON_FOURNIE and rapport["verification"] == "non vérifiable"
     assert "deplacement_m" not in rapport
 
 
@@ -677,9 +678,15 @@ def test_sec07_chaque_etape_reverifie_les_lames(session, lien):
     lien.sur_publication = robot_ensuite(fragment(statut=2, est=1.0))
     bilan = lancer(mouvement.executer_sequence(session, [AVANCER_1, AVANCER_1]))
     assert bilan["interrompue"] is True
-    assert bilan["etapes"][0]["verifie"] is True
-    assert "SEC-01" in bilan["etapes"][1]["echec"]
+    assert bilan["etapes"][0]["verifie"] is True and len(bilan["etapes"]) == 1
+    # (c) : le statut sorti de la liste blanche arrête la séquence, dit en clair.
+    assert bilan["motif"] == (
+        "séquence interrompue après « avancer 1 » : le robot est passé en « tonte en cours », "
+        "hors des statuts où un mouvement est permis"
+    )
     assert len(lien.consignes) == 40
+    with pytest.raises(RefusSecurite, match="SEC-01"):  # et l'étape suivante aurait été refusée de toute façon
+        lancer(mouvement.executer_mouvement(session, AVANCER_1))
 
 
 @pytest.mark.parametrize(("ensuite", "constat"), [(fragment(), IMMOBILE), (None, NON_RAFRAICHI)])
@@ -852,3 +859,72 @@ def test_essai_refuse_dans_une_sequence(session, lien):
     with pytest.raises(ErreurSaisie, match="interdite dans une séquence"):
         mouvement.analyser_sequence("avancer 1; essai-arret-auto")
     assert lien.publies == []
+
+
+# --- treizième avenant : constat borné, séquence sans position (premier ordre réel, 2026-10-12) ----
+
+
+def test_constat_sans_position_conclut_tout_de_suite_non_verifiable(session, lien, horloge):
+    lien.robot = dict(SANS_POSE)
+    lien.sur_publication = None
+    debut = horloge.t
+    rapport = lancer(mouvement.executer_mouvement(session, Ordre("reculer", 2.0)))
+    assert rapport["etat_rafraichi"] is True and rapport["avant"] is None and rapport["apres"] is None
+    assert rapport["verification"] == "non vérifiable" and rapport["verifie"] is False
+    assert rapport["constat"] == "position non fournie par le robot : déplacement non vérifiable par l'outil (utilisez la vidéo)"
+    assert horloge.t - debut < 8.0 + 1.0  # les 8 s du mouvement, puis un constat immédiat (plus de 75 s d'attente)
+
+
+def test_constat_attend_au_plus_douze_secondes_une_trame_d_etat(session, lien, horloge):
+    lien.sur_publication = robot_ensuite(None)  # plus aucun état après l'ordre
+    lancer(mouvement.executer_mouvement(session, AVANCER_1))
+    fin_du_mouvement = horloge.t
+    rapport = lancer(mouvement.constater(session, None, horloge.t, None))
+    assert rapport["verification"] == "aucun état" and rapport["constat"] == NON_RAFRAICHI
+    assert 12.0 <= horloge.t - fin_du_mouvement < 13.0
+
+
+def test_sec07_sequence_continue_quand_le_robot_ne_fournit_pas_sa_position(session, lien):
+    lien.robot = dict(SANS_POSE)
+    ordres = [Ordre("reculer", 1.0), Ordre("tourner", 90.0), AVANCER_1]
+    bilan = lancer(mouvement.executer_sequence(session, ordres))
+    assert bilan["interrompue"] is False and "motif" not in bilan and "reprise" not in bilan
+    assert [etape["issue"] for etape in bilan["etapes"]] == ["émise, non vérifiable"] * 3
+    assert all(etape["constat"] == mouvement.POSITION_NON_FOURNIE for etape in bilan["etapes"])
+    assert len(lien.arrets) == 9  # chaque étape a eu son arrêt, et un état frais avant la suivante (SEC-01)
+
+
+def test_sec07_sequence_interrompue_par_le_statut_propose_la_reprise(session, lien):
+    """Le cas réel : après le premier ordre, le robot passe en « retour à la base » (4)."""
+    lien.robot = dict(SANS_POSE)
+    lien.sur_publication = robot_ensuite({"workStatus": 4, "battery": 80})
+    ordres = [Ordre("reculer", 1.0), Ordre("tourner", 90.0), Ordre("avancer", None, 0.2, 2.0)]
+    bilan = lancer(mouvement.executer_sequence(session, ordres))
+    assert bilan["interrompue"] is True and "retour à la base" in bilan["motif"]
+    assert bilan["etapes"][0]["issue"] == "émise, non vérifiable" and len(bilan["etapes"]) == 1
+    assert bilan["non_executees"] == ["tourner 90", str(ordres[2])]
+    assert bilan["reprise"] == {
+        "etape": 2,
+        "ordres": [
+            {"nom": "tourner", "valeur": 90.0, "vitesse": None, "duree": None},
+            {"nom": "avancer", "valeur": None, "vitesse": 0.2, "duree": 2.0},
+        ],
+    }
+    assert len(lien.consignes) == 40  # rien n'est parti après le changement de statut
+
+
+def test_sec07_ordre_refuse_reprise_a_cette_etape_et_aucune_apres_un_arret_non_confirme(session, lien):
+    lien.robot = dict(SANS_POSE)
+    bilan = lancer(mouvement.executer_sequence(session, [Ordre("reculer", 1.0)]))
+    assert bilan["interrompue"] is False
+    lien.robot = {"workStatus": 4, "battery": 80}
+    bilan = lancer(mouvement.executer_sequence(session, [Ordre("reculer", 1.0), AVANCER_1]))
+    assert bilan["interrompue"] is True and bilan["etapes"][0]["issue"] == "non émise ou échouée"
+    assert bilan["reprise"]["etape"] == 1 and len(bilan["reprise"]["ordres"]) == 2
+
+
+def test_sec07_pose_fournie_qui_contredit_l_ordre_arrete_toujours_la_sequence(session, lien):
+    lien.sur_publication = robot_ensuite(fragment(est=-1.0))
+    bilan = lancer(mouvement.executer_sequence(session, [AVANCER_1, AVANCER_1]))
+    assert bilan["interrompue"] is True and "mauvais sens" in bilan["motif"]
+    assert bilan["etapes"][0]["issue"] == "émise, anomalie" and bilan["reprise"]["etape"] == 2

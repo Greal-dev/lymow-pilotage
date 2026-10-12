@@ -34,11 +34,12 @@ async def serveur_ui(tmp_path, monkeypatch, *, reel, session=None, coffre_factic
         raise auth.ErreurAuth("aucune connexion enregistrée")
 
     @asynccontextmanager
-    async def ouvrir(_journal, _cal, autorisees, *_reste):
+    async def ouvrir(_journal, _cal, autorisees, *_reste, brut=None):
         if session is None:
             raise AssertionError("liaison au nuage ouverte sans compte")
         ouvertures.append(autorisees)
         session.autorisees = autorisees
+        session.brut = brut  # écoute brute : les tests y poussent des trames
         simultanees[0] += 1
         simultanees[1] = max(simultanees)
         await asyncio.sleep(0.02)  # laisse à une ouverture concurrente le temps de se montrer

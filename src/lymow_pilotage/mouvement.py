@@ -9,6 +9,7 @@ SEC-01/02 avant toute émission. Ne sait rien du transport : tout passe par
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import math
 import re
 import signal
@@ -27,6 +28,12 @@ from .vendor.ha_lymow import const as socle
 
 # Le robot ne parle spontanément que toutes les 60 s environ.
 ATTENTE_ETAT_S = 75.0
+# Constat après un ordre : une trame d'état fraîche, pas davantage (voir `constater`).
+ATTENTE_CONSTAT_S = 12.0
+VERIFIEE, NON_VERIFIABLE, ANOMALIE, AUCUN_ETAT = "vérifiée", "non vérifiable", "anomalie", "aucun état"
+POSITION_NON_FOURNIE = (
+    "position non fournie par le robot : déplacement non vérifiable par l'outil (utilisez la vidéo)"
+)
 
 MOUVEMENTS = ("tourner", "avancer", "reculer")
 ESSAI = "essai-arret-auto"
@@ -650,28 +657,43 @@ async def constater(
 ) -> dict[str, Any]:
     """SEC-04 : relit l'état ; n'affirme un déplacement que sur des poses fraîches avant et après.
 
-    `verifie` est faux dès que le constat ne confirme pas l'ordre (SEC-07 s'y appuie).
+    Constat du 2026-10-12 (premier ordre réel) : le robot envoie son état toutes les demi-secondes
+    après un ordre mais AUCUNE position ; attendre une pose bloquait tout 75 s. L'attente porte donc
+    sur une trame d'état fraîche, 12 s au plus ; la pose n'est attendue que si le robot en donnait une
+    juste avant l'ordre. `verification` : « vérifiée », « non vérifiable » (constat normal, la séquence
+    continue), « anomalie » ou « aucun état » (SEC-07 : la séquence s'arrête).
     """
     await session.solliciter()
-    rafraichi = await session.attendre("pose", instant, ATTENTE_ETAT_S)
-    apres = session.etat.pose if rafraichi else None
+    rafraichi = await session.attendre("statut", instant, ATTENTE_CONSTAT_S)
+    if rafraichi and avant is not None:
+        reste = ATTENTE_CONSTAT_S - (session.horloge() - instant)
+        await session.attendre("pose", instant, max(0.0, reste))
+    recu_pose = session.etat.recu_pose
+    apres = session.etat.pose if recu_pose is not None and recu_pose > instant else None
     rapport: dict[str, Any] = {
         "etat_rafraichi": rafraichi,
         "avant": _pose(avant),
         "apres": _pose(apres),
         "statut_apres": session.etat.resume(session.horloge())["statut_libelle"],
         "verifie": False,
+        "verification": NON_VERIFIABLE,
     }
-    if apres is None:
-        rapport["constat"] = "état non rafraîchi depuis l'ordre : déplacement non vérifié"
+    if not rafraichi:
+        rapport |= {
+            "verification": AUCUN_ETAT,
+            "constat": f"aucune trame d'état fraîche reçue en {ATTENTE_CONSTAT_S:g} s après l'ordre : liaison douteuse",
+        }
     elif consigne is None:
-        rapport |= {"verifie": True, "constat": "état relu après l'ordre"}
-    elif avant is None:
-        rapport["constat"] = "constat impossible : aucune position fraîche reçue juste avant l'ordre"
+        rapport |= {"verifie": True, "verification": VERIFIEE, "constat": "état relu après l'ordre"}
+    elif apres is None or avant is None:
+        rapport["constat"] = POSITION_NON_FOURNIE
     else:
         juger = _juger_translation if consigne.attendu == "translation" else _juger_rotation
         mesures, anomalie = juger(avant, apres, consigne.valeur)
-        rapport |= mesures | {"verifie": anomalie is None, "constat": anomalie or "déplacement constaté"}
+        rapport |= mesures | {
+            "verifie": anomalie is None, "verification": ANOMALIE if anomalie else VERIFIEE,
+            "constat": anomalie or "déplacement constaté",
+        }
     return rapport
 
 
@@ -708,29 +730,53 @@ def refus_prealable(ordres: list[Ordre], cal: Calibration) -> dict[str, Any] | N
     return None
 
 
+def _reprise(ordres: list[Ordre], rang: int) -> dict[str, Any]:
+    """Étapes restantes, sous la forme que la page renvoie à la prévisualisation (« Reprendre à l'étape N »)."""
+    return {
+        "non_executees": [str(o) for o in ordres[rang:]],
+        "reprise": {"etape": rang + 1, "ordres": [dataclasses.asdict(o) for o in ordres[rang:]]} if ordres[rang:] else None,
+    }
+
+
 async def executer_sequence(session: Session, ordres: list[Ordre]) -> dict[str, Any]:
-    """SEC-07 : mêmes règles par étape ; arrêt au premier refus, échec ou constat non confirmé."""
+    """SEC-07 (révisé le 2026-10-12, décision du pilote au vu du réel) : mêmes règles par étape.
+
+    La séquence s'arrête si (a) un ordre est refusé ou échoue, (b) l'arrêt n'est pas confirmé,
+    (c) le statut reçu sort de la liste blanche, (d) aucune trame d'état fraîche n'arrive dans le
+    délai, (e) une pose EST fournie et contredit l'ordre. Elle ne s'arrête plus parce que le robot
+    ne fournit pas sa position. Chaque étape repasse par SEC-01, qui exige un état frais.
+    """
     bilan: dict[str, Any] = {"mode": "réel", "etapes": [], "interrompue": False}
     refus = refus_prealable(ordres, session.cal)
     if refus:
         return bilan | refus
     for rang, ordre in enumerate(ordres):
-        reste = [str(o) for o in ordres[rang + 1 :]]
         try:
             rapport = await executer(session, ordre)
         except (RefusSecurite, EchecOrdre, OSError) as erreur:
-            bilan["etapes"].append({"ordre": str(ordre), "echec": str(erreur)})
+            bilan["etapes"].append({"ordre": str(ordre), "issue": "non émise ou échouée", "echec": str(erreur)})
+            non_confirme = isinstance(erreur, ArretNonConfirme)
             return bilan | {
                 "interrompue": True,
                 "motif": f"« {ordre} » a échoué : {erreur}",
-                "non_executees": reste,
-                "arret_non_confirme": isinstance(erreur, ArretNonConfirme),
+                "arret_non_confirme": non_confirme,
+                "non_executees": [str(o) for o in ordres[rang + 1 :]],
+                # Reprise à l'étape en échec (elle repasse par la prévisualisation) ; aucune après un
+                # arrêt non confirmé : le robot doit d'abord être arrêté à la main.
+                "reprise": None if non_confirme else _reprise(ordres, rang)["reprise"],
             }
+        rapport["issue"] = f"émise, {rapport.get('verification', NON_VERIFIABLE)}"
         bilan["etapes"].append(rapport)
-        if reste and not rapport["verifie"]:
-            return bilan | {
-                "interrompue": True,
-                "motif": f"séquence interrompue après « {ordre} » : {rapport['constat']}",
-                "non_executees": reste,
-            }
+        if not ordres[rang + 1 :]:
+            break
+        motif = None
+        if rapport.get("verification") in (ANOMALIE, AUCUN_ETAT):
+            motif = rapport["constat"]
+        else:
+            try:  # (c) : dit ici, avec le statut en clair, plutôt qu'au refus de l'étape suivante
+                securite.verifier_presence_et_statut(session.etat.statut, session.etat.en_ligne)
+            except RefusSecurite:
+                motif = f"le robot est passé en « {rapport['statut_apres']} », hors des statuts où un mouvement est permis"
+        if motif:
+            return bilan | {"interrompue": True, "motif": f"séquence interrompue après « {ordre} » : {motif}"} | _reprise(ordres, rang + 1)
     return bilan

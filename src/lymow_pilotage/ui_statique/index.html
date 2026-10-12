@@ -132,6 +132,7 @@
       <h2 id="titre-ordres">Ordres</h2>
       <p class="note">Chaque ordre se prévisualise d'abord. Remplissez soit l'angle ou la distance, soit la durée.</p>
 
+      <p id="ordres-etat" class="etat-ordres" role="status"></p>
       <form class="ordre" data-ordre="tourner">
         <h3>Tourner</h3>
         <label>Sens
@@ -192,7 +193,8 @@
 
     <section aria-labelledby="titre-sequence">
       <h2 id="titre-sequence">Séquence</h2>
-      <p id="sequence-vide" class="note">Aucune étape. Utilisez « Ajouter à la séquence ».</p>
+      <p id="sequence-vide" class="note">Aucune étape : « Prévisualiser la séquence » est indisponible. Utilisez
+        « Ajouter à la séquence » (le bouton « Prévisualiser » d'un formulaire ne prévisualise que SON ordre).</p>
       <ol id="sequence-liste"></ol>
       <p class="actions">
         <button id="sequence-previsualiser" type="button" disabled>Prévisualiser la séquence</button>
@@ -203,16 +205,22 @@
     <section aria-labelledby="titre-previsualisation">
       <h2 id="titre-previsualisation">Prévisualisation</h2>
       <p id="previsualisation-titre" class="note">Aucune prévisualisation.</p>
+      <p id="previsualisation-avertissement" class="avertissement" role="alert" hidden></p>
+      <ol id="previsualisation-etapes" class="etapes" aria-label="Étapes qui seront émises, dans cet ordre"></ol>
       <div id="previsualisation-detail"></div>
       <p class="actions">
-        <button id="emettre" type="button" class="emettre" disabled>Émettre</button>
-        <span id="emettre-note" class="note"></span>
+        <button id="emettre" type="button" class="emettre" disabled>Émettre l'ordre</button>
+        <span id="emettre-note" class="note" role="status">Prévisualisez un ordre ou la séquence : « Émettre » s'active ensuite.</span>
       </p>
     </section>
 
     <section aria-labelledby="titre-resultat">
       <h2 id="titre-resultat">Résultat du dernier ordre</h2>
       <p id="resultat-vide" class="note">Aucun ordre émis.</p>
+      <p class="actions" id="reprise-bloc" hidden>
+        <button id="reprise" type="button">Reprendre</button>
+        <span class="note">Recharge les étapes restantes dans la séquence et les prévisualise ; rien n'est émis sans « Émettre ».</span>
+      </p>
       <div id="resultat-detail"></div>
     </section>
 
@@ -223,6 +231,7 @@
   </main>
 
   <script src="/statique/signalisation.js"></script>
+  <script src="/statique/ordres.js"></script>
   <script src="/statique/app.js"></script>
   <script src="/statique/carte.js"></script>
 </body>
