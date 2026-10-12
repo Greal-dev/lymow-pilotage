@@ -349,6 +349,11 @@
       modeSimulation = image.mode === "simulation";
       suspendue = Boolean(image.liaison_suspendue);
       $("bord-zone").textContent = image.ordres && image.ordres.bord ? image.ordres.bord.texte : "";  // SEC-13
+      // Robot en erreur : dit AVANT le pas ; pas sans déplacement : dit, la main est gardée.
+      $("pave-avertissement").textContent = [
+        image.ordres && image.ordres.avertissement_pas,
+        image.ordres && image.ordres.immobiles ? image.ordres.immobiles + " pas de suite sans déplacement constaté (désarmement au troisième)." : ""
+      ].filter(Boolean).join(" ");
       connecte = Boolean(image.connecte);
       occupeCourant = Boolean(image.occupe);
       if (suspendue) { mainPrise = false; }

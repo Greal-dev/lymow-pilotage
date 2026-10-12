@@ -49,6 +49,12 @@
             <span id="ordres-etat" class="etat-ordres" role="status"></span>
             <strong id="localisation" class="localisation" role="status" title="Qualité de localisation, jugée sur la précision horizontale annoncée par le robot : fiable jusqu'à 0,10 m, dégradée jusqu'à 0,50 m, perdue au-delà."></strong>
           </p>
+          <div id="erreur-robot" class="erreur-robot" role="alert" hidden>
+            <p id="erreur-libelle"></p>
+            <p id="erreur-phrase"></p>
+            <button id="erreur-annuler" type="button" title="Émet le seul ordre « annuler la tâche » : le robot s'arrête sur place et se remet en attente. La tâche en cours est abandonnée.">Annuler la tâche et remettre le robot en attente</button>
+            <p id="erreur-suite" role="status"></p>
+          </div>
           <p id="localisation-detail" class="note" role="status"></p>
           <button id="fleches-bascule" type="button" class="bascule" aria-pressed="false" title="Active les flèches du clavier et de la caméra. Par défaut chaque flèche fait bouger le robot tout de suite (une confirmation à l'activation ; désactivé après 60 s sans action, sur STOP ou sur un refus).">Flèches : activer</button>
           <label class="case" title="Cochée : les flèches ajoutent des étapes à une séquence, qui ne part qu'avec « Prévisualiser » puis « Émettre »."><input id="composer" type="checkbox"> Composer une séquence (ne pas émettre tout de suite)</label>
@@ -62,6 +68,7 @@
             <label title="Lève le garde-fou carte pour le PROCHAIN pas seulement : la carte peut être fausse, et il faut pouvoir sortir d'une zone. Journalisé."><input id="pave-forcer" type="checkbox"> Forcer ce pas</label>
           </p>
           <p id="bord-zone" class="note" role="status"></p>
+          <p id="pave-avertissement" class="avertissement" role="status"></p>
           <p class="actions-robot">
             <button id="pause-bouton" type="button" data-tache="pause" title="Met la tâche (ou le retour à la base) en pause : se prévisualise, puis « Émettre ».">Pause</button>
             <button id="reprendre-bouton" type="button" data-tache="reprendre" title="Reprend la tâche en pause : les lames peuvent redémarrer. Se prévisualise, puis « Émettre ».">Reprendre</button>

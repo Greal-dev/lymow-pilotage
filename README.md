@@ -317,6 +317,31 @@ réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même
   à vue ou vidéo ouverte. Non vérifié en réel : ce panneau n'a été testé que
   hors ligne.
 
+### Robot en erreur
+
+Constat de l'essai réel du 2026-10-12 : en statut « en erreur » (erreur 44,
+pare-chocs enfoncé), cinq « reculer 1 » émis et acquittés n'ont produit
+aucun déplacement. **En erreur, le robot ignore le pilotage manuel**, et le
+protocole ne connaît aucun ordre « acquitter l'erreur ».
+
+- Un encadré rouge dit l'erreur en français, avec son libellé d'origine
+  (« 44 : pare-chocs enfoncé (Bumper stuck) »), et propose **« Annuler la
+  tâche et remettre le robot en attente »** : l'ordre « annuler » déjà connu
+  de l'outil (28), sur confirmation — la tâche en cours est abandonnée. La
+  page attend ensuite le statut « prêt » : « les flèches sont de nouveau
+  utilisables — reculez pour dégager le pare-chocs ». Si le statut reste « en
+  erreur » : « l'erreur persiste : intervention sur place nécessaire, ou
+  essayez l'application Lymow » — rien n'est retenté de lui-même. **L'effet
+  de cet ordre sur une erreur de pare-chocs n'a jamais été essayé.**
+- Près des flèches : « Robot en erreur : il ignorera probablement cet
+  ordre. » Le pas reste possible. « Prendre la main » ne tente aucune pause.
+- « Le robot n'a pas bougé » ne retire plus la main au premier constat : il
+  est affiché avec sa cause probable (« en erreur : ordre ignoré »,
+  « patinage possible », « position transmise trop rarement : non
+  vérifiable ») ; le pilotage direct n'est désarmé qu'au troisième constat de
+  suite, et le compteur repart de zéro dès qu'un pas réussit. STOP, refus de
+  sécurité, échec d'émission et expiration désarment comme avant.
+
 ## Localisation
 
 Ce qui est **observé** (trames réelles du 2026-10-12) :

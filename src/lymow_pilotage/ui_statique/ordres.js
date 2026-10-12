@@ -173,6 +173,23 @@
     return texte;
   }
 
+  function enErreur(ordres) {
+    return Boolean(ordres && ordres.erreur && !ordres.erreur.resolue);
+  }
+
+  /* Encadré « robot en erreur » : libellés, phrase, bouton d'annulation (masqué pendant l'attente et quand
+   * l'erreur a persisté — rien ne boucle), puis la suite. Rien si le robot n'est pas en erreur. */
+  function diagnosticErreur(erreur) {
+    if (!erreur) { return null; }
+    if (erreur.resolue) { return { titre: "", phrase: "", bouton: false, suite: erreur.message || "" }; }
+    return {
+      titre: "Robot en erreur — " + (erreur.libelles && erreur.libelles.length ? erreur.libelles.join(" ; ") : "code d'erreur non transmis"),
+      phrase: erreur.phrase || "",
+      bouton: !erreur.annulation,
+      suite: erreur.message || ""
+    };
+  }
+
   /* Qui a la main ? L'application quand la liaison est suspendue ; l'outil quand il l'a prise et que la
    * liaison est active (STOP ne la retire pas) ; sinon personne en particulier. */
   function quiALaMain(c) {
@@ -189,7 +206,9 @@
   function annoncePrendreLaMain(c) {
     var lignes = [];
     if (c.suspendue) { lignes.push("La liaison avec le robot sera rétablie."); }
-    if (c.ordres && c.ordres.action === "pause") {
+    if (enErreur(c.ordres)) {
+      lignes.push("Le robot est EN ERREUR : il ignorera probablement les flèches. Voyez l'encadré rouge (annuler la tâche).");
+    } else if (c.ordres && c.ordres.action === "pause") {
       lignes.push(c.ordres.mouvement_refuse.replace(/ : .*$/, "") + " : la tâche sera mise en pause.");
     }
     lignes.push(c.composer
@@ -212,7 +231,8 @@
     if (!c.confirme) { return ordres.statut || ordres.mouvement_refuse ? "confirmer" : "attendre"; }
     var pause = ordres.pause ? ordres.pause.etat : null;
     if (pause === "en attente") { return "attendre"; }
-    if (ordres.action === "pause") {
+    // Robot en erreur : aucune pause n'est tentée ; le diagnostic et son geste sont affichés tels quels.
+    if (ordres.action === "pause" && !enErreur(ordres)) {
       if (!c.pauseDemandee) { return "pause"; }
       return pause === "non confirmée" ? "abandon" : "attendre";
     }
@@ -238,6 +258,7 @@
     libelleLiaison: libelleLiaison,
     quiALaMain: quiALaMain,
     clicRendreAccepte: clicRendreAccepte,
+    diagnosticErreur: diagnosticErreur,
     texteDeLaMain: texteDeLaMain,
     annoncePrendreLaMain: annoncePrendreLaMain,
     suitePrendreLaMain: suitePrendreLaMain,

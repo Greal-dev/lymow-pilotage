@@ -19,7 +19,7 @@ from collections.abc import Coroutine
 from dataclasses import dataclass
 from typing import Any
 
-from . import garde_carte, protocole, securite
+from . import diagnostic, garde_carte, protocole, securite
 from .config import Calibration
 from .etat import LIBELLES_STATUT, Pose
 from .securite import Consigne, RefusSecurite
@@ -30,6 +30,7 @@ from .vendor.ha_lymow import const as socle
 ATTENTE_ETAT_S = 75.0
 # Constat après un ordre : une trame d'état fraîche, pas davantage (voir `constater`).
 ATTENTE_CONSTAT_S = 12.0
+IMMOBILE = "le robot n'a pas bougé (patinage ou ordre ignoré)"
 VERIFIEE, NON_VERIFIABLE, ANOMALIE, AUCUN_ETAT = "vérifiée", "non vérifiable", "anomalie", "aucun état"
 POSITION_NON_FOURNIE = (
     "position non fournie par le robot : déplacement non vérifiable par l'outil (utilisez la vidéo)"
@@ -746,7 +747,7 @@ def _juger_translation(avant: Pose, apres: Pose, ordre_m: float) -> tuple[dict[s
     avance = avant.avance(apres)
     mesures = {"deplacement_m": round(distance, 3), "avance_m": round(avance, 3)}
     if distance < securite.SEUIL_DEPLACEMENT_M:
-        return mesures, "le robot n'a pas bougé (patinage ou ordre ignoré)"
+        return mesures, IMMOBILE
     if avance * ordre_m < 0:
         return mesures, f"déplacement dans le mauvais sens ({avance:+.2f} m mesurés pour {ordre_m:+g} m ordonnés)"
     if distance > securite.EXCES_FACTEUR * abs(ordre_m) + securite.EXCES_MARGE_M:
@@ -758,7 +759,7 @@ def _juger_rotation(avant: Pose, apres: Pose, ordre_deg: float) -> tuple[dict[st
     _distance, rotation = avant.vers(apres)
     mesures = {"rotation_deg": round(rotation, 1)}
     if abs(rotation) < securite.SEUIL_ROTATION_DEG:
-        return mesures, "le robot n'a pas bougé (patinage ou ordre ignoré)"
+        return mesures, IMMOBILE
 
     def ecart(cible: float) -> float:
         return abs((rotation - cible + 180.0) % 360.0 - 180.0)
@@ -808,7 +809,7 @@ async def constater(
     elif consigne is None:
         rapport |= {"verifie": True, "verification": VERIFIEE, "constat": "état relu après l'ordre"}
     elif apres is None or avant is None:
-        rapport["constat"] = POSITION_NON_FOURNIE
+        rapport |= {"constat": POSITION_NON_FOURNIE, "cause_probable": diagnostic.CAUSE_POSE_RARE}
     else:
         juger = _juger_translation if consigne.attendu == "translation" else _juger_rotation
         mesures, anomalie = juger(avant, apres, consigne.valeur)
@@ -816,6 +817,8 @@ async def constater(
             "verifie": anomalie is None, "verification": ANOMALIE if anomalie else VERIFIEE,
             "constat": anomalie or "déplacement constaté",
         }
+        if anomalie == IMMOBILE:  # la cause probable, selon le statut : en erreur, le robot ignore l'ordre
+            rapport["cause_probable"] = diagnostic.cause_d_immobilite(session.etat.statut)
     return rapport
 
 
