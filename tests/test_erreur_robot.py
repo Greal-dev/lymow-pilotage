@@ -68,38 +68,39 @@ def test_libelles_d_erreur_en_francais_avec_le_libelle_d_origine():
     assert diagnostic.cause_d_immobilite(6) == "patinage possible"
 
 
-def test_trois_constats_le_robot_n_a_pas_bouge_avant_de_desarmer_et_la_main_est_gardee(tmp_path, monkeypatch, session_reelle, lien):
-    assert ui.IMMOBILES_MAX == 3
+def test_patinage_repete_ne_desarme_jamais_le_pilotage_direct(tmp_path, monkeypatch, session_reelle, lien):
+    # Décision du propriétaire (2026-10-12) : c'est précisément quand le robot patine qu'on a besoin d'insister.
     lien.robot = en_erreur()  # la pose ne change jamais : le robot ignore les ordres
 
     async def scenario():
         async with serveur_ui(tmp_path, monkeypatch, reel=True, session=session_reelle) as (serveur, http):
             await poster(http, serveur, "/api/direct/armer", {"confirmer": True})
-            for numero in (1, 2):
+            for numero in range(1, 6):  # cinq pas de suite sans déplacement
                 rapport = await pas_direct(http, serveur)
                 assert rapport["constat"] == mouvement.IMMOBILE and rapport["cause_probable"] == "en erreur : ordre ignoré"
                 image = serveur.instantane()
-                assert image["direct"]["arme"] is True and image["ordres"]["immobiles"] == numero  # la main est gardée
+                assert image["direct"]["arme"] is True and image["ordres"]["immobiles"] == numero
             # Un pas qui réussit remet le compteur à zéro.
             avance = []
             lien.sur_publication = lambda lien_, octets: (avance.append(1), setattr(
-                lien_, "robot", en_erreur(poseEastM=3.0 + 0.01 * len(avance))  # 25 consignes à 0,10 m/s : 0,25 m
+                lien_, "robot", en_erreur(poseEastM=3.0 + 0.01 * len(avance))
             )) if est_consigne(octets) else None
             rapport = await pas_direct(http, serveur, "haut")
-            assert rapport["verification"] == mouvement.VERIFIEE, {c: rapport.get(c) for c in ("constat", "avant", "apres")}
-            assert serveur.instantane()["ordres"]["immobiles"] == 0
-            lien.sur_publication = None
-            for numero in (1, 2):
-                await pas_direct(http, serveur)
-                assert serveur.direct.arme is True
+            assert rapport["verification"] == mouvement.VERIFIEE and serveur.instantane()["ordres"]["immobiles"] == 0
+            # Un déplacement dans le mauvais sens est dit, sans retirer la main non plus.
+            recule = []
+            lien.sur_publication = lambda lien_, octets: (recule.append(1), setattr(
+                lien_, "robot", en_erreur(poseEastM=3.10 - 0.02 * len(recule))
+            )) if est_consigne(octets) else None
+            rapport = await pas_direct(http, serveur, "haut")
+            assert "mauvais sens" in rapport["constat"] and serveur.direct.arme is True
             journal = "".join(f.read_text(encoding="utf-8") for f in tmp_path.rglob("*.jsonl"))
             assert "direct-desarme" not in journal
-            rapport = await pas_direct(http, serveur)  # troisième constat identique de suite : désarmé, avec le motif
-            assert serveur.direct.arme is False
-            journal = "".join(f.read_text(encoding="utf-8") for f in tmp_path.rglob("*.jsonl"))
-            assert journal.count('"direct-desarme"') == 1
-            assert "3 pas de suite sans déplacement constaté (en erreur : ordre ignoré)" in journal
-            assert "3 pas de suite sans déplacement constaté" in serveur.resultat["motif"]
+            # Un statut non pilotable (SEC-01), lui, retire toujours la main.
+            lien.sur_publication = None
+            lien.robot = fragment(statut=2, tache=2)
+            await pas_direct(http, serveur)
+            assert serveur.direct.arme is False and "SEC-01" in serveur.resultat["motif"]
 
     executer(scenario())
 

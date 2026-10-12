@@ -56,7 +56,12 @@ FICHIERS = {
     "fleches.js": "text/javascript",
     "pave.js": "text/javascript",
     "volets.js": "text/javascript",
+    "tableau.js": "text/javascript",
 }
+# Ordres sans mouvement émis d'un clic depuis le tableau de bord (retour du propriétaire, 2026-10-12 : moins
+# d'étapes). La page garde deux clics pour « reprendre » (les lames peuvent redémarrer) et une confirmation
+# pour « annuler » et « reprendre quand même ».
+TACHES_IMMEDIATES = ("pause", "reprendre", "base", "annuler", "plateau-haut", mouvement.REPRISE_FORCEE)
 NOMS_ORDRES = (*mouvement.ETAPES_SEQUENCE, mouvement.ESSAI, *mouvement.TACHES)
 NON_CONNECTE = "non connecté — utilisez le panneau « Compte » de cette page"
 ROUTE_REOUVERTURE = "/api/instance/rouvrir"
@@ -76,9 +81,6 @@ DELAI_PAUSE_S = 15.0
 SANS_TRAME_MAX_S = 45.0
 ATTENTE_DIAGNOSTIC_S = 20.0  # sans réponse du robot au diagnostic de localisation au-delà : c'est dit
 DELAI_ANNULATION_S = 15.0  # après « annuler la tâche », le statut « prêt » est attendu ce temps-là
-# Pas de suite sans déplacement constaté avant de désarmer le pilotage direct (essai réel du 2026-10-12 :
-# au premier constat, la main se perdait à chaque pas).
-IMMOBILES_MAX = 3
 # Veille de la liaison : une coupure est vue et réparée sans attendre un clic.
 PERIODE_VEILLE_S = 2.0
 LIAISON_SUSPENDUE = "Liaison suspendue : l'application Lymow a la main"
@@ -246,6 +248,8 @@ class ServeurUI:
         self._recalage = recalage.Memoire(self.dossier)
         self._station = recalage.SuiviStation()
         self._liaison_lente = False  # pilotage direct : en attente d'une trame fraîche du robot
+        self._phares_dernier: bool | None = None  # dernier ordre de phares envoyé (l'état réel peut ne pas être transmis)
+        self._phares_attente: bool | None = None  # demandé pendant un pas : émis à sa fin
         self._plateau_suite: str | None = None  # ce que la relecture a montré après le dernier ordre de plateau
         self._direct_en_cours = False
         # « Rendre la main à l'application » : liaison fermée, reconnexion automatique suspendue.
@@ -289,8 +293,10 @@ class ServeurUI:
                 web.post("/api/emettre", self._emettre),
                 web.post("/api/stop", self._stop),
                 web.post("/api/pause", self._pause_raccourci),
+                web.post("/api/tache", self._tache_immediate),
                 web.post("/api/erreur/annuler", self._erreur_annuler),
                 web.post("/api/plateau/essai", self._plateau_essai),
+                web.post("/api/phares", self._phares),
                 web.post("/api/liaison/rendre", self._liaison_rendre),
                 web.post("/api/liaison/reprendre", self._liaison_reprendre),
                 web.post("/api/diagnostic-rtk", self._diagnostic_rtk),
@@ -302,6 +308,7 @@ class ServeurUI:
                 web.get("/api/signal", self._signal_proposer),
                 web.post("/api/direct/armer", self._direct_armer),
                 web.post("/api/direct/desarmer", self._direct_desarmer),
+                web.post("/api/direct/activite", self._direct_activite),
                 web.post("/api/direct/fleche", self._direct_fleche),
                 web.post(ROUTE_ATTESTATION_POSER, self._attestation_poser),
                 web.post(ROUTE_ATTESTATION_RETIRER, self._attestation_retirer),
@@ -500,7 +507,15 @@ class ServeurUI:
         etat, depuis = session.etat, self._diagnostic_depuis
         if etat.recu_rtk is not None and etat.recu_rtk >= depuis:
             detail = etat.detail_localisation() or "réponse reçue, sans détail exploitable"
+            l1 = etat.donnees.get("rtkL1") or {}
+            if l1.get("baseStationStatus") == "online":
+                detail += " ; base en ligne"
+            if isinstance(l1.get("dataErrorRatePct"), (int, float)):
+                detail += f" ; lien radio de la base : {l1['dataErrorRatePct']:g} % d'erreur"
+            if isinstance(l1.get("gnssSatellites"), int):
+                detail += f" ; {l1['gnssSatellites']} satellites"
             if etat.ecart_brut_m is None:
+                # Constat du 2026-10-12 (169 réponses réelles) : ni le niveau 1 ni le niveau 2 ne portent de position.
                 detail += " ; écart position satellite / position calculée : non mesurable (position brute non transmise)"
             return detail
         if session.horloge() - depuis > ATTENTE_DIAGNOSTIC_S:
@@ -745,6 +760,7 @@ class ServeurUI:
             "arret_aux_bords": self.arret_aux_bords,
             "recalage": self._recalage.resume(),
             "plateau": self._etat_du_plateau(),
+            "phares": self._etat_des_phares(),
             "carte_connue": self._carte_affichee()[0] is not None,  # la page la charge alors d'elle-même
             "direct": {
                 "arme": self.direct.arme, "reste_s": self.direct.reste_s,
@@ -1092,6 +1108,8 @@ class ServeurUI:
             self._noter(f"ordre en échec : {self.resultat['echec']}")
         finally:
             self.version += 1
+            if self._phares_attente is not None and not (self.ferme or self.suspendue or self._stop_demande):
+                asyncio.get_running_loop().call_soon(self._lancer_les_phares_en_attente)
             if self._ecoute is not None and not self.ferme:
                 self._fin_ecoute = asyncio.get_running_loop().call_later(SUITE_CAPTURE_S, self._fermer_ecoute)
 
@@ -1113,6 +1131,7 @@ class ServeurUI:
                 return _refus(503, f"robot injoignable : {self.etat_liaison}")
             self._noter("STOP demandé")
             self._desarmer("STOP")  # la file du pilotage direct est vidée avant tout
+            self._phares_attente = None
             self.previsualisation = None
             self._stop_demande = True
             try:
@@ -1122,6 +1141,33 @@ class ServeurUI:
             finally:
                 self._stop_demande = False
             return web.json_response({"accepte": True}, status=202)
+
+    async def _tache_immediate(self, requete: web.Request) -> web.StreamResponse:
+        """Un ordre sans mouvement, émis d'un clic : mêmes règles que par la prévisualisation (SEC-01, SEC-02,
+        SEC-12 jugés à l'émission), sans l'étape « Émettre ». Jamais un mouvement ni une séquence."""
+        corps = await self._corps(requete)
+        nom = corps.get("nom") if isinstance(corps, dict) else None
+        if nom not in TACHES_IMMEDIATES or corps.get("confirmer") is not True or set(corps) != {"nom", "confirmer"}:
+            raise ErreurSaisie("tâche inconnue, ou confirmation explicite absente")
+        self._refuser_si_main_rendue()
+        ordres = [Ordre(nom)]
+        if not self.emet:  # SEC-05
+            bilan, _code = conduite.simuler_ordres(ordres, self.cal, self.journal, self._appareil_fictif())
+            self._noter(f"{nom} (simulation)")
+            return web.json_response({"accepte": True, "simulation": True, "bilan": bilan})
+        if self.session is None or not self.session.lien.connecte:
+            return _refus(503, f"robot injoignable : {self.etat_liaison}")
+        if self.occupe or self._stop_demande:
+            return _refus(409, "un ordre ou un STOP est en cours : attendez sa fin")
+        refus = conduite.refuser(ordres, self.cal, self.journal, self.mode)
+        if refus:
+            return _refus(400, str(refus.get("motif") or "ordre refusé"))
+        self.direct.file.clear()
+        self.previsualisation = None
+        self._lancer(ordres)
+        if self.direct.arme:
+            self.direct.prolonger()  # la main reste prise
+        return web.json_response({"accepte": True}, status=202)
 
     async def _pause_raccourci(self, requete: web.Request) -> web.StreamResponse:
         """« Mettre en pause » : UNE confirmation de la page, puis le seul ordre « pause » — rien d'autre,
@@ -1142,6 +1188,69 @@ class ServeurUI:
         self.previsualisation = None
         self._lancer([Ordre("pause")])
         return web.json_response({"accepte": True}, status=202)
+
+    def _etat_des_phares(self) -> dict[str, Any]:
+        transmis = self.session.etat.phares if self.session is not None else None
+        # Un ordre plus récent que la configuration relue l'emporte tant que le robot ne l'a pas confirmé.
+        allumes = transmis if transmis is not None else self._phares_dernier
+        texte = mouvement.texte_phares(transmis, self._phares_dernier)
+        if self._phares_attente is not None:
+            texte += f" — {'allumage' if self._phares_attente else 'extinction'} en attente de la fin du pas"
+        return {"allumes": allumes, "transmis": transmis is not None, "en_attente": self._phares_attente, "texte": "Phares : " + texte}
+
+    async def _phares_entre_deux_pas(self) -> None:
+        """Demande faite pendant un pas direct : émise ici, entre deux pas — un message, sans relecture."""
+        allumer, self._phares_attente = self._phares_attente, None
+        if allumer is None or self.session is None or self.suspendue:
+            return
+        try:
+            await mouvement.executer_phares(self.session, allumer, relire=False)
+            self._phares_dernier = allumer
+        except Exception as erreur:  # noqa: BLE001 — les phares ne font jamais échouer un pas
+            self._noter(f"phares : ordre non émis ({masquer(str(erreur)) or type(erreur).__name__})")
+        self.version += 1
+
+    def _lancer_les_phares_en_attente(self) -> None:
+        allumer = self._phares_attente
+        if allumer is None or self.occupe or self.session is None or self.suspendue or self.ferme:
+            return
+        self._phares_attente = None
+        self._lancer_les_phares(allumer)
+
+    def _lancer_les_phares(self, allumer: bool) -> None:
+        session = self.session
+
+        async def travail() -> tuple[dict[str, Any], int]:
+            bilan, code = await conduite.emettre_ordres(session, [Ordre("phares-allumer" if allumer else "phares-eteindre")], self.journal)
+            if code == 0:
+                self._phares_dernier = allumer
+            return bilan, code
+
+        self._lancer_travail("phares : allumer" if allumer else "phares : éteindre", travail)
+
+    async def _phares(self, requete: web.Request) -> web.StreamResponse:
+        """« Phares : allumer / éteindre » : un clic, sans prévisualisation (ordre sans mouvement). Pendant un
+        pas, la demande attend sa fin : elle ne retarde ni les consignes ni le STOP."""
+        corps = await self._corps(requete)
+        allumer = corps.get("allumer") if isinstance(corps, dict) else None
+        if not isinstance(allumer, bool) or set(corps) != {"allumer"}:
+            raise ErreurSaisie("« allumer » attendu : vrai ou faux")
+        self._refuser_si_main_rendue()
+        ordre = Ordre("phares-allumer" if allumer else "phares-eteindre")
+        if not self.emet:  # SEC-05 : simulation — rien n'est émis
+            bilan, _code = conduite.simuler_ordres([ordre], self.cal, self.journal, self._appareil_fictif())
+            self._noter(f"phares : {'allumer' if allumer else 'éteindre'} (simulation)")
+            return web.json_response({"accepte": True, "simulation": True, "bilan": bilan})
+        if self.session is None or not self.session.lien.connecte:
+            return _refus(503, f"robot injoignable : {self.etat_liaison}")
+        if self._stop_demande:
+            return _refus(409, "un STOP est en cours")
+        if self.occupe:  # un ordre est en cours : la demande attend sa fin (ou l'entre-deux-pas du pilotage direct)
+            self._phares_attente = allumer
+            self.version += 1
+            return web.json_response({"accepte": True, "en_attente": True}, status=202)
+        self._lancer_les_phares(allumer)
+        return web.json_response({"accepte": True, "en_attente": False}, status=202)
 
     async def _plateau_essai(self, requete: web.Request) -> web.StreamResponse:
         """ESSAI — « Plateau : position de nettoyage » / « redescendre » : mode réel seulement, sur confirmation
@@ -1259,6 +1368,12 @@ class ServeurUI:
         self._noter("PILOTAGE DIRECT ARMÉ : chaque flèche émet son étape sans prévisualisation")
         return web.json_response({"arme": True, "jeton": jeton, "valable_s": fleches.DUREE_ARMEMENT_S})
 
+    async def _direct_activite(self, _requete: web.Request) -> web.StreamResponse:
+        """Toute action sur la page renouvelle le délai d'inactivité du pilotage direct (sans changer de jeton)."""
+        if self.direct.arme:
+            self.direct.prolonger()
+        return web.json_response({"arme": self.direct.arme, "reste_s": self.direct.reste_s})
+
     async def _direct_desarmer(self, _requete: web.Request) -> web.StreamResponse:
         self._desarmer("à la demande de la page")
         if self._direct_en_cours and self.occupe:  # le pas en cours ne survit pas au désarmement
@@ -1359,12 +1474,13 @@ class ServeurUI:
             self.version += 1
 
     async def _derouler_file(self) -> tuple[dict[str, Any], int]:
-        """Émet la file, un pas après l'autre ; le premier refus, échec ou constat contraire l'arrête et désarme."""
+        """Émet la file, un pas après l'autre. Désarme seulement pour la sécurité (voir plus bas) ; sinon dit et continue."""
         etapes: list[dict[str, Any]] = []
         motif: str | None = "pilotage direct interrompu"
         code = 0
         try:
             while self.direct.file:
+                await self._phares_entre_deux_pas()  # jamais pendant un pas : ni consigne ni STOP retardés
                 ordre = self.direct.file.pop(0)
                 self.version += 1
                 self._munir_du_garde_fou([ordre])
@@ -1374,7 +1490,19 @@ class ServeurUI:
                 self.direct.faites.append({"ordre": dataclasses.asdict(ordre), "rapport": assainir(rapport)})
                 del self.direct.faites[:-20]
                 self.version += 1
-                contraire = rapport.get("verification") in (mouvement.ANOMALIE, mouvement.AUCUN_ETAT)
+                # Règle (décision du propriétaire, 2026-10-12) : la main n'est retirée que pour la sécurité ou sur
+                # demande — statut non pilotable (SEC-01), arrêt non confirmé, liaison perdue ; jamais pour un
+                # patinage, un constat non vérifiable, un avertissement de carte ou un refus de validation.
+                echec = str(rapport.get("echec") or "")
+                if code == conduite.CODE_ARRET_NON_CONFIRME or bilan.get("arret_non_confirme"):
+                    motif = bilan.get("motif") or "arrêt non confirmé"
+                    break
+                if code != 0 and "SEC-01" in echec:
+                    motif = bilan.get("motif") or echec
+                    break
+                if code != 0 and not self.session.lien.connecte:
+                    motif = "liaison perdue pendant le pas"
+                    break
                 if code == 0 and rapport.get("verification") == mouvement.AUCUN_ETAT:
                     # Aucune trame fraîche après le pas : liaison lente. La main est gardée, les appuis restent en
                     # file ; le pas suivant ne part qu'à l'arrivée d'une trame. 45 s sans aucune : désarmé.
@@ -1384,31 +1512,15 @@ class ServeurUI:
                     motif = f"{SANS_TRAME_MAX_S:g} s sans aucune trame du robot : liaison perdue"
                     code = 1
                     break
-                # « Le robot n'a pas bougé » : dit en clair, la main est gardée ; désarmé au troisième de suite.
+                # « Le robot n'a pas bougé » : c'est justement quand il patine qu'on a besoin d'insister. Dit en
+                # clair, compté, jamais désarmé ; les appuis en file restent.
                 immobile = code == 0 and rapport.get("constat") == mouvement.IMMOBILE
                 self._immobiles = self._immobiles + 1 if immobile else 0
-                if immobile and self._immobiles < IMMOBILES_MAX:
-                    self.direct.file.clear()  # les pas en attente supposaient ce déplacement
-                    self.direct.prolonger()
-                    continue
-                if immobile:
-                    motif = (
-                        f"{IMMOBILES_MAX} pas de suite sans déplacement constaté "
-                        f"({rapport.get('cause_probable') or 'cause inconnue'})"
-                    )
-                    code = 1
-                    break
-                # Refus AVANT émission (rien n'est parti) : seuls SEC-01 (statut du robot) et la liaison désarment.
-                # Bornes (SEC-02), carte (SEC-13), localisation (SEC-12) : dits, la main est gardée.
-                if code != 0 and rapport.get("refus_avant_emission") and "SEC-01" not in str(rapport.get("echec")):
+                if code != 0 or (rapport.get("verification") == mouvement.ANOMALIE and not immobile):
+                    # Refus avant émission, pas interrompu (indice de choc), mauvais sens, excès : dits, la main est
+                    # gardée ; les appuis en file, qui supposaient ce pas, sont abandonnés.
                     self.direct.file.clear()
-                    self.direct.prolonger()
                     code = 0
-                    continue
-                if code != 0 or contraire:
-                    motif = bilan.get("motif") or rapport.get("echec") or rapport.get("constat") or "échec"
-                    code = code or 1
-                    break
                 self.direct.prolonger()
             else:
                 motif = None

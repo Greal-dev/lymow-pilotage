@@ -237,10 +237,10 @@ def test_page_allure_forcer_et_distance_au_bord(tmp_path, monkeypatch, session_r
     page = (ui.STATIQUE / "index.html").read_text(encoding="utf-8")
     for identifiant in ("pave-allure", "pave-forcer", "bord-zone"):
         assert f'id="{identifiant}"' in page
-    assert "lente 0,10 m/s" in page and "normale 0,25 m/s" in page and "Forcer ce pas" in page
+    assert "Lente : 0,10 m/s" in page and "Normale : 0,25 m/s" in page and "Forcer ce pas" in page  # en info-bulle
     pave = (ui.STATIQUE / "pave.js").read_text(encoding="utf-8")
     forcer = pave[pave.index("function forcerCePas") :][:500]
-    assert 'checked = false' in forcer and "window.confirm(" in forcer  # un pas, une confirmation
+    assert 'checked = false' in forcer and "window.confirm(" not in forcer  # un pas : la case cochée est la demande
     lien.robot = _robot(7.02)
     lien.carte = contenu()  # demandée d'office à l'ouverture
 

@@ -80,6 +80,36 @@ s'appliquent pas.
 
 ## Interface web locale
 
+**Tableau de bord (colonne de gauche)** — peu de texte, des boutons :
+
+- l'état du robot en **pastilles** : statut, batterie, position ±x m (couleur
+  selon la qualité), bord de zone d'après la carte, plateau, liaison ; une
+  erreur apparaît en pastille rouge, qui ouvre le diagnostic ;
+- un **pavé de flèches** cliquable, STOP au centre (en plus des flèches sur
+  la caméra et du clavier) ;
+- pas et allure en **groupes de boutons** : 0,25 · 0,5 · 1 · 2 m (touches 1
+  à 4), 15 · 45 · 90°, auto · lente · normale ;
+- une **grille d'actions** : Pause, Reprendre, Retour base, Annuler tâche,
+  Plateau haut, Phares, Recalage assisté, Bon signal. Un bouton
+  indisponible est grisé, sa raison en info-bulle. Ces ordres sans
+  déplacement partent d'un clic, sans prévisualisation ; « Reprendre », qui
+  relance les lames, demande deux clics (le second dans les 5 s) ; « Annuler
+  tâche » et « Reprendre quand même » gardent une confirmation ;
+- un **fil d'activité** de trois lignes (la plus récente en haut, horodatée,
+  colorée selon la gravité) remplace les messages dispersés ; un
+  avertissement non bloquant y passe, avec un rappel discret de 4 s sous
+  l'en-tête — jamais une boîte de dialogue ;
+- la séquence et la prévisualisation détaillée n'apparaissent que si
+  « Composer une séquence » est coché (ou si une séquence est chargée) ;
+- les explications sont en info-bulle : survolez un bouton, un titre de
+  groupe ou une pastille.
+
+Les paragraphes ci-dessous décrivent le détail de chaque fonction ; quand
+ils parlent de « prévisualiser puis émettre » pour une tâche (pause,
+reprise, retour à la base, plateau), lire : un clic sur le bouton du
+tableau de bord. Les mouvements composés en séquence, eux, se
+prévisualisent toujours avant d'être émis.
+
 `lymow ui [--reel] [--port N]` (port 8377 par défaut) démarre un serveur sur
 `127.0.0.1` uniquement — aucune option ne change cet hôte —, ouvre le
 navigateur et s'arrête sur Ctrl+C. `lancer-lymow.cmd` (double-clic) lance
@@ -274,8 +304,8 @@ réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même
   « Émettre ». Un liseré orange autour de la caméra montre l'activation.
   Elle ne tombe que par le bouton (qui interrompt aussi le pas en cours), par
   STOP — Échap ou Espace, toujours un STOP complet — ou par le désarmement du
-  serveur (60 s sans action, refus de sécurité, échec d'émission) — plus en
-  cliquant ailleurs. Un refus de validation (pas hors liste) ne désarme pas.
+  serveur (5 minutes sans action, statut non pilotable, arrêt non confirmé,
+  liaison perdue) — plus en cliquant ailleurs.
 - **Clavier.** Flèches actives, les touches ↑ ↓ ← →, Entrée et Retour arrière
   sont captées au niveau de la page entière : elles ne la font plus défiler,
   quel que soit l'élément qui a le focus ; elles ne sont pas captées dans un
@@ -299,10 +329,18 @@ réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même
   séquence ; « Émettre » l'émet. Retour arrière annule la dernière étape.
 - **Pilotage direct (défaut).** Chaque flèche émet aussitôt son
   étape, sans prévisualisation ; les appuis faits pendant un mouvement
-  attendent dans une file de cinq au plus. Bandeau « PILOTAGE DIRECT ARMÉ »
-  tant que c'est armé. Désarmement automatique après 60 s sans action, à la
-  fermeture de la page, sur STOP (qui vide la file), sur tout refus, échec ou
-  constat contraire. La route du serveur n'accepte que ces quatre ordres aux
+  attendent dans une file de huit au plus, visible en pastilles. Bandeau
+  « PILOTAGE DIRECT ARMÉ » tant que c'est armé. **La main n'est retirée que
+  pour la sécurité ou sur demande** : STOP (qui vide la file), « Rendre la
+  main », fermeture de la page, statut non pilotable sans attestation
+  (SEC-01), arrêt non confirmé, liaison perdue (45 s sans aucune trame),
+  5 minutes sans action sur la page (le temps restant ne s'affiche que dans
+  la dernière minute). Elle n'est PAS retirée pour un patinage — « pas
+  d'avance : patinage ? », autant de fois qu'il le faut —, un déplacement
+  non vérifiable, un mauvais sens, un avertissement de carte, un refus de
+  validation ou une liaison lente. « Prendre la main » ne demande
+  confirmation qu'une fois par page ouverte : réarmer après STOP est un
+  clic. Mesuré avec le robot fictif : 0,2 s entre deux pas de la file. La route du serveur n'accepte que ces quatre ordres aux
   pas des listes — ni plateau, ni tâche, ni vitesse, ni séquence libre — et
   chaque pas passe par les mêmes règles que tout ordre (SEC-01 à SEC-03, un
   mouvement à la fois, journal). Sans `--reel` : même parcours, rien n'est
@@ -338,9 +376,8 @@ protocole ne connaît aucun ordre « acquitter l'erreur ».
 - « Le robot n'a pas bougé » ne retire plus la main au premier constat : il
   est affiché avec sa cause probable (« en erreur : ordre ignoré »,
   « patinage possible », « position transmise trop rarement : non
-  vérifiable ») ; le pilotage direct n'est désarmé qu'au troisième constat de
-  suite, et le compteur repart de zéro dès qu'un pas réussit. STOP, refus de
-  sécurité, échec d'émission et expiration désarment comme avant.
+  vérifiable ») ; le pilotage direct n'est jamais désarmé pour cela : c'est
+  quand le robot patine qu'on a besoin d'insister.
 
 ## Localisation
 
@@ -415,6 +452,40 @@ fait robot à vue ou caméra ouverte, main sur STOP.
 de lui-même avant ou au contact, sa détection reste active en pilotage
 manuel ; noter alors le code affiché. S'il pousse le carton, elle ne l'est
 pas : seuls les garde-fous ci-dessus protègent.
+
+## Phares
+
+« Phares : allumer / éteindre » : un bouton à bascule dans les actions du
+pilotage, et `lymow phares allumer|eteindre`. Un clic émet l'ordre, sans
+prévisualisation (ordre sans mouvement) ; demandé pendant un pas, il part à
+la fin du pas — jamais entre deux consignes, jamais devant un STOP, qui
+l'annule. Refusé main rendue. Forme émise : celle que le socle a capturée
+sur le bouton « Vehicle LED » de l'application (configuration du robot,
+signal 10 pour allumer, 11 pour éteindre). L'éclairage propre à la caméra
+(autres numéros de la même énumération) n'est attesté par aucune capture :
+il n'est pas proposé. État affiché : celui de la configuration du robot
+quand elle est reçue (champ absent = éteints, à confirmer au premier
+allumage), sinon « dernier ordre envoyé : allumés (état réel non
+transmis) ».
+
+## Ce que le diagnostic de localisation a réellement répondu
+
+169 réponses réelles, le 2026-10-12 de 20:41 à 20:53 (85 de niveau 1, 84 de
+niveau 2), relues hors ligne :
+
+- âge des corrections de la base : 2 s (79 fois), 4 s (5 fois) ;
+- base en ligne, taux d'erreur du lien radio 0 %, sur toutes ;
+- précision annoncée de 0,03 à 0,105 m (médiane 0,046 m), identique à
+  celle des trames d'état ; 23 à 29 satellites ;
+- **aucune position** : ni le niveau 1 ni le niveau 2 ne portent la position
+  satellite brute, et aucune trame ne porte les coordonnées du robot.
+
+L'écart « position satellite / position calculée » **ne peut donc pas être
+calculé** avec ce que le robot transmet : ce n'est ni une erreur de
+décodage, ni une affaire de repère. La question « le robot se recale-t-il ? »
+reste sans réponse directe ; ce que ces réponses établissent, c'est que ce
+soir-là les corrections arrivaient normalement — un décalage constaté à ce
+moment ne vient pas d'un lien de base perdu.
 
 ## Hauteur du plateau
 

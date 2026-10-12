@@ -217,6 +217,87 @@
     return { possible: true, motif: "" };
   }
 
+  /* Bouton à bascule des phares : il propose le contraire de l'état connu (transmis, sinon dernier ordre). */
+  function boutonPhares(phares) {
+    var p = phares || {};
+    var allumer = p.en_attente === true || p.en_attente === false ? !p.en_attente : p.allumes !== true;
+    return { allumer: allumer, libelle: allumer ? "Phares : allumer" : "Phares : éteindre", texte: p.texte || "" };
+  }
+
+  /* Fil d'activité : trois lignes, la plus récente en tête ; un message identique au dernier n'est pas redit. */
+  function filAjouter(lignes, ligne) {
+    if (!ligne || !ligne.texte) { return lignes; }
+    if (lignes.length && lignes[0].texte === ligne.texte) { return lignes; }
+    return [ligne].concat(lignes).slice(0, 3);
+  }
+
+  function graviteDe(texte) {
+    var t = String(texte).toLowerCase();
+    if (/arrêt non confirmé|sec-01|liaison perdue|injoignable|en échec/.test(t)) { return "erreur"; }
+    if (/refus|échou|non abouti|désarmé|interrompu|patinage|liaison lente|d'après la carte|ignor|persiste/.test(t)) { return "alerte"; }
+    return "info";
+  }
+
+  function heureCourte(date) {
+    return ("0" + date.getHours()).slice(-2) + ":" + ("0" + date.getMinutes()).slice(-2);
+  }
+
+  /* Notes du serveur pas encore reprises dans le fil (repère : la dernière note déjà vue). */
+  function notesNouvelles(journal, derniereVue) {
+    if (!derniereVue) { return journal.slice(-1); }
+    for (var i = journal.length - 1; i >= 0; i -= 1) {
+      if (journal[i].heure + journal[i].texte === derniereVue) { return journal.slice(i + 1); }
+    }
+    return journal.slice(-3);
+  }
+
+  /* Touches 1 à 4 : choix du pas des flèches ↑ ↓ — flèches actives, hors champ de saisie. Rang, ou null. */
+  function raccourciDistance(e) {
+    var balise = String(e.balise || "").toUpperCase();
+    if (!e.actives || balise === "INPUT" || balise === "SELECT" || balise === "TEXTAREA" || e.editable) { return null; }
+    var rang = ["1", "2", "3", "4", "5", "6"].indexOf(e.key);
+    return rang >= 0 && rang < e.nombre ? rang : null;
+  }
+
+  /* Inactivité du pilotage direct : le temps restant n'est dit que dans la dernière minute. */
+  function texteInactivite(arme, reste) {
+    return arme && typeof reste === "number" && reste <= 60 ? "Flèches désactivées dans " + reste + " s sans action." : "";
+  }
+
+  /* « Reprendre » relance les lames : deux clics, le second dans les 5 s (pas de boîte de dialogue). */
+  function secondClic(premier, maintenant) {
+    return premier > 0 && maintenant - premier <= 5000;
+  }
+
+  /* État du robot en pastilles compactes : statut · batterie · position · bord · plateau · liaison (· erreur). */
+  function pastilles(image) {
+    var ordres = image.ordres || {}, etat = image.etat || null, liste = [];
+    if (enErreur(ordres)) {
+      var codes = (ordres.erreur.libelles || []).map(function (l) { return l.split(" : ")[0]; }).join(", ");
+      liste.push({ texte: "⚠ erreur " + codes, classe: "erreur", action: "erreur", titre: "Cliquez : diagnostic et geste proposé — " + (ordres.erreur.libelles || []).join(" ; ") });
+    }
+    liste.push({
+      texte: ordres.suspendue ? "liaison suspendue" : (ordres.statut || "état inconnu"),
+      classe: ordres.mouvement_refuse ? "alerte" : "", titre: ordres.suspendue ? ordres.texte : texteEtatDesOrdres(ordres)
+    });
+    if (etat && typeof etat.batterie_pct === "number") { liste.push({ texte: "🔋 " + etat.batterie_pct + " %", classe: etat.batterie_pct < 20 ? "alerte" : "" }); }
+    if (etat && typeof etat.precision_m === "number") {
+      liste.push({ texte: "±" + String(etat.precision_m).replace(".", ",") + " m", classe: etat.localisation,
+        titre: "Position " + etat.localisation + " (fiable jusqu'à 0,10 m, dégradée jusqu'à 0,50 m)" + (etat.localisation_detail ? " — " + etat.localisation_detail : "") });
+    } else if (etat) {
+      liste.push({ texte: "position ?", classe: "perdue", titre: "Précision de position non transmise" });
+    }
+    if (ordres.bord && typeof ordres.bord.devant_m === "number") {
+      liste.push({ texte: "bord " + String(ordres.bord.devant_m).replace(".", ",") + " m", classe: image.alerteBord ? "alerte" : "", titre: ordres.bord.texte });
+    }
+    var plateau = textePlateau(image.plateau);
+    liste.push({ texte: image.plateau && typeof image.plateau.mm === "number" ? "plateau " + image.plateau.mm + " mm" + (image.plateau.au_maximum ? " (max)" : "") : "plateau ?", titre: plateau.texte });
+    if (image.phares && image.phares.allumes === true) { liste.push({ texte: "phares allumés", titre: image.phares.texte }); }
+    if (image.recalage && image.recalage.actif) { liste.push({ texte: "carte recalée", classe: "alerte", titre: image.recalage.texte }); }
+    liste.push({ texte: image.connecte ? "liaison ✓" : "liaison ✗", classe: image.connecte ? "ok" : (ordres.suspendue ? "" : "erreur"), titre: image.liaison || "" });
+    return liste;
+  }
+
   function enErreur(ordres) {
     return Boolean(ordres && ordres.erreur && !ordres.erreur.resolue);
   }
@@ -306,6 +387,15 @@
     alerteBord: alerteBord,
     etatDuRecalage: etatDuRecalage,
     textePlateau: textePlateau,
+    boutonPhares: boutonPhares,
+    filAjouter: filAjouter,
+    graviteDe: graviteDe,
+    heureCourte: heureCourte,
+    notesNouvelles: notesNouvelles,
+    raccourciDistance: raccourciDistance,
+    texteInactivite: texteInactivite,
+    secondClic: secondClic,
+    pastilles: pastilles,
     essaiPlateauPossible: essaiPlateauPossible,
     CONFIRMATION_ESSAI_PLATEAU: CONFIRMATION_ESSAI_PLATEAU,
     texteDeLaMain: texteDeLaMain,

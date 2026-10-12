@@ -45,6 +45,7 @@ EXPOSITION_ESSAI = (
 )
 RAPPEL_ESSAI = "l'observation visuelle fait foi : cette lecture n'est qu'un indice"
 PLATEAUX = ("plateau", "plateau-haut")
+PHARES = {"phares-allumer": True, "phares-eteindre": False}  # ordres sans mouvement
 TACHES = {
     "reprendre": socle.USER_CTRL_RESUME,
     "base": socle.USER_CTRL_RECHARGE_DOCK,
@@ -219,6 +220,8 @@ def simuler(ordre: Ordre, cal: Calibration, appareil: str | None) -> dict[str, A
         }
     elif ordre.nom in PLATEAUX:
         trame = protocole.trame_hauteur(hauteur_de(ordre, cal), cal)
+    elif ordre.nom in PHARES:
+        trame = protocole.trame_phares(PHARES[ordre.nom], cal)
     elif ordre.nom == "stop":
         trame = arret
         resultat["repetitions"] = securite.REPETITIONS_ARRET
@@ -717,6 +720,33 @@ async def executer_plateau(session: Session, ordre: Ordre = Ordre("plateau-haut"
     } | rapport
 
 
+def texte_phares(transmis: bool | None, dernier: bool | None) -> str:
+    """L'état des phares tel qu'il est connu : transmis par le robot, sinon le dernier ordre envoyé."""
+    if transmis is not None:
+        return "allumés (d'après la configuration du robot)" if transmis else "éteints (d'après la configuration du robot)"
+    if dernier is not None:
+        return f"dernier ordre envoyé : {'allumés' if dernier else 'éteints'} (état réel non transmis)"
+    return "état inconnu (non transmis)"
+
+
+async def executer_phares(session: Session, allumer: bool, relire: bool = True) -> dict[str, Any]:
+    """Phares du robot : un ordre sans mouvement, sans précondition de statut. `relire` : la configuration du
+    robot est redemandée ensuite (requête pure) pour dire l'état qu'il annonce ; sans relecture, un seul message."""
+    trame = protocole.trame_phares(allumer, session.cal)
+    session.journal.ecrire("ordre-emis", strict=True, ordre=trame.nom, sujet=session.sujet, trame=trame.description())
+    instant = session.horloge()
+    await session.publier(trame, securite.DELAI_ARRET_S)
+    rapport: dict[str, Any] = {"mode": "réel", "ordre": trame.nom, "emis": True}
+    if relire:
+        await session.solliciter()
+        relu = await session.attendre("statut", instant, 3.0)
+        transmis = session.etat.phares if relu else None
+        rapport |= {"etat_rafraichi": relu, "phares": texte_phares(transmis, allumer)}
+        if relu and transmis is not None and transmis != allumer:
+            rapport["constat"] = "la configuration relue n'a pas (encore) changé : regardez le robot"
+    return rapport
+
+
 async def executer_signal_plateau(session: Session, nom: str) -> dict[str, Any]:
     """ESSAI : levée de nettoyage du plateau, ou redescente (voir `protocole.trame_signal_plateau`).
 
@@ -889,6 +919,8 @@ async def executer(session: Session, ordre: Ordre) -> dict[str, Any]:
         return await executer_plateau(session, ordre)
     if ordre.nom == "stop":
         return await executer_arret(session)
+    if ordre.nom in PHARES:
+        return await executer_phares(session, PHARES[ordre.nom])
     return await executer_tache(session, ordre.nom)
 
 

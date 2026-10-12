@@ -182,6 +182,21 @@ LIBELLES_SIGNAUX_PLATEAU = {
 }
 
 
+# Phares du robot : signaux 10 (allumer) et 11 (éteindre), forme capturée par le socle sur le bouton
+# « Vehicle LED » de l'application (10 31 6a 02 40 0a / 0b). L'éclairage de la caméra (autres numéros de
+# la même énumération) n'est attesté par aucune capture : il n'est pas émis.
+SIGNAUX_PHARES: dict[bool, int] = {True: 10, False: 11}
+
+
+def trame_phares(allumer: bool, cal: Calibration) -> Trame:
+    if not isinstance(allumer, bool):
+        raise ValueError("phares : allumer ou éteindre")
+    signal = SIGNAUX_PHARES[allumer]
+    octets = _version(cal.version_protocole) + pb._field_bytes(CHAMP_ROBOT_CONFIG, pb._field_i32(CHAMP_SIGNAL, signal))
+    champs = {"version": cal.version_protocole, "robotConfig": {"signal": signal}}
+    return Trame("phares : allumer" if allumer else "phares : éteindre", Categorie.REGLAGE, octets, champs)
+
+
 def trame_signal_plateau(nom: str, cal: Calibration) -> Trame:
     """L'un des deux signaux de plateau, et rien d'autre : tout autre nom est refusé."""
     if nom not in SIGNAUX_PLATEAU:

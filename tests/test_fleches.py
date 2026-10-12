@@ -89,18 +89,26 @@ def test_direct_refuse_si_non_arme_et_armement_sur_confirmation_explicite(tmp_pa
     assert "direct-arme" in evenements and "direct-desarme" in evenements
 
 
-def test_direct_armement_expire_apres_soixante_secondes_sans_action(tmp_path, monkeypatch, session_reelle, lien):
+def test_direct_armement_expire_apres_cinq_minutes_sans_action_et_toute_action_le_renouvelle(tmp_path, monkeypatch, session_reelle, lien):
     async def scenario():
         async with serveur_ui(tmp_path, monkeypatch, reel=True, session=session_reelle) as (serveur, http):
             jeton = await armer(http, serveur)
-            assert serveur.instantane()["direct"]["reste_s"] == 60
+            assert fleches.DUREE_ARMEMENT_S == 300.0 and serveur.instantane()["direct"]["reste_s"] == 300
             depart = serveur.horloge()
-            serveur.horloge = lambda: depart + 59.0
+            instant = [depart + 299.0]
+            serveur.direct.horloge = serveur.horloge = lambda: instant[0]
             assert serveur.instantane()["direct"]["arme"] is True
-            serveur.horloge = lambda: depart + 61.0
+            # Toute action sur la page renouvelle le délai, sans changer de jeton.
+            statut, corps, _recus = await poster(http, serveur, "/api/direct/activite")
+            assert statut == 200 and corps == {"arme": True, "reste_s": 300}
+            instant[0] = depart + 299.0 + 299.0
+            assert serveur.instantane()["direct"]["arme"] is True
+            instant[0] = depart + 299.0 + 301.0
             assert serveur.instantane()["direct"]["arme"] is False
+            statut, corps, _recus = await poster(http, serveur, "/api/direct/activite")
+            assert corps == {"arme": False, "reste_s": 0}  # l'activité ne réarme pas
             statut, corps, _recus = await fleche(http, serveur, jeton)
-            assert statut == 409 and "60 s sans action" in corps["erreur"] and lien.ordres == []
+            assert statut == 409 and "5 min sans action" in corps["erreur"] and lien.ordres == []
 
     executer(scenario())
 
@@ -166,7 +174,7 @@ def test_direct_emet_chaque_fleche_par_le_chemin_des_ordres_et_enchaine_la_file(
     assert sum(est_consigne(trame) for trame in lien.trames) > 10 and lien.arrets == [ARRET] * 6
 
 
-def test_direct_file_limitee_a_cinq_et_stop_vide_la_file_et_desarme(tmp_path, monkeypatch, session_reelle, lien):
+def test_direct_file_limitee_a_huit_et_stop_vide_la_file_et_desarme(tmp_path, monkeypatch, session_reelle, lien):
     lien.robot = dict(SANS_POSE)
 
     async def scenario():
@@ -174,14 +182,14 @@ def test_direct_file_limitee_a_cinq_et_stop_vide_la_file_et_desarme(tmp_path, mo
             jeton = await armer(http, serveur)
             statut, corps, _recus = await fleche(http, serveur, jeton, "haut", 2)  # 8 s de mouvement
             assert statut == 202
-            for _rang in range(5):
+            for _rang in range(8):
                 statut, corps, _recus = await fleche(http, serveur, corps["jeton"], "gauche", 45)
                 assert statut == 202
             jeton = corps["jeton"]
             statut, refus, _recus = await fleche(http, serveur, jeton, "gauche", 45)
-            assert statut == 429 and "file d'attente pleine (5)" in refus["erreur"]
+            assert statut == 429 and "file d'attente pleine (8)" in refus["erreur"]
             direct = serveur.instantane()["direct"]
-            assert len(direct["file"]) == 5 and direct["arme"] is True  # appui ignoré, toujours armé
+            assert len(direct["file"]) == 8 and direct["arme"] is True  # appui ignoré, toujours armé
             statut, _corps, _recus = await fleche(http, serveur, jeton, "gauche", 45)
             assert statut == 429  # le jeton n'a pas changé : la page reste armée
 
@@ -262,17 +270,17 @@ def test_page_du_pave_etat_complet_et_garde_fous_visibles(tmp_path, monkeypatch)
 
     assert executer(scenario()) == {
         "distances_m": [0.25, 0.5, 1.0, 2.0], "angles_deg": [15.0, 45.0, 90.0],
-        "distance_defaut_m": 1.0, "angle_defaut_deg": 45.0, "file_max": 5, "armement_s": 60.0,
+        "distance_defaut_m": 1.0, "angle_defaut_deg": 45.0, "file_max": 8, "armement_s": 300.0,
         "allures": {"auto": None, "lente": 0.10, "normale": 0.25},
     }
     page = (ui.STATIQUE / "index.html").read_text(encoding="utf-8")
     script = (ui.STATIQUE / "pave.js").read_text(encoding="utf-8")
     assert "PILOTAGE DIRECT ARMÉ" in page and 'id="bandeau-direct"' in page and "Échap ou Espace" in page
     # Commandes à gauche, puis la caméra à droite, flèches en surimpression de la caméra.
-    assert page.index('id="bloc-pilotage"') < page.index('id="bloc-fleches"') < page.index('id="video"') < page.index('data-fleche=')
+    assert page.index('id="bloc-pilotage"') < page.index('id="bloc-fleches"') < page.index('id="video"') < page.rindex('data-fleche=')
     for identifiant in ("pave-miniature", "pave-total", "pave-retours", "pave-file", "composer", "fleches-bascule"):
         assert f'id="{identifiant}"' in page and f'"{identifiant}"' in script
-    assert page.count("data-fleche=") == 4
+    assert page.count("data-fleche=") == 8  # pavé cliquable à gauche ET surimpression de la caméra
     # Mode file : la flèche écrit dans LA séquence de la page ; aucune émission sans les deux temps.
     assert "page.ajouterEtape(etape)" in script and "/api/emettre" not in script and "/api/previsualiser" not in script
     assert "window.confirm(" in script and '"/api/direct/armer", { confirmer: true }' in script
