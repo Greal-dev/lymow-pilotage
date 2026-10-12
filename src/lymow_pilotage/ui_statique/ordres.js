@@ -89,7 +89,24 @@
     };
   }
 
+  /* SEC-01b — attestation « lames à l'arrêt » de l'opérateur : ce que la page en dit. Le serveur seul
+   * décide si elle est proposable (statut attestable) ; rien n'est déduit ici. */
+  function messageStatutDeclare(attestation) {
+    if (!attestation || !attestation.proposable || attestation.active) { return ""; }
+    return "Le robot se déclare : " + attestation.statut + ".";
+  }
+
+  function bandeauAttestation(attestation) {
+    if (!attestation || !attestation.active) { return ""; }
+    var reste = Math.max(0, Math.floor(attestation.reste_s || 0));
+    var secondes = reste % 60;
+    return "Pilotage autorisé sur attestation de l'opérateur — expire dans "
+      + (reste < 600 ? "0" : "") + Math.floor(reste / 60) + ":" + (secondes < 10 ? "0" : "") + secondes;
+  }
+
   var api = {
+    messageStatutDeclare: messageStatutDeclare,
+    bandeauAttestation: bandeauAttestation,
     texteOrdre: texteOrdre,
     blocageDesFleches: blocageDesFleches,
     gestesProposes: gestesProposes,

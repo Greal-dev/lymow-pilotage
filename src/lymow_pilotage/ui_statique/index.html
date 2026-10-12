@@ -13,6 +13,10 @@
   <div id="bandeau-demo" class="bandeau-demo" hidden>DÉMONSTRATION — robot fictif : rien ne part vers un vrai robot</div>
   <div id="bandeau-direct" class="bandeau-direct" role="alert" hidden>PILOTAGE DIRECT ARMÉ — chaque flèche émet immédiatement, sans prévisualisation. STOP : Échap ou Espace.</div>
   <div id="bandeau-arret" class="bandeau-reel" hidden>Interface arrêtée — relancez le raccourci.</div>
+  <div id="bandeau-attestation" class="bandeau-attestation" role="alert" hidden>
+    <span id="bandeau-attestation-texte"></span>
+    <button id="attestation-retirer" type="button">Retirer</button>
+  </div>
   <header class="entete">
     <h1>Lymow <small id="appareil"></small></h1>
     <p><span id="mode" class="pastille">…</span> <strong id="etat-resume"></strong> <span id="liaison"></span>
@@ -50,6 +54,11 @@
           <span id="ordres-etat" class="etat-ordres" role="status"></span>
           <button id="pause-raccourci" type="button" class="raccourci" hidden>Mettre en pause</button>
           <span id="pause-etat" class="note" role="status"></span>
+          <span class="attestation-proposition" hidden>
+            <span class="avertissement" data-attestation="message" role="status"></span>
+            <button type="button" data-attestation="poser">Je vois le robot, lames à l'arrêt : autoriser le pilotage 10 min</button>
+          </span>
+          <span id="attestation-erreur" class="avertissement" role="alert"></span>
           <span id="reprendre-rappel" hidden>
             <button id="reprendre-bouton" type="button" data-tache="reprendre">Reprendre la tâche</button>
             <span class="note">les lames peuvent redémarrer</span>

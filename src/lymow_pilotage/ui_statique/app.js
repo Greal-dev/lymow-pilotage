@@ -127,6 +127,7 @@
     $("pause-raccourci").hidden = !gestes.pause;
     $("reprendre-rappel").hidden = !gestes.reprendre;
     $("pause-etat").textContent = gestes.texte;
+    afficherAttestation(image.attestation);
     afficherEmission();
     $("appareil").textContent = image.appareil || "";
     $("etat-resume").textContent = Ordres.resumeEtat(image.etat);
@@ -167,6 +168,42 @@
     vider(journal);
     (image.journal || []).slice().reverse().forEach(function (ligne) {
       journal.appendChild(element("li", ligne.heure + " — " + ligne.texte));
+    });
+  }
+
+  // --- attestation « lames à l'arrêt » de l'opérateur (SEC-01b) ---------------
+  // La page propose et affiche ; le serveur seul décide (statut attestable, durée, retrait).
+
+  var CONFIRMATION_ATTESTATION = "Vous attestez que les lames sont à l'arrêt. L'outil ne peut pas le vérifier.\n\n"
+    + "Le robot se déclare pourtant dans un statut où ses lames peuvent tourner. L'attestation autorise le "
+    + "pilotage manuel pendant 10 minutes au plus ; STOP, ou le bouton « Retirer », la retire aussitôt.";
+
+  function afficherAttestation(attestation) {
+    var message = Ordres.messageStatutDeclare(attestation);
+    document.querySelectorAll(".attestation-proposition").forEach(function (bloc) {
+      bloc.hidden = message === "";
+      bloc.querySelector('[data-attestation="message"]').textContent = message;
+      bloc.querySelector('[data-attestation="poser"]').disabled = occupe;
+    });
+    var bandeau = Ordres.bandeauAttestation(attestation);
+    $("bandeau-attestation").hidden = bandeau === "";
+    $("bandeau-attestation-texte").textContent = bandeau;
+    if (bandeau !== "") { $("attestation-erreur").textContent = ""; }
+  }
+
+  async function poserAttestation() {
+    if (!window.confirm(CONFIRMATION_ATTESTATION)) { return; }
+    try {
+      await appeler("/api/attestation/poser", { confirmer: true });
+      $("attestation-erreur").textContent = "";
+    } catch (erreur) {
+      $("attestation-erreur").textContent = "Attestation refusée : " + erreur.message;
+    }
+  }
+
+  function retirerAttestation() {
+    appeler("/api/attestation/retirer").catch(function (erreur) {
+      $("attestation-erreur").textContent = "Retrait refusé : " + erreur.message + " — utilisez STOP.";
     });
   }
 
@@ -587,6 +624,10 @@
     previsualiser(sequence.slice(), false); // jamais d'émission directe : Prévisualiser, puis Émettre
   });
   $("stop").addEventListener("click", stop);
+  document.querySelectorAll('[data-attestation="poser"]').forEach(function (bouton) {
+    bouton.addEventListener("click", poserAttestation);
+  });
+  $("attestation-retirer").addEventListener("click", retirerAttestation);
   $("actualiser").addEventListener("click", function () {
     appeler("/api/actualiser").then(appliquer).catch(function (erreur) { $("liaison").textContent = erreur.message; });
   });

@@ -21,7 +21,7 @@ from .config import Calibration
 from .etat import Etat
 from .journal import Journal
 from .protocole import Categorie, Trame
-from .securite import RefusSecurite
+from .securite import Attestation, RefusSecurite
 
 PAS_ATTENTE_S = 0.2
 DELAI_REQUETE_S = 3.0
@@ -61,6 +61,8 @@ class Session:
         self.carte_brute: tuple[bytes, float] | None = None
         self.tranche_carte: tuple[bytes, float] | None = None  # dernière réponse de carte, telle quelle
         self.arret_en_cours = False
+        # SEC-01b : posée par l'appelant (page ou commande), jamais par la session elle-même.
+        self.attestation: Attestation | None = None
         self._differes: list[tuple[str, dict[str, Any]]] = []
         self._identifiant = uuid.uuid4().hex
 
@@ -96,11 +98,18 @@ class Session:
         # Un état émis à l'instant par le robot vaut preuve de présence.
         self.etat.en_ligne = True
         self.journaliser("etat-recu", **self.etat.resume(instant))  # SEC-06
+        self._controler_attestation()
 
     def recevoir_presence(self, en_ligne: bool, retenu: bool = False) -> None:
         if not retenu:
             self.etat.en_ligne = en_ligne
         self.journaliser("presence-recue", en_ligne=en_ligne, retenu=retenu)
+        self._controler_attestation()
+
+    def _controler_attestation(self) -> None:
+        # SEC-01b : arrêt d'urgence, mise à jour, essai d'usine, hors ligne — l'attestation tombe.
+        if self.attestation is not None:
+            self.attestation.controler(self.etat.statut, self.etat.en_ligne)
 
     async def publier(self, trame: Trame, delai: float) -> None:
         """Publie en QoS 1 et attend l'acquittement ; lève plutôt que d'abandonner en silence."""

@@ -1,7 +1,7 @@
-"""Invariants de sécurité codés en dur (SEC-01, SEC-02) et constantes de SEC-03/04.
+"""Invariants de sécurité codés en dur (SEC-01, SEC-01b, SEC-02) et constantes de SEC-03/04.
 
-Rôle : bornes, liste blanche des statuts « lames à l'arrêt », calcul de la
-consigne d'un mouvement. Ne publie rien, ne lit aucun réglage. Les facteurs de
+Rôle : bornes, liste blanche des statuts « lames à l'arrêt », attestation de
+l'opérateur (SEC-01b, en mémoire seulement), calcul de la consigne d'un mouvement. Ne publie rien, ne lit aucun réglage. Les facteurs de
 calibration ne changent que la durée, et le déplacement commandé (vitesse ×
 durée) reste plafonné ici : aucune option, variable d'environnement ou clé de
 calibration ne peut dépasser ces bornes.
@@ -10,6 +10,7 @@ calibration ne peut dépasser ces bornes.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from .vendor.ha_lymow import const as socle
@@ -63,7 +64,7 @@ SENS_MARGE_DEG = 10.0
 
 # SEC-01 : seuls statuts où les lames sont tenues pour arrêtées. Tout autre
 # statut — tonte (2, 8, 9), retour (4, 10, 14), arrêt d'urgence (13), mise à
-# jour (11), essais d'usine (15, 16), inconnu, hors ligne (-1) — refuse.
+# jour (11), essais d'usine (15, 16), inconnu, hors ligne (-1) — refuse, sauf SEC-01b ci-dessous.
 # Constat du 2026-10-12 (captures réelles d'ordres) : cette liste s'applique au statut VIVANT du
 # robot, `robotStatus` (champ 1 de robotInfo), et à lui seul. `workStatus` (champ 6) reste à 2
 # (tonte) pendant toute la tâche, pause comprise — le juger refusait à tort un robot en pause.
@@ -82,6 +83,37 @@ STATUTS_LAMES_ARRET = frozenset(
         socle.WORK_STATUS_ERROR,
     }
 )
+
+# SEC-01b (décision du propriétaire, 2026-10-12) : une attestation explicite de l'opérateur
+# (« lames à l'arrêt constatées »), temporaire et journalisée, admet un mouvement manuel dans les
+# statuts ci-dessous. Comme tout SEC-01, elle porte sur le statut VIVANT du robot (robotStatus,
+# champ 1) : le « statut 2 en pause » qui l'a motivée venait du champ 6, qui n'est plus jugé.
+# L'outil ne peut PAS vérifier ce que l'opérateur atteste.
+STATUTS_ATTESTABLES = frozenset(
+    {
+        socle.WORK_STATUS_MOWING,
+        socle.WORK_STATUS_RESUME,
+        socle.WORK_STATUS_ZONE_PARTITION,
+        socle.WORK_STATUS_DOCKING,
+        socle.WORK_STATUS_PAUSE_DOCKING,
+        socle.WORK_STATUS_ESCAPING,
+    }
+)
+# SEC-01b : aucune attestation ne lève ces refus ; un statut absent ou inconnu refuse aussi,
+# puisqu'il n'est dans aucune des deux listes admises.
+STATUTS_TOUJOURS_REFUSES = frozenset(
+    {
+        socle.WORK_STATUS_EMERGENCY_STOP,
+        socle.WORK_STATUS_UPDATING,
+        socle.WORK_STATUS_RTT,
+        socle.WORK_STATUS_AGING_TEST,
+        socle.WORK_STATUS_OFFLINE,
+    }
+)
+# SEC-01b : durée de vie d'une attestation ; aucune option, variable d'environnement ni clé de
+# calibration ne la change, ne la pose ni ne la prolonge.
+DUREE_ATTESTATION_S = 600.0
+MENTION_ATTESTATION = "lames à l'arrêt constatées par l'opérateur, non vérifiées par l'outil (SEC-01b)"
 
 
 # SEC-08 : une carte ne s'écrit que robot au repos ou en charge — ni tonte, ni pause,
@@ -300,17 +332,71 @@ def explication_statut(statut: int | None) -> tuple[str, str | None]:
     return connus.get(statut, (f"statut {statut} non reconnu comme « lames à l'arrêt »", None))
 
 
-def verifier_presence_et_statut(statut: int | None, en_ligne: bool | None) -> None:
-    """SEC-01 : présence explicitement confirmée et statut dans la liste blanche."""
+class Attestation:
+    """SEC-01b : « lames à l'arrêt constatées par l'opérateur », en mémoire seulement.
+
+    Jamais active par défaut, jamais écrite sur disque, limitée à `DUREE_ATTESTATION_S` et au
+    processus qui la porte. `tracer(evenement, **champs)` reçoit chaque pose, retrait et
+    expiration (journal). Ne décide de rien : `statut_admis` porte la règle.
+    """
+
+    def __init__(self, horloge: Callable[[], float], tracer: Callable[..., None] | None = None) -> None:
+        self._horloge = horloge
+        self._tracer = tracer or (lambda _evenement, **_champs: None)
+        self._expire: float | None = None
+
+    @property
+    def active(self) -> bool:
+        if self._expire is not None and self._horloge() >= self._expire:
+            self._expire = None
+            self._tracer("attestation-expiree", duree_s=DUREE_ATTESTATION_S)
+        return self._expire is not None
+
+    @property
+    def reste_s(self) -> int:
+        return max(0, math.ceil(self._expire - self._horloge())) if self.active and self._expire is not None else 0
+
+    def poser(self, origine: str) -> None:
+        self._expire = self._horloge() + DUREE_ATTESTATION_S
+        self._tracer("attestation-posee", origine=origine, duree_s=DUREE_ATTESTATION_S, mention=MENTION_ATTESTATION)
+
+    def retirer(self, motif: str) -> bool:
+        """Vrai si une attestation était active ; un retrait sans attestation ne trace rien."""
+        if not self.active:
+            return False
+        self._expire = None
+        self._tracer("attestation-retiree", motif=motif)
+        return True
+
+    def controler(self, statut: int | None, en_ligne: bool | None) -> None:
+        """Le robot passe hors ligne ou dans un statut toujours refusé : l'attestation tombe."""
+        if en_ligne is False:
+            self.retirer("robot hors ligne")
+        elif statut is not None and not statut_admis(statut, attestee=True):
+            self.retirer(f"{explication_statut(statut)[0]} (statut {statut}) : toujours refusé")
+
+
+def statut_admis(statut: int | None, attestee: bool = False) -> bool:
+    """SEC-01 : liste blanche ; SEC-01b : ou attestation active ET statut attestable."""
+    return statut in STATUTS_LAMES_ARRET or (attestee and statut in STATUTS_ATTESTABLES)
+
+
+def verifier_presence_et_statut(statut: int | None, en_ligne: bool | None, attestee: bool = False) -> None:
+    """SEC-01 : présence explicitement confirmée et statut dans la liste blanche (ou SEC-01b)."""
     if en_ligne is False:
         raise RefusSecurite("robot hors ligne : attendez son retour en ligne — mouvement refusé (SEC-01)")
     if en_ligne is not True:
         raise RefusSecurite(
             "présence en ligne du robot non confirmée : cliquez sur « Actualiser » — mouvement refusé (SEC-01)"
         )
-    if statut not in STATUTS_LAMES_ARRET:
-        constat, conseil = explication_statut(statut)
-        raise RefusSecurite(f"{constat} : {conseil + ' — ' if conseil else ''}mouvement refusé (SEC-01)")
+    if statut_admis(statut, attestee):
+        return
+    constat, conseil = explication_statut(statut)
+    if attestee:
+        raise RefusSecurite(
+            f"{constat} : statut toujours refusé, même sur attestation de l'opérateur — mouvement refusé (SEC-01b)"
+        )
+    raise RefusSecurite(f"{constat} : {conseil + ' — ' if conseil else ''}mouvement refusé (SEC-01)")
 
 
 def verifier_repos_pour_carte(statut: int | None, age_s: float | None, en_ligne: bool | None) -> None:
@@ -327,8 +413,12 @@ def verifier_repos_pour_carte(statut: int | None, age_s: float | None, en_ligne:
         )
 
 
-def verifier_lames_arret(statut: int | None, age_s: float | None, en_ligne: bool | None) -> None:
-    """SEC-01 : refuse tout mouvement sans preuve fraîche de lames à l'arrêt."""
+def verifier_lames_arret(
+    statut: int | None, age_s: float | None, en_ligne: bool | None, attestee: bool = False
+) -> None:
+    """SEC-01 : refuse tout mouvement sans preuve fraîche de lames à l'arrêt.
+
+    SEC-01b : l'attestation ne dispense ni de l'état frais, ni de la présence en ligne."""
     if statut is None or age_s is None:
         raise RefusSecurite(
             "aucun état reçu du robot depuis la sollicitation : cliquez sur « Actualiser » — mouvement refusé (SEC-01)"
@@ -338,4 +428,4 @@ def verifier_lames_arret(statut: int | None, age_s: float | None, en_ligne: bool
             f"état périmé ({age_s:.0f} s, maximum {AGE_MAX_ETAT_S:.0f} s) : cliquez sur « Actualiser » — "
             "mouvement refusé (SEC-01)"
         )
-    verifier_presence_et_statut(statut, en_ligne)
+    verifier_presence_et_statut(statut, en_ligne, attestee)

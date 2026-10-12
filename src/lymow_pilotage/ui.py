@@ -62,6 +62,8 @@ ROUTE_REOUVERTURE = "/api/instance/rouvrir"
 ROUTE_IDENTITE = "/api/instance/identite"
 ROUTE_ARRET = "/api/instance/arreter"
 ROUTES_LOCALES = (ROUTE_REOUVERTURE, ROUTE_IDENTITE, ROUTE_ARRET, rappel.ROUTE)
+ROUTE_ATTESTATION_POSER = "/api/attestation/poser"
+ROUTE_ATTESTATION_RETIRER = "/api/attestation/retirer"
 REMPLACEE = "ancienne version remplacée"
 DELAI_LIBERATION_S = 10.0
 # Après un ordre réel, les trames reçues sont encore enregistrées ce temps-là (diagnostic).
@@ -203,6 +205,8 @@ class ServeurUI:
         # Pause demandée : (instant de la demande, échéance, statut attendu) ; jamais suivie d'un mouvement automatique.
         self._pause: tuple[float, float, int] | None = None
         self._direct_en_cours = False
+        # SEC-01b : attestation « lames à l'arrêt » de l'opérateur ; en mémoire, jamais active au lancement.
+        self.attestation = securite.Attestation(lambda: self.horloge(), self._tracer_attestation)
         self._ecoute: capture.Enregistreur | None = None  # trames brutes pendant un ordre réel
         self._fin_ecoute: asyncio.TimerHandle | None = None
         self.video_ouverte = False
@@ -235,6 +239,8 @@ class ServeurUI:
                 web.post("/api/direct/armer", self._direct_armer),
                 web.post("/api/direct/desarmer", self._direct_desarmer),
                 web.post("/api/direct/fleche", self._direct_fleche),
+                web.post(ROUTE_ATTESTATION_POSER, self._attestation_poser),
+                web.post(ROUTE_ATTESTATION_RETIRER, self._attestation_retirer),
                 web.post("/api/video/demarrer", self._video_demarrer),
                 web.post("/api/video/arreter", self._video_arreter),
                 web.get("/favicon.ico", self._sans_contenu),
@@ -297,6 +303,7 @@ class ServeurUI:
         self._stop_demande = True
         self.direct.desarmer()
         await self._interrompre()
+        self.attestation.retirer("arrêt du serveur")  # SEC-01b ; après l'arrêt du mouvement, jamais avant
         self._fermer_ecoute()
         if self._veille is not None:
             self._veille.cancel()
@@ -324,6 +331,7 @@ class ServeurUI:
             self.session = Session(robot, demo.APPAREIL, self.journal, self.cal, frozenset(Categorie))
             robot.session = self.session
             self.session.signaler = self._signaler
+            self.session.attestation = self.attestation
             self.ident, self.etat_liaison = None, demo.MENTION
             if self._battement is not None:
                 self._battement.cancel()
@@ -350,6 +358,7 @@ class ServeurUI:
             self.etat_liaison = f"connexion impossible : {masquer(str(erreur)) or type(erreur).__name__}"
             return
         self.session.signaler = self._signaler
+        self.session.attestation = self.attestation  # SEC-01b : la même règle pour tous les chemins d'ordre
         self.etat_liaison = "connecté"
         await self.session.solliciter()
 
@@ -556,6 +565,7 @@ class ServeurUI:
                 "arme": self.direct.arme, "reste_s": self.direct.reste_s,
                 "file": [dataclasses.asdict(ordre) for ordre in self.direct.file], "faites": self.direct.faites[-12:],
             },
+            "attestation": self._etat_attestation(),
             "compte": self._compte(),
             "etat": etat,
             "resultat": self.resultat,
@@ -583,7 +593,7 @@ class ServeurUI:
         refus, action = None, None
         if etat.en_ligne is False:
             refus = "Le robot est hors ligne : attendez son retour en ligne."
-        elif etat.statut is not None and etat.statut not in securite.STATUTS_LAMES_ARRET:
+        elif etat.statut is not None and not securite.statut_admis(etat.statut, self.attestation.active):
             constat, conseil = securite.explication_statut(etat.statut)
             refus = constat[0].upper() + constat[1:] + (f" : {conseil}." if conseil else " : mouvement refusé.")
             action = "pause" if etat.statut in securite.STATUTS_PAUSE_UTILE else None
@@ -611,6 +621,31 @@ class ServeurUI:
             return {"etat": "en attente", "texte": "Pause demandée : attente de la confirmation du robot…"}
         libelle = etat.resume(maintenant)["statut_libelle"]
         return {"etat": "non confirmée", "texte": f"Pause non confirmée : le robot annonce « {libelle} »."}
+
+    def _etat_attestation(self) -> dict[str, Any]:
+        """SEC-01b : active ou non, temps restant, et si la page peut la proposer (statut attestable seulement)."""
+        session = self.session
+        active = self.attestation.active
+        libelle = None
+        if self.emet and not active and session is not None and session.lien.connecte:
+            etat = session.etat
+            if etat.en_ligne is True and etat.statut in securite.STATUTS_ATTESTABLES:
+                libelle = etat.resume(session.horloge())["statut_libelle"]
+        return {
+            "active": active, "reste_s": self.attestation.reste_s, "duree_s": securite.DUREE_ATTESTATION_S,
+            "proposable": libelle is not None, "statut": libelle,
+        }
+
+    def _tracer_attestation(self, evenement: str, **champs: Any) -> None:
+        """Chaque pose, retrait ou expiration : au journal (différé pendant un arrêt, SEC-03) et au fil de la page."""
+        session = self.session
+        (session.journaliser if session is not None else self.journal.ecrire)(evenement, mode=self.mode, **champs)
+        textes = {
+            "attestation-posee": "PILOTAGE AUTORISÉ SUR ATTESTATION DE L'OPÉRATEUR (lames à l'arrêt constatées), 10 min au plus",
+            "attestation-retiree": f"attestation de l'opérateur retirée : {champs.get('motif')}",
+            "attestation-expiree": "attestation de l'opérateur expirée",
+        }
+        self._noter(textes[evenement])
 
     async def _etat(self, _requete: web.Request) -> web.StreamResponse:
         return web.json_response(self.instantane(complet=True))
@@ -764,6 +799,7 @@ class ServeurUI:
             self._stop_demande = True
             try:
                 await self._interrompre()  # l'arrêt de fin de mouvement part d'abord
+                self.attestation.retirer("STOP")  # SEC-01b : après l'arrêt, rien ne le retarde
                 self._lancer([Ordre("stop")])  # puis le `stop` de la commande : consignes nulles ×3, pause
             finally:
                 self._stop_demande = False
@@ -787,6 +823,36 @@ class ServeurUI:
         self.previsualisation = None
         self._lancer([Ordre("pause")])
         return web.json_response({"accepte": True}, status=202)
+
+    # --- attestation « lames à l'arrêt » de l'opérateur (SEC-01b) -------------
+    # Ces routes ne font que poser ou retirer l'attestation : aucun ordre n'en part, et la règle
+    # elle-même vit dans `securite` — flèches, pilotage direct et ordres classiques la lisent pareil.
+
+    async def _attestation_poser(self, requete: web.Request) -> web.StreamResponse:
+        if not self.emet:
+            return _refus(403, "serveur lancé en simulation : rien n'est émis, aucune attestation n'y a de sens (SEC-01b)")
+        corps = await self._corps(requete)
+        if not isinstance(corps, dict) or corps.get("confirmer") is not True:
+            raise ErreurSaisie("confirmation explicite attendue : vous attestez que les lames sont à l'arrêt")
+        if self.occupe or self._stop_demande:
+            return _refus(409, "un ordre ou un STOP est en cours : attestez ensuite, robot à l'arrêt")
+        if self.session is None or not self.session.lien.connecte:
+            return _refus(503, f"robot injoignable : {self.etat_liaison}")
+        if self.attestation.active:
+            return _refus(409, "une attestation est déjà active : retirez-la, ou attendez son expiration")
+        if not self._etat_attestation()["proposable"]:
+            return _refus(
+                409,
+                "attestation refusée : elle ne vaut que si le robot se déclare en tonte ou en retour ; jamais en "
+                "arrêt d'urgence, mise à jour, essai d'usine, hors ligne ou sans état connu (SEC-01b)",
+            )
+        self.session.attestation = self.attestation
+        self.attestation.poser("page")
+        return web.json_response({"attestation": self._etat_attestation()})
+
+    async def _attestation_retirer(self, _requete: web.Request) -> web.StreamResponse:
+        self.attestation.retirer("à la demande de l'opérateur")  # pendant un mouvement : SEC-01 l'arrête
+        return web.json_response({"attestation": self._etat_attestation()})
 
     # --- pilotage direct par flèches ------------------------------------------
     # Seul chemin sans prévisualisation. Il n'accepte que les quatre ordres bornés de `fleches`,
@@ -1113,6 +1179,8 @@ class ServeurUI:
         return await self._compte_enregistrer(choix["jeton"], choix["region"], appareil)
 
     async def _rouvrir_liaison(self) -> None:
+        # SEC-01b : nouvelle liaison, état du robot à relire — l'attestation ne lui survit pas.
+        self.attestation.retirer("liaison rouverte")
         await self._pile.aclose()
         self._pile, self.session = AsyncExitStack(), None
         await self._connecter_sans_verrou()
@@ -1129,6 +1197,7 @@ class ServeurUI:
         self._refuser_en_demonstration()
         self._refuser_si_occupe()
         async with self._verrou_acces:
+            self.attestation.retirer("compte effacé de ce poste")
             await self._pile.aclose()
             self._pile, self.session = AsyncExitStack(), None
             compte.oublier()

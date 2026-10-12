@@ -319,6 +319,47 @@ réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même
   liste ou si le robot passe hors ligne, arrêt immédiat. L'outil ne sait
   émettre aucun ordre de démarrage de tonte ; seul `reprendre` peut relancer
   les lames.
+- **SEC-01b Attestation de l'opérateur** (décision du propriétaire,
+  2026-10-12). Elle porte, comme tout SEC-01, sur le statut VIVANT du robot
+  (`robotStatus`, champ 1). Le constat qui l'a motivée — robot en pause,
+  lames arrêtées à vue, « statut 2 » publié — venait du champ 6, qui n'est
+  plus jugé : un robot en pause est désormais admis sans attestation. Elle
+  reste utile si le robot se déclare vraiment en tonte ou en retour alors que
+  l'opérateur voit ses lames arrêtées. Règle : un mouvement manuel (`tourner`, `avancer`, `reculer`, flèches
+  comprises) est admis si le statut est dans la liste de SEC-01, **ou** si
+  une attestation « lames à l'arrêt constatées par l'opérateur » est active
+  et que le robot se déclare en tonte (2, 8, 9) ou en retour (4, 10, 14).
+  Aucune attestation ne lève le refus en arrêt d'urgence (13), mise à jour
+  (11), essais d'usine (15, 16), hors ligne, statut absent ou inconnu. Le
+  reste de SEC-01 est inchangé : état frais, présence en ligne, un mouvement
+  à la fois, statut revérifié à chaque consigne (avec attestation, un
+  statut 2 n'interrompt pas ; un passage à 13, 11 ou hors ligne interrompt
+  toujours, comme l'expiration ou le retrait de l'attestation en cours de
+  mouvement). SEC-02, SEC-03 et les suivantes sont inchangées.
+  - *Vie de l'attestation.* 10 minutes au plus, dans la mémoire du processus
+    seulement : jamais active au lancement, jamais écrite sur disque, aucune
+    variable d'environnement ni clé de `calibration.toml` ne la pose. Elle
+    tombe sur STOP, à l'arrêt du serveur, à la réouverture de la liaison, dès
+    que le robot passe dans un statut toujours refusé ou hors ligne, et à la
+    demande (« Retirer »).
+  - *Dans la page* (`lymow ui --reel`, ou `--demo` ; refusée en simulation et
+    pendant un mouvement) : quand le statut seul bloque, la ligne de statut
+    du bloc Pilotage propose d'abord « Mettre en pause », puis « Le robot se
+    déclare : … » et le bouton « Je vois le robot, lames à l'arrêt :
+    autoriser le pilotage 10 min », avec une confirmation explicite. Tant
+    qu'elle est active : bandeau orange en haut de page, avec le temps
+    restant et « Retirer ».
+  - *En ligne de commande* : `--lames-arretees-constatees`, avec `--reel`
+    seulement, sur `tourner`, `avancer`, `reculer` et `sequence` ; elle vaut
+    pour cette commande.
+  - *Journal.* Chaque pose, retrait et expiration y figure
+    (`attestation-posee`, `attestation-retiree`, `attestation-expiree`), et
+    chaque ordre émis sous attestation porte la mention et le statut déclaré.
+  - *Limites.* **L'outil ne peut pas vérifier ce que l'opérateur atteste** :
+    si les lames tournent, il fera bouger un robot lames en marche. À
+    n'utiliser que robot à vue. Le plateau de coupe et l'essai d'arrêt
+    automatique n'en bénéficient pas : ils restent sur la liste de SEC-01.
+    Non vérifié en réel.
 - **SEC-02 Plafonds** : 2 m, 180°, 0,25 m/s, 0,35 rad/s, 9 s par mouvement ;
   le déplacement réellement commandé (vitesse × durée) respecte les mêmes
   2 m et 180° quel que soit le facteur de calibration ; `plateau-haut` entre

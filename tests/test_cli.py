@@ -285,6 +285,80 @@ def test_reel_refuse_par_sec01_sort_en_erreur(capsys, tmp_path, liaison_factice,
     assert lien.ordres == []
 
 
+# --- SEC-01b : option --lames-arretees-constatees ---------------------------------
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [("avancer", "1"), ("reculer", "0.5"), ("tourner", "45"), ("sequence", "avancer 1; tourner 45")],
+)
+def test_sec01b_option_d_attestation_refusee_sans_reel(capsys, tmp_path, reseau_interdit, lien, arguments):
+    code = cli.main([*arguments, "--lames-arretees-constatees", "--donnees", str(tmp_path)])
+    sorties = capsys.readouterr()
+    assert code == 2 and "SEC-01b" in sorties.err and "--reel" in sorties.err and sorties.out == ""
+    assert lien.publies == [] and lignes_journal(tmp_path) == []  # rien de simulé non plus
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [("plateau", "60"), ("plateau-haut",), ("stop",), ("reprendre",), ("base",), ("annuler",), ("essai-arret-auto",),
+     ("etat",), ("ui",), ("carte",)],
+)
+def test_sec01b_option_d_attestation_inconnue_des_autres_commandes(tmp_path, reseau_interdit, arguments):
+    with pytest.raises(SystemExit) as sortie:
+        cli.main([*arguments, "--lames-arretees-constatees", "--reel", "--donnees", str(tmp_path)])
+    assert sortie.value.code == 2
+    with pytest.raises(SystemExit):  # aucune abréviation, et pas avant la commande
+        cli.main(["avancer", "1", "--lames", "--reel", "--donnees", str(tmp_path)])
+    with pytest.raises(SystemExit):
+        cli.main(["--lames-arretees-constatees", "avancer", "1", "--reel", "--donnees", str(tmp_path)])
+
+
+def test_sec01b_reel_avec_attestation_emet_malgre_le_statut_2_et_le_dit(capsys, tmp_path, liaison_factice, lien, session):
+    lien.robot = fragment(statut=2)
+    code, sortie = lancer(capsys, tmp_path, "avancer", "0.5", "--reel", "--lames-arretees-constatees")
+    assert code == 0 and sortie["emissions"] == 20 and sortie["statut_declare"] == 2
+    assert "SEC-01b" in sortie["attestation_demandee"] and "SEC-01b" in sortie["attestation"]  # dans le résumé
+    assert len(lien.consignes) == 20 and lien.arrets == [ARRET] * 3
+    journal = lignes_journal(tmp_path)
+    evenements = [ligne["evenement"] for ligne in journal]
+    assert evenements.index("attestation-posee") < evenements.index("ordre-emis") < evenements.index("attestation-retiree")
+    assert next(ligne for ligne in journal if ligne["evenement"] == "ordre-emis")["statut_declare"] == 2
+    assert session.attestation.active is False  # elle ne survit pas à la commande
+
+    assert cli.main(["avancer", "0.5", "--reel", "--lames-arretees-constatees", "--donnees", str(tmp_path)]) == 0
+    assert "attestation : lames à l'arrêt constatées par l'opérateur" in capsys.readouterr().out  # sortie lisible
+
+
+def test_sec01b_reel_sans_l_option_reste_refuse_quelles_que_soient_les_variables_d_environnement(
+    capsys, tmp_path, liaison_factice, lien, monkeypatch
+):
+    for nom in ("LYMOW_LAMES_ARRETEES_CONSTATEES", "LAMES_ARRETEES_CONSTATEES", "LYMOW_ATTESTATION"):
+        monkeypatch.setenv(nom, "1")
+    lien.robot = fragment(statut=2)
+    code, sortie = lancer(capsys, tmp_path, "avancer", "1", "--reel")
+    assert code == 1 and "SEC-01" in sortie["echec"] and lien.ordres == []
+
+
+@pytest.mark.parametrize("statut", [13, 11, 15, 16])
+def test_sec01b_reel_avec_attestation_refuse_les_statuts_toujours_refuses(capsys, tmp_path, liaison_factice, lien, statut):
+    lien.robot = fragment(statut=statut)
+    code, sortie = lancer(capsys, tmp_path, "avancer", "1", "--reel", "--lames-arretees-constatees")
+    assert code == 1 and "SEC-01" in sortie["echec"] and lien.ordres == []
+
+
+def test_sec01b_sequence_reelle_avec_attestation_et_stop_qui_la_retire(capsys, tmp_path, liaison_factice, lien):
+    lien.robot = {"robotState": 2, "workStatus": 2, "battery": 80}
+    code, sortie = lancer(
+        capsys, tmp_path, "sequence", "reculer 0.5; stop; avancer 0.5", "--reel", "--lames-arretees-constatees"
+    )
+    assert code == 1 and sortie["interrompue"] is True and "attestation_demandee" in sortie
+    assert [etape.get("statut_declare") for etape in sortie["etapes"]] == [2, None]
+    # Après STOP l'attestation ne vaut plus : la séquence s'arrête sur le statut, « avancer » ne part pas.
+    assert "tonte en cours" in sortie["motif"] and sortie["non_executees"] == ["avancer 0.5"]
+    assert len(lien.consignes) == 20
+
+
 class FauxHttp:
     def __init__(self, **_kwargs) -> None:
         pass
