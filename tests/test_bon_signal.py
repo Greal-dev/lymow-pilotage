@@ -107,7 +107,7 @@ def test_decoupage_en_pas_compatibles_avec_sec02():
     for ordre in demi_tour:
         mouvement.valider(Ordre(ordre["nom"], ordre["valeur"]), Calibration(facteur_angle=0.79))
     assert bon_signal.decouper([(0.0, 0.0), (1.0, 0.0)], cap_deg=None) is None  # cap inconnu : pas de pas
-    assert bon_signal.decouper([(0.0, 0.0), (1.0, 0.0)], cap_deg=0.5) == [{"nom": "avancer", "valeur": 1.0, "vitesse": None, "duree": None}]
+    assert bon_signal.decouper([(0.0, 0.0), (1.0, 0.0)], cap_deg=0.5) == [{"nom": "avancer", "valeur": 1.0, "vitesse": None, "duree": None}]  # sans « force » : jamais proposé d'office
 
 
 def test_proposition_complete_et_ses_refus():
@@ -135,7 +135,8 @@ def test_sequence_vers_le_signal_s_arrete_d_elle_meme_quand_la_precision_redevie
     def signal_retrouve(lien_, octets):
         if est_consigne(octets):
             compte.append(1)
-            if len(compte) == 80:  # dernière consigne de la deuxième étape (40 par mètre à 0,25 m/s)
+            # Position perdue : allure lente d'office, 0,12 m/s pour un pas de 1 m (9 s au plus) — 84 consignes par pas.
+            if len(compte) == 168:  # dernière consigne de la deuxième étape
                 lien_.robot = {"robotState": 6, "workStatus": 2, "rtkEastM": 0.06}
 
     lien.sur_publication = signal_retrouve
@@ -182,14 +183,16 @@ def test_route_de_proposition_et_sequence_chargee_avec_son_objectif(tmp_path, mo
             assert lien.ordres == []  # proposer n'émet rien
 
             # Mode assisté : la séquence chargée se prévisualise et s'émet comme toute séquence, avec son objectif.
-            lien.sur_publication = lambda lien_, octets: setattr(
-                lien_, "robot", fragment(statut=6, tache=2, est=3.0, nord=1.0, precision=0.06)
-            ) if est_consigne(octets) else None
+            avance = []  # le robot fictif avance vraiment : sinon SEC-14 l'arrête pour « obstacle ou patinage »
+            lien.sur_publication = lambda lien_, octets: (avance.append(1), setattr(
+                lien_, "robot", fragment(statut=6, tache=2, est=3.0 + 0.012 * len(avance), nord=1.0, precision=0.06)
+            )) if est_consigne(octets) else None
             statut, corps, _recus = await poster(http, serveur, "/api/previsualiser", {"ordres": proposition["ordres"], "objectif": "signal"})
             assert statut == 200 and len(corps["etapes"]) == 4
             await poster(http, serveur, "/api/emettre", {"identifiant": corps["identifiant"]})
             await attendre(lambda: not serveur.occupe, delai=20.0)
             resultat = serveur.resultat
+            assert "objectif_atteint" in resultat, {c: v for c, v in resultat.items() if c in ("motif", "echec", "code_sortie")}
             assert resultat["objectif_atteint"] is True and resultat["code_sortie"] == 0 and len(resultat["etapes"]) == 1
             assert "précision retrouvée (±0,06 m)" in resultat["motif"]
             # Signal retrouvé, robot en pause : la reprise est proposée, la garde SEC-12 passe.

@@ -6,7 +6,8 @@ gauche, tourner à droite), et tenir l'armement du mode direct : jeton court, re
 Frontières : ce module n'émet rien et ne valide aucun invariant de sécurité — chaque
 ordre produit ici passe ensuite par les mêmes fonctions que tout autre ordre (SEC-01,
 SEC-02, SEC-03). Rien d'autre que ces quatre ordres, aux pas des listes ci-dessous, ne
-peut sortir d'ici : ni plateau, ni tâche, ni vitesse, ni durée, ni séquence libre.
+peut sortir d'ici : ni plateau, ni tâche, ni durée, ni séquence libre ; pour la vitesse,
+seulement l'une des allures de la liste (avance et recul), et « forcer ce pas » (SEC-13).
 """
 
 from __future__ import annotations
@@ -25,6 +26,8 @@ DISTANCE_DEFAUT_M, ANGLE_DEFAUT_DEG = 1.0, 45.0
 DIRECTIONS: dict[str, tuple[str, float]] = {
     "haut": ("avancer", 1.0), "bas": ("reculer", 1.0), "gauche": ("tourner", 1.0), "droite": ("tourner", -1.0),
 }
+# Allure d'une avance ou d'un recul : « auto » laisse l'outil choisir (lente près d'un bord, SEC-13).
+ALLURES: dict[str, float | None] = {"auto": None, "lente": 0.10, "normale": 0.25}
 FILE_MAX = 5
 DUREE_ARMEMENT_S = 60.0
 
@@ -33,7 +36,7 @@ class RefusDirect(Exception):
     """Mode direct non armé, expiré, ou jeton d'armement invalide."""
 
 
-def ordre(direction: object, pas: object) -> Ordre:
+def ordre(direction: object, pas: object, allure: object = "auto", forcer: object = False) -> Ordre:
     """La flèche et son pas → l'ordre. Tout ce qui n'est pas exactement dans les listes est refusé."""
     if not isinstance(direction, str) or direction not in DIRECTIONS:
         raise ErreurSaisie("flèche inconnue : haut, bas, gauche ou droite")
@@ -44,7 +47,11 @@ def ordre(direction: object, pas: object) -> Ordre:
     if pas not in permis:  # égalité exacte avec une valeur de la liste : aucune valeur intermédiaire
         liste = ", ".join(f"{valeur:g}" for valeur in permis)
         raise ErreurSaisie(f"pas hors liste pour « {nom} » : {liste}")
-    return Ordre(nom, signe * float(pas))
+    if not isinstance(allure, str) or allure not in ALLURES or not isinstance(forcer, bool):
+        raise ErreurSaisie("allure inconnue : auto, lente ou normale")
+    if nom == "tourner":  # rotation inchangée : ni allure, ni garde-fou carte
+        return Ordre(nom, signe * float(pas))
+    return Ordre(nom, signe * float(pas), vitesse=ALLURES[allure], force=forcer)
 
 
 class Armement:

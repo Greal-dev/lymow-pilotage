@@ -432,7 +432,7 @@ def test_page_trois_boutons_toujours_visibles_en_tete_dans_l_ordre():
     app = (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
     # « Flèches : activer » est le reflet de « Prendre la main » : le même geste, UNE confirmation.
     assert '$("prendre-main").addEventListener("click", prendreLaMain)' in pave
-    assert "if (actives) { desactiver(\"\"); } else { prendreLaMain(); }" in pave and pave.count("window.confirm(") == 1
+    assert "if (actives) { desactiver(\"\"); } else { prendreLaMain(); }" in pave and pave.count("window.confirm(") == 2  # prendre la main ; forcer ce pas
     stop = app[app.index("  async function stop() {") :][:700]
     assert "sequence = [];" in stop and "oublierPrevisualisation" in stop and "desactiverFleches(false)" in stop
     assert '"/api/liaison/rendre", { sans_attendre: true, reprendre: reprendre }' in app

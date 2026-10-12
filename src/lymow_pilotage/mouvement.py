@@ -19,7 +19,7 @@ from collections.abc import Coroutine
 from dataclasses import dataclass
 from typing import Any
 
-from . import protocole, securite
+from . import garde_carte, protocole, securite
 from .config import Calibration
 from .etat import LIBELLES_STATUT, Pose
 from .securite import Consigne, RefusSecurite
@@ -78,6 +78,7 @@ class Ordre:
     valeur: float | None = None
     vitesse: float | None = None
     duree: float | None = None
+    force: bool = False  # SEC-13 : « Forcer ce pas » — le garde-fou carte est levé pour cet ordre, et journalisé
 
     def __str__(self) -> str:
         mots = [self.nom]
@@ -87,6 +88,8 @@ class Ordre:
             mots.append(f"{'--observation' if self.nom == ESSAI else '--duree'} {self.duree:g}")
         if self.vitesse is not None:
             mots.append(f"--vitesse {self.vitesse:g}")
+        if self.force:
+            mots.append("--forcer")
         return " ".join(mots)
 
 
@@ -456,6 +459,61 @@ def _surveiller(session: Session, attestable: bool = False) -> None:
         raise EchecOrdre(f"mouvement interrompu en cours de route : {refus}") from None
 
 
+def _garder_le_pas(session: Session, ordre: Ordre) -> tuple[Ordre, dict[str, Any]]:
+    """SEC-13 : une avance ou un recul est projeté sur la carte de référence avant d'être émis.
+
+    Hors des zones et passages, ou dans une zone interdite (marge 0,30 m + incertitude annoncée) : le pas
+    est raccourci à la plus grande distance sûre, ou refusé. « Forcer ce pas » passe outre (la carte peut
+    être fausse, et il faut pouvoir sortir d'une zone) : c'est journalisé. Sans pose ou sans carte, aucun
+    garde-fou n'est possible : dit au bilan, sans bloquer. L'allure lente est choisie près d'un bord ou
+    quand la position n'est pas fiable, sauf vitesse choisie par l'opérateur."""
+    if ordre.nom not in ("avancer", "reculer") or ordre.valeur is None:
+        return ordre, {}
+    pose, precision = session.etat.pose, session.etat.precision_m
+    sens = 1.0 if ordre.nom == "avancer" else -1.0
+    jugement = garde_carte.juger_pas(
+        session.carte_reference, None if pose is None else (pose.est_m, pose.nord_m),
+        None if pose is None else pose.cap_deg, sens * ordre.valeur, precision,
+    )
+    infos: dict[str, Any] = {"garde_carte": jugement.motif}
+    if jugement.decision in (garde_carte.RACCOURCI, garde_carte.REFUS):
+        if ordre.force:
+            session.journal.ecrire("garde-carte-forcee", strict=True, ordre=str(ordre), motif=jugement.motif)
+            infos["garde_carte"] = f"pas forcé par l'opérateur malgré : {jugement.motif}"
+        elif jugement.bloque:
+            raise RefusSecurite(f"{jugement.motif} — « Forcer ce pas » passe outre (SEC-13)")
+        else:
+            ordre = dataclasses.replace(ordre, valeur=jugement.distance_m)
+    vitesse, annonce = garde_carte.allure(ordre.vitesse, jugement, precision)
+    if vitesse is not None:
+        # SEC-02 borne la durée d'un ordre : un pas trop long pour l'allure lente garde sa longueur (la suite d'une
+        # séquence en dépend) et prend la plus faible vitesse qui tient dans cette durée — c'est annoncé.
+        plancher = math.ceil(ordre.valeur / (securite.DUREE_MAX_S * session.cal.facteur_distance) * 100) / 100
+        if plancher > vitesse:
+            vitesse = min(plancher, securite.VITESSE_LINEAIRE_M_S)
+            annonce = f"{annonce} — {vitesse:g} m/s pour ce pas de {ordre.valeur:g} m ({securite.DUREE_MAX_S:g} s au plus par ordre)"
+        ordre = dataclasses.replace(ordre, vitesse=vitesse)
+        infos["allure"] = annonce
+    return ordre, infos
+
+
+def _surveiller_choc(session: Session, chocs_au_depart: frozenset[tuple[str, int]], suivi: Any) -> None:
+    """SEC-14 : un indice de choc apparu pendant le mouvement arrête tout (l'arrêt suit, garanti par SEC-03).
+
+    (a) code d'erreur ou d'avertissement de choc, pare-chocs, ultrasons, soulèvement ou patinage, absent au
+    départ ; (b) statut passé à erreur ou arrêt d'urgence : déjà couvert par `_surveiller` (SEC-01) ;
+    (c) pose qui n'avance plus alors que les consignes continuent."""
+    nouveaux = garde_carte.codes_de_choc(session.etat.donnees) - chocs_au_depart
+    if nouveaux:
+        codes = ", ".join(f"{nature} {code}" for nature, code in sorted(nouveaux))
+        raise EchecOrdre(f"indice de choc annoncé par le robot ({codes}) : arrêt (SEC-14)")
+    pose = session.etat.pose
+    if suivi is not None and pose is not None and session.etat.recu_pose is not None:
+        suivi.noter(session.etat.recu_pose, pose.est_m, pose.nord_m)
+        if suivi.bloque(session.horloge()):
+            raise EchecOrdre("obstacle ou patinage : arrêt — la position n'avance plus (SEC-14)")
+
+
 # --- exécution ------------------------------------------------------------------
 
 
@@ -463,6 +521,11 @@ async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
     consigne = consigne_de(ordre, session.cal)  # SEC-02
     avant = await _exiger_lames_arret(session, attestable=True)  # SEC-01, SEC-01b
     precision_avant = session.etat.precision_m
+    ordre, garde_fou = _garder_le_pas(session, ordre)  # SEC-13 : pas raccourci, refusé, ou forcé
+    if garde_fou:
+        consigne = consigne_de(ordre, session.cal)  # SEC-02, sur le pas retenu
+    chocs_au_depart = garde_carte.codes_de_choc(session.etat.donnees)
+    suivi = None
     # SEC-01b : tout ordre émis pendant qu'une attestation est active le dit, au journal et au bilan.
     sous_attestation: dict[str, Any] = {}
     if _attestee(session):
@@ -471,12 +534,14 @@ async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
     session.journal.ecrire(  # SEC-06 : sans trace possible, pas d'ordre
         "ordre-emis", strict=True, ordre=str(ordre), sujet=session.sujet,
         trame=trame.description(), duree_s=round(consigne.duree, 2), cadence_hz=securite.CADENCE_HZ,
-        **sous_attestation,
+        **sous_attestation, **garde_fou,
     )
     periode = 1.0 / securite.CADENCE_HZ
     emissions = 0
     with _Garde(session, en_arret=False) as garde:
         debut = session.horloge()
+        if consigne.lineaire:
+            suivi = garde_carte.SuiviDeProgression(consigne.lineaire, debut)
         try:
             # SEC-03 : consigne republiée à cadence fixe ; toute publication manquée
             # ou liaison tombée lève (homme mort) et passe par l'arrêt ci-dessous.
@@ -485,6 +550,7 @@ async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
             maximum = math.ceil(round(consigne.duree * securite.CADENCE_HZ, 6))
             while emissions < maximum and consigne.duree - (session.horloge() - debut) > 0.001:
                 _surveiller(session, attestable=True)
+                _surveiller_choc(session, chocs_au_depart, suivi)  # SEC-14
                 await session.publier(trame, securite.DELAI_CONSIGNE_S)
                 emissions += 1
                 attente = min(debut + emissions * periode, debut + consigne.duree) - session.horloge()
@@ -499,7 +565,10 @@ async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
             finally:
                 session.journal.ecrire("ordre-termine", ordre=str(ordre), emissions=emissions)
     depart = {"precision_avant_m": None if precision_avant is None else round(precision_avant, 2)}
-    return {"mode": "réel", "ordre": str(ordre), "emissions": emissions} | depart | sous_attestation | await constater(
+    # SEC-14 (c) n'opère que si la pose arrive assez souvent (télécommande : ~0,6 s) : sinon c'est dit.
+    if suivi is not None:
+        garde_fou["surveillance_progression"] = "active" if suivi.active else "inactive : position reçue trop rarement"
+    return {"mode": "réel", "ordre": str(ordre), "emissions": emissions} | depart | sous_attestation | garde_fou | await constater(
         session, avant, instant_arret, consigne
     )
 

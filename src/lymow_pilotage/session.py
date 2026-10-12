@@ -62,6 +62,8 @@ class Session:
         self.tranche_carte: tuple[bytes, float] | None = None  # dernière réponse de carte, telle quelle
         self.sur_etat: Callable[[Any, float], None] | None = None  # observateur facultatif de chaque état reçu
         self.arret_en_cours = False
+        # SEC-13 : carte de référence posée par l'appelant (page ou commande) ; absente, pas de garde-fou carte.
+        self.carte_reference: Any = None
         # SEC-01b : posée par l'appelant (page ou commande), jamais par la session elle-même.
         self.attestation: Attestation | None = None
         self._differes: list[tuple[str, dict[str, Any]]] = []

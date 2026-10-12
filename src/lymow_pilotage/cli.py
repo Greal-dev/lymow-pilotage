@@ -19,7 +19,7 @@ from typing import Any
 
 import aiohttp
 
-from . import auth, calibrage, capture, carte, compte, conduite, config, journal, liaison, mouvement, protocole, rappel, retouche, securite
+from . import auth, calibrage, capture, carte, compte, conduite, config, journal, liaison, mouvement, protocole, rappel, reference, retouche, securite
 from .conduite import CODE_ARRET_NON_CONFIRME, CODE_REFUS
 from .journal import Journal, masquer
 from .mouvement import ErreurSaisie, Ordre
@@ -115,6 +115,11 @@ def construire_analyseur() -> argparse.ArgumentParser:
     for nom, aide, unite, unite_vitesse, plafond in mouvements:
         fils_mouvement = ajouter(nom, f"{aide} : <{unite}> ou --duree S")
         fils_mouvement.add_argument("valeur", type=nombre, nargs="?", default=None, metavar=unite)
+        if nom != "tourner":
+            fils_mouvement.add_argument(
+                "--forcer", action="store_true",
+                help="passer outre le garde-fou carte (SEC-13) pour ce pas : la carte peut être fausse ; journalisé",
+            )
         fils_mouvement.add_argument(
             "--vitesse", type=nombre, default=None, metavar="V",
             help=f"vitesse en {unite_vitesse}, de 0.05 à {plafond:g} (défaut : {plafond:g})"
@@ -247,7 +252,7 @@ def _ordres(args: argparse.Namespace) -> list[Ordre]:
     lire = lambda nom: getattr(args, nom, None)  # noqa: E731
     if args.commande == "reprendre" and lire("position_imprecise_acceptee"):
         return [Ordre(mouvement.REPRISE_FORCEE)]  # SEC-12 : garde levée explicitement
-    return [Ordre(args.commande, lire("valeur"), lire("vitesse"), lire("duree"))]
+    return [Ordre(args.commande, lire("valeur"), lire("vitesse"), lire("duree"), bool(lire("forcer")))]
 
 
 def _sans_echec(fonction: Any) -> Any:
@@ -273,6 +278,8 @@ async def _emettre(ordres: list[Ordre], ctx: Contexte, attestee: bool = False) -
     try:
         async with liaison.ouvrir_session(ctx.journal, ctx.cal, _AUTORISEES_ORDRES, brut=brut) as session:
             en_arret[0] = lambda: session.arret_en_cours
+            lue = None if ctx.dossier is None else reference.charger(ctx.dossier, session.appareil)
+            session.carte_reference = None if lue is None else lue[0]  # SEC-13
             if not attestee:
                 return await conduite.emettre_ordres(session, ordres, ctx.journal)
             # SEC-01b : attestation de cette invocation seulement ; elle meurt avec la commande.

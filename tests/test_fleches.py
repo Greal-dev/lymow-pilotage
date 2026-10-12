@@ -150,7 +150,7 @@ def test_direct_emet_chaque_fleche_par_le_chemin_des_ordres_et_enchaine_la_file(
             assert statut == 202 and corps["jeton"] != jeton
             statut, corps, _recus = await fleche(http, serveur, corps["jeton"], "gauche", 15)  # pendant le mouvement
             assert statut == 202 and corps["file"] == ["tourner 15"]
-            assert serveur.instantane()["direct"]["file"] == [{"nom": "tourner", "valeur": 15.0, "vitesse": None, "duree": None}]
+            assert serveur.instantane()["direct"]["file"] == [{"nom": "tourner", "valeur": 15.0, "vitesse": None, "duree": None, "force": False}]
             await attendre(lambda: not serveur.occupe, delai=8.0)
             direct = serveur.instantane()["direct"]
             assert direct["arme"] is True and direct["file"] == []  # toujours armé après deux pas réussis
@@ -259,6 +259,7 @@ def test_page_du_pave_etat_complet_et_garde_fous_visibles(tmp_path, monkeypatch)
     assert executer(scenario()) == {
         "distances_m": [0.25, 0.5, 1.0, 2.0], "angles_deg": [15.0, 45.0, 90.0],
         "distance_defaut_m": 1.0, "angle_defaut_deg": 45.0, "file_max": 5, "armement_s": 60.0,
+        "allures": {"auto": None, "lente": 0.10, "normale": 0.25},
     }
     page = (ui.STATIQUE / "index.html").read_text(encoding="utf-8")
     script = (ui.STATIQUE / "pave.js").read_text(encoding="utf-8")

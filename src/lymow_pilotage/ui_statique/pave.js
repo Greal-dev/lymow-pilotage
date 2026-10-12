@@ -22,6 +22,7 @@
   var ordresDuRobot = null;
   var actives = false; // LA bascule : boutons sur la caméra et clavier, ensemble
   var modeSimulation = false;
+  var allures = { auto: null, lente: 0.10, normale: 0.25 };
   var Ordres = window.LymowOrdres;
   var prise = null; // « Prendre la main » en cours
   var mainPrise = false;
@@ -44,7 +45,8 @@
   }
 
   function etapeDe(direction) {
-    return Fleches.ordreDe(direction, Number($("pave-distance").value), Number($("pave-angle").value));
+    return Fleches.ordreDe(direction, Number($("pave-distance").value), Number($("pave-angle").value),
+      allures[$("pave-allure").value], forcerCePas(direction));
   }
 
   // --- miniature : trajet cumulé, étapes faites puis étapes à venir --------------
@@ -232,10 +234,21 @@
 
   // --- actions -------------------------------------------------------------------
 
+  /* « Forcer ce pas » : une confirmation, pour UN pas d'avance ou de recul ; la case se décoche aussitôt. */
+  function forcerCePas(direction) {
+    if ((direction !== "haut" && direction !== "bas") || !$("pave-forcer").checked) { return false; }
+    $("pave-forcer").checked = false;
+    return window.confirm("Forcer ce pas ? Le garde-fou carte ne le raccourcira pas et ne le refusera pas, même s'il sort "
+      + "de la zone ou entre dans une zone interdite. À faire robot à vue.");
+  }
+
   async function flecheDirecte(direction) {
-    var pas = direction === "haut" || direction === "bas" ? Number($("pave-distance").value) : Number($("pave-angle").value);
+    var lineaire = direction === "haut" || direction === "bas";
+    var pas = lineaire ? Number($("pave-distance").value) : Number($("pave-angle").value);
+    var demande = { jeton: jeton, direction: direction, pas: pas };
+    if (lineaire) { demande.allure = $("pave-allure").value; demande.forcer = forcerCePas(direction); }
     try {
-      var reponse = await page.appeler("/api/direct/fleche", { jeton: jeton, direction: direction, pas: pas });
+      var reponse = await page.appeler("/api/direct/fleche", demande);
       jeton = reponse.jeton;
       signaler(reponse.simulation ? "Simulation : étape parcourue, rien n'est émis." : "");
     } catch (erreur) {
@@ -309,6 +322,7 @@
       }
       remplir($("pave-distance"), config.distances_m, config.distance_defaut_m, " m");
       remplir($("pave-angle"), config.angles_deg, config.angle_defaut_deg, "°");
+      if (config.allures) { allures = config.allures; }
       rafraichir();
     },
     appliquer: function (image) {
@@ -316,6 +330,7 @@
       ordresDuRobot = image.ordres || null;
       modeSimulation = image.mode === "simulation";
       suspendue = Boolean(image.liaison_suspendue);
+      $("bord-zone").textContent = image.ordres && image.ordres.bord ? image.ordres.bord.texte : "";  // SEC-13
       connecte = Boolean(image.connecte);
       occupeCourant = Boolean(image.occupe);
       if (suspendue) { mainPrise = false; }

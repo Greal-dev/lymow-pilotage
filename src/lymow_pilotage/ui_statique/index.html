@@ -56,6 +56,11 @@
           <p class="pas">
             <label title="Pas des flèches ↑ et ↓">Pas ↑↓ <select id="pave-distance"></select></label>
             <label title="Pas des flèches ← et →">Pas ←→ <select id="pave-angle"></select></label>
+            <label title="Allure des flèches ↑ et ↓. Auto : lente près d'un bord de zone ou quand la position n'est pas fiable, normale sinon.">Allure <select id="pave-allure">
+              <option value="auto" selected>auto</option><option value="lente">lente 0,10 m/s</option><option value="normale">normale 0,25 m/s</option>
+            </select></label>
+            <label title="Lève le garde-fou carte pour le PROCHAIN pas seulement : la carte peut être fausse, et il faut pouvoir sortir d'une zone. Journalisé."><input id="pave-forcer" type="checkbox"> Forcer ce pas</label>
+            <p id="bord-zone" class="note" role="status"></p>
           </p>
           <p class="actions-robot">
             <button id="pause-bouton" type="button" data-tache="pause" title="Met la tâche (ou le retour à la base) en pause : se prévisualise, puis « Émettre ».">Pause</button>

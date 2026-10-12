@@ -158,7 +158,7 @@
     // Aucun compte connecté (hors démonstration) : la section « Compte » s'ouvre d'elle-même.
     if (window.LymowVolets && image.compte && !demonstration) { window.LymowVolets.compte(image.compte.connecte); }
     afficherCompte(image.compte);
-    if (window.LymowCarte) { window.LymowCarte.robot(image.etat); }
+    if (window.LymowCarte) { window.LymowCarte.robot(image.etat, image.ordres && image.ordres.bord ? image.ordres.bord.texte : ""); }
     if (window.LymowPave) { window.LymowPave.appliquer(image); }
     var bloc = $("bloc-etat");
     var liste = $("etat-liste");

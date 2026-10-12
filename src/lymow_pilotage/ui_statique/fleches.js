@@ -13,9 +13,15 @@
   var SYMBOLES = { haut: "↑", bas: "↓", gauche: "←", droite: "→" };
 
   /* Flèche et pas → l'étape, sous la forme des ordres de la page ; null si la flèche est inconnue. */
-  function ordreDe(direction, distance, angle) {
-    if (direction === "haut") { return { nom: "avancer", valeur: distance, vitesse: null, duree: null }; }
-    if (direction === "bas") { return { nom: "reculer", valeur: distance, vitesse: null, duree: null }; }
+  /* `vitesse` : allure choisie (null = auto, l'outil choisit) ; `force` : garde-fou carte levé pour ce pas. */
+  function ordreDe(direction, distance, angle, vitesse, force) {
+    var pas = function (nom) {
+      var etape = { nom: nom, valeur: distance, vitesse: vitesse === undefined ? null : vitesse, duree: null };
+      if (force) { etape.force = true; }
+      return etape;
+    };
+    if (direction === "haut") { return pas("avancer"); }
+    if (direction === "bas") { return pas("reculer"); }
     if (direction === "gauche") { return { nom: "tourner", valeur: angle, vitesse: null, duree: null }; }
     if (direction === "droite") { return { nom: "tourner", valeur: -angle, vitesse: null, duree: null }; }
     return null;

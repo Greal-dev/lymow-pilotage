@@ -438,10 +438,11 @@
   window.addEventListener("resize", dessiner);
 
   window.LymowCarte = {
-    robot: function (etat) {
+    robot: function (etat, bord) {
       etatRobot = etat;
       placerLeRobot();
-      $("carte-rtk").textContent = etat && etat.localisation_texte ? "— " + etat.localisation_texte : "";
+      // SEC-13 : la distance au bord de zone dans l'axe du robot est dite sur la carte.
+      $("carte-rtk").textContent = (etat && etat.localisation_texte ? "— " + etat.localisation_texte : "") + (bord ? " — " + bord : "");
       $("carte-robot-cadrer").disabled = !robot;
       $("carte-robot-cadrer").title = robot ? "" : "position du robot inconnue";
       // « Suivre le robot » : la vue reste centrée sur lui, sans changer le zoom.

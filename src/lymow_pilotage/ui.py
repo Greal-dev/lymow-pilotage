@@ -28,7 +28,7 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
-from . import auth, bon_signal, capture, coffre, compte, conduite, demo, fleches, geometrie, liaison, reference, releve, mouvement, rappel, retouche, securite
+from . import auth, bon_signal, capture, garde_carte, coffre, compte, conduite, demo, fleches, geometrie, liaison, reference, releve, mouvement, rappel, retouche, securite
 from . import carte as cartes
 from .config import Calibration
 from .journal import Journal, assainir, declarer_secret, masquer
@@ -140,7 +140,10 @@ def ordres_depuis(corps: Any) -> list[Ordre]:
         nom = entree.get("nom") if isinstance(entree, dict) else None
         if nom not in NOMS_ORDRES:
             raise ErreurSaisie("ordre inconnu")
-        if set(entree) - {"nom", "valeur", "vitesse", "duree"}:
+        force = entree.get("force", False)
+        if not isinstance(force, bool) or (force and nom not in ("avancer", "reculer")):
+            raise ErreurSaisie("« forcer ce pas » ne vaut que pour avancer ou reculer")
+        if set(entree) - {"nom", "valeur", "vitesse", "duree", "force"}:
             raise ErreurSaisie("champ inattendu dans un ordre")
         mobile = nom in mouvement.MOUVEMENTS or nom == mouvement.ESSAI
         if not mobile and (entree.get("vitesse") is not None or entree.get("duree") is not None):
@@ -150,7 +153,7 @@ def ordres_depuis(corps: Any) -> list[Ordre]:
         ordres.append(
             Ordre(
                 nom, _nombre(entree.get("valeur"), entier=nom == "plateau"),
-                _nombre(entree.get("vitesse")), _nombre(entree.get("duree")),
+                _nombre(entree.get("vitesse")), _nombre(entree.get("duree")), force,
             )
         )
     if len(ordres) > 1 and any(ordre.nom not in mouvement.ETAPES_SEQUENCE for ordre in ordres):
@@ -177,6 +180,7 @@ class ServeurUI:
         self.empreinte = empreinte_du_code()
         self.demarre = datetime.now().strftime("%H:%M")
         self._liste: tuple[bytes, list[dict[str, Any]]] = (b"", [])
+        self._bord: tuple[Any, dict[str, Any]] = (None, {})  # SEC-13 : distance au bord, recalculée si pose ou carte change
         # Carte de référence (dernière carte complète, sur disque) : (appareil, carte, métadonnées), relue au besoin.
         self._reference: tuple[str, cartes.Carte, dict[str, Any]] | None = None
         self.carte_note: str | None = None
@@ -422,10 +426,25 @@ class ServeurUI:
 
     def _poser_origine(self, session: Any) -> None:
         """L'origine de la carte connue (mémoire ou référence) permet de comparer position brute et pose."""
-        if session.etat.origine is None:
-            carte, _meta = self._carte_affichee()
-            if carte is not None:
-                session.etat.origine = cartes.origine(carte)
+        carte, _meta = self._carte_affichee()
+        # SEC-13 : le garde-fou carte juge sur la carte complète connue (mémoire, sinon référence du disque).
+        session.carte_reference = carte if carte is not None and carte.complete else None
+        if session.etat.origine is None and carte is not None:
+            session.etat.origine = cartes.origine(carte)
+
+    def _bord_de_zone(self, session: Any) -> dict[str, Any]:
+        """Distance au bord de zone dans l'axe du robot, devant et derrière ; « inconnue » dite clairement."""
+        self._poser_origine(session)
+        pose, carte = session.etat.pose, session.carte_reference
+        cle = (None if carte is None else carte.octets, pose)
+        if self._bord[0] != cle:
+            point = None if pose is None else (pose.est_m, pose.nord_m)
+            cap = None if pose is None else pose.cap_deg
+            devant, derriere = (garde_carte.bord_devant(carte, point, cap, sens) for sens in (1.0, -1.0))
+            inconnue = garde_carte.juger_pas(carte, point, cap, 1.0, session.etat.precision_m).motif if devant is None else None
+            texte = inconnue or f"bord de zone devant : {garde_carte.metres(devant)} ; derrière : {garde_carte.metres(derriere)}"
+            self._bord = (cle, {"devant_m": devant, "derriere_m": derriere, "texte": texte})
+        return self._bord[1]
 
     # --- enregistrement de diagnostic pendant un ordre réel --------------------
 
@@ -620,6 +639,7 @@ class ServeurUI:
                 "libelles": conduite.LIBELLES,
                 "fleches": {
                     "distances_m": list(fleches.DISTANCES_M), "angles_deg": list(fleches.ANGLES_DEG),
+                    "allures": fleches.ALLURES,
                     "distance_defaut_m": fleches.DISTANCE_DEFAUT_M, "angle_defaut_deg": fleches.ANGLE_DEFAUT_DEG,
                     "file_max": fleches.FILE_MAX, "armement_s": fleches.DUREE_ARMEMENT_S,
                 },
@@ -650,6 +670,7 @@ class ServeurUI:
             # Après un dégagement, la reprise reste proposée clairement (les lames peuvent redémarrer).
             "reprise_possible": etat.statut == socle.WORK_STATUS_PAUSE,
             "telecommande": etat.statut == socle.WORK_STATUS_REMOTE_CONTROL,
+            "bord": self._bord_de_zone(session),  # SEC-13
             # SEC-12 : dit AVANT de reprendre ou de renvoyer à la base ; rien si la position est fiable.
             "avertissement_position": securite.avertissement_position(etat.precision_m, etat.ecart_pour_la_garde),
             # Signal revenu mais position calculée douteuse : le recalage assisté est proposé.
@@ -802,6 +823,7 @@ class ServeurUI:
         return web.json_response({"accepte": True}, status=202)
 
     def _lancer(self, ordres: list[Ordre], objectif_signal: bool = False) -> None:
+        self._poser_origine(self.session)
         self._lancer_travail(
             " ; ".join(str(ordre) for ordre in ordres) + (" (vers le bon signal)" if objectif_signal else ""),
             lambda: conduite.emettre_ordres(self.session, ordres, self.journal, objectif_signal),
@@ -958,9 +980,9 @@ class ServeurUI:
             self._desarmer(str(refus))
             return _refus(409, str(refus))
         try:
-            if set(corps) - {"jeton", "direction", "pas"}:
-                raise ErreurSaisie("champ inattendu : le pilotage direct n'accepte qu'une flèche et son pas")
-            ordre = fleches.ordre(corps.get("direction"), corps.get("pas"))
+            if set(corps) - {"jeton", "direction", "pas", "allure", "forcer"}:
+                raise ErreurSaisie("champ inattendu : le pilotage direct n'accepte qu'une flèche, son pas et son allure")
+            ordre = fleches.ordre(corps.get("direction"), corps.get("pas"), corps.get("allure", "auto"), corps.get("forcer", False))
         except ErreurSaisie as erreur:
             self._desarmer(f"demande refusée ({erreur})")
             return _refus(400, str(erreur))
@@ -1005,6 +1027,7 @@ class ServeurUI:
             while self.direct.file:
                 ordre = self.direct.file.pop(0)
                 self.version += 1
+                self._poser_origine(self.session)
                 bilan, code = await conduite.emettre_ordres(self.session, [ordre], self.journal)
                 rapport = bilan["etapes"][0] if bilan["etapes"] else {"ordre": str(ordre), "echec": bilan.get("motif")}
                 etapes.append(rapport)

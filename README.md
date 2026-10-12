@@ -351,6 +351,30 @@ n'émettre qu'en zone dégagée : pratique décrite par la communauté, effet no
 garanti, jamais essayé sur ce robot. Sinon : retour à la base, ou
 redémarrage du robot.
 
+## Obstacles : ce que l'outil protège, ce qu'il ne voit pas
+
+On ignore si le robot garde sa propre détection (ultrasons, vision,
+pare-chocs) en pilotage manuel : rien dans les sources ne le dit, et les
+550 trames reçues pendant les pilotages réels du 2026-10-12 ne portent
+aucun code d'erreur ni d'avertissement, ni aucun champ de perception —
+mais aucun obstacle n'a été approché ce jour-là. L'outil se protège donc
+avec ce qu'il voit :
+
+- **la carte** (SEC-13) : il ne laisse pas un pas sortir des zones connues ;
+- **les indices de choc** (SEC-14) : il s'arrête si le robot annonce un
+  choc ou cesse d'avancer — donc APRÈS le contact, pas avant ;
+- **l'allure** : lente près d'un bord ou quand la position est douteuse.
+
+Il **ne voit pas** : un obstacle absent de la carte (mur non cartographié,
+mobilier, outil laissé au sol), une personne, un animal. Le pilotage se
+fait robot à vue ou caméra ouverte, main sur STOP.
+
+**Essai conseillé, robot à vue** : en pilotage manuel, allure lente, pas de
+0,25 m, approcher un carton vide posé sur la pelouse. Si le robot s'arrête
+de lui-même avant ou au contact, sa détection reste active en pilotage
+manuel ; noter alors le code affiché. S'il pousse le carton, elle ne l'est
+pas : seuls les garde-fous ci-dessus protègent.
+
 ## Retour vers le bon signal
 
 But : quand le robot a perdu sa position précise, le ramener là où le signal
@@ -538,6 +562,38 @@ s'exécute tout seul.**
   horizontale, précision verticale, qualité, état du nœud de localisation ;
   ni l'âge des corrections RTK ni l'état du lien radio de la base n'y
   figurent.
+- **SEC-13 Garde-fou carte** (avance et recul réels). Avant d'émettre, le
+  pas est projeté depuis la pose et le cap connus sur la carte de référence.
+  Le robot doit rester dans les zones de tonte et les passages, hors zones
+  interdites, en gardant devant lui une marge de 0,30 m plus l'incertitude
+  de position annoncée. Sinon le pas est **raccourci** à la plus grande
+  distance sûre, et c'est annoncé (« pas réduit à 0,55 m : bord de zone
+  devant à 0,85 m ») ; s'il reste moins de 0,25 m, il est **refusé**.
+  « Forcer ce pas » (case de la page, une confirmation, un seul pas) ou
+  `lymow avancer 1 --forcer` passe outre — la carte peut être fausse, et il
+  faut pouvoir sortir d'une zone — et le journal le note
+  (`garde-carte-forcee`). Sans pose, sans carte de référence ou robot hors
+  des zones : aucun garde-fou possible, dit en clair (« distance au bord
+  inconnue »), sans blocage. La page affiche « bord de zone devant : 2,4 m ».
+  Limites : seule la distance dans l'axe du pas est jugée (un bord latéral
+  proche ne l'est pas) ; la pose utilisée est la dernière reçue ; la
+  rotation n'est pas concernée.
+- **SEC-14 Arrêt sur indice de choc** pendant un mouvement : arrêt immédiat
+  si un code d'erreur ou d'avertissement de choc, pare-chocs, ultrasons,
+  soulèvement, blocage ou patinage **apparaît** (un code déjà présent au
+  départ n'empêche pas de dégager le robot) ; si le statut passe à erreur
+  ou arrêt d'urgence (SEC-01) ; ou si la position n'avance plus alors que
+  les consignes continuent (moins de 20 % de l'attendu sur 1,5 s, après
+  1 s d'élan) : « obstacle ou patinage : arrêt ». Ce dernier contrôle
+  n'opère que si la position arrive au moins chaque seconde ; sinon le
+  bilan dit « surveillance de progression inactive ».
+- **Allure.** Liste « Allure » à côté des pas : auto, lente (0,10 m/s),
+  normale (0,25 m/s). En auto, l'allure lente est prise quand l'arrivée est
+  à moins de 1 m d'un bord de zone ou quand la position est dégradée ou
+  perdue ; c'est annoncé au bilan. Un ordre dure 9 s au plus (SEC-02) : un
+  pas trop long pour 0,10 m/s garde sa longueur et prend la plus faible
+  vitesse qui tient (0,12 m/s pour 1 m, 0,23 m/s pour 2 m). Pour rester
+  vraiment lent, choisir un pas de 0,5 m.
 - **Retrouver le signal.** Après chaque pas, le retour donne la précision et
   sa tendance (« position ±0,84 m ↘ en amélioration »). La précision est
   relevée par position dans `releve-precision.jsonl` (dossier de données,
@@ -583,7 +639,8 @@ Secrets : seul le jeton de rafraîchissement est conservé, dans le Gestionnaire
 d'identification Windows (service `lymow-pilotage`), avec la région,
 l'identifiant d'appareil et la méthode de connexion. Rien dans un fichier.
 
-En lecture, trois messages « requête pure » peuvent partir, et eux seuls,
+En lecture, ces messages « requête pure » peuvent partir, et eux seuls
+(avec les deux demandes de diagnostic RTK, voir « Localisation »),
 contrôlés sur la structure exacte de leurs octets : le battement de présence
 (`appConnect = 2` + identifiant de session), la demande de configuration
 (`version` + champ 9 `{10: 1}`) et la demande de carte entière (`version`,
