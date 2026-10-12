@@ -155,6 +155,7 @@
       $("erreur-annuler").disabled = occupe;
       $("erreur-suite").textContent = erreur.suite;
     }
+    $("recalage-mention").textContent = image.recalage && image.recalage.actif ? image.recalage.texte : "";
     liaisonSuspendue = Boolean(image.liaison_suspendue);
     $("diagnostic-rtk").checked = Boolean(image.diagnostic_rtk);
     $("diagnostic-texte").textContent = image.diagnostic_texte || "";
@@ -172,6 +173,7 @@
     if (window.LymowCarte) {
       window.LymowCarte.robot(image.etat, image.ordres && image.ordres.bord ? image.ordres.bord.texte : "");
       window.LymowCarte.connue(Boolean(image.carte_connue));
+      window.LymowCarte.recalage(image.recalage);
     }
     if (window.LymowPave) { window.LymowPave.appliquer(image); }
     var bloc = $("bloc-etat");

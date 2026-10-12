@@ -121,7 +121,7 @@
     var rayon = etat && typeof etat.precision_m === "number" ? etat.precision_m : null;
     if (etat && typeof etat.position_est_m === "number" && typeof etat.position_nord_m === "number") {
       // Position ancienne : le marqueur reste où il était, et c'est dit — le robot ne la transmet plus.
-      var age = typeof etat.age_pose_s === "number" ? etat.age_pose_s : 0;
+      var age = typeof etat.age_position_s === "number" ? etat.age_position_s : 0;
       var note = age > 5
         ? "position reçue il y a " + (age < 90 ? Math.round(age) + " s" : Math.round(age / 60) + " min") + " : le robot ne la transmet plus, le marqueur n'est plus à jour"
         : "";
@@ -182,6 +182,17 @@
   function alerteBord(bord, pas) {
     if (!bord || typeof pas !== "number") { return false; }
     return (typeof bord.devant_m === "number" && bord.devant_m < pas) || (typeof bord.derriere_m === "number" && bord.derriere_m < pas);
+  }
+
+  /* Recalage d'affichage : ce que la page en dit, et ce qu'elle propose. */
+  function etatDuRecalage(recalage, attenteDuClic) {
+    var r = recalage || {};
+    return {
+      texte: attenteDuClic ? "Cliquez sur la carte l'endroit où se trouve réellement le robot (Échap : STOP, comme toujours)." : (r.texte || ""),
+      annuler: Boolean(r.actif),
+      mesure: r.mesure_station || "",
+      utiliserLaMesure: Boolean(r.mesure_station) && !r.actif
+    };
   }
 
   function enErreur(ordres) {
@@ -271,6 +282,7 @@
     clicRendreAccepte: clicRendreAccepte,
     diagnosticErreur: diagnosticErreur,
     alerteBord: alerteBord,
+    etatDuRecalage: etatDuRecalage,
     texteDeLaMain: texteDeLaMain,
     annoncePrendreLaMain: annoncePrendreLaMain,
     suitePrendreLaMain: suitePrendreLaMain,

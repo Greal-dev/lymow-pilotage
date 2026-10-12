@@ -17,6 +17,8 @@
   var robot = null;
   var etatRobot = null;
   var chargement = false;
+  var attenteIci = false; // « Le robot est ici » : le prochain clic sur la carte indique l'endroit réel
+  var dernierRecalage = null;
   var cadreeVisible = false;
   var dejaCadree = false;
   var CADRE_ROBOT_M = 40; // cadrage initial : le robot et une quarantaine de mètres autour
@@ -431,6 +433,7 @@
   dessin.addEventListener("pointerup", function (evenement) {
     var etait = glisse;
     glisse = null;
+    if (etait && !etait.bouge && attenteIci) { indiquerLeRobot(versCarte(evenement)); return; }
     if (etait && !etait.bouge) { choisirSommet(versCarte(evenement)); } // un clic sans glisser, sur un sommet
   });
   dessin.addEventListener("dblclick", function (evenement) {
@@ -439,7 +442,30 @@
   });
   window.addEventListener("resize", dessiner);
 
+  // Recalage d'affichage : côté outil seulement, rien n'est envoyé au robot.
+  function afficherRecalage() {
+    var dit = window.LymowOrdres.etatDuRecalage(dernierRecalage, attenteIci);
+    $("recalage-texte").textContent = dit.texte;
+    $("recalage-mesure").textContent = dit.mesure;
+    $("recalage-annuler").hidden = !dit.annuler;
+    $("recalage-station").hidden = !dit.utiliserLaMesure;
+    $("recalage-ici").textContent = attenteIci ? "Annuler le pointage" : "Le robot est ici";
+    dessin.classList.toggle("attente-clic", attenteIci);
+  }
+  function recaler(route, corps) {
+    page.appeler(route, corps).then(function (reponse) { dernierRecalage = reponse; afficherRecalage(); })
+      .catch(function (erreur) { $("recalage-texte").textContent = "Recalage refusé : " + erreur.message; });
+  }
+  function indiquerLeRobot(position) {
+    attenteIci = false;
+    recaler("/api/recalage", { est: position.x, nord: -position.y });  // l'axe vertical de l'écran est inversé
+  }
+  $("recalage-ici").addEventListener("click", function () { attenteIci = !attenteIci; afficherRecalage(); });
+  $("recalage-annuler").addEventListener("click", function () { recaler("/api/recalage/annuler", {}); });
+  $("recalage-station").addEventListener("click", function () { recaler("/api/recalage/station", {}); });
+
   window.LymowCarte = {
+    recalage: function (recalage) { dernierRecalage = recalage; afficherRecalage(); },
     /* Le serveur connaît une carte que la page n'a pas encore (demandée d'office à l'ouverture) : la charger. */
     connue: function (oui) { if (oui && !carte) { charger(); } },
     /* L'onglet « Carte » vient d'être affiché : premier cadrage à sa taille réelle, puis dessin. */

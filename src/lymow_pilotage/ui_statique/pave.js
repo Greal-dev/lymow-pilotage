@@ -361,6 +361,7 @@
       if (!image.arret_aux_bords) { $("pave-forcer").checked = false; }
       // Robot en erreur : dit AVANT le pas ; pas sans déplacement : dit, la main est gardée.
       $("pave-avertissement").textContent = [
+        image.ordres && image.ordres.liaison_lente ? "Liaison lente : en attente d'une nouvelle trame du robot… (vos appuis restent en file ; STOP reste immédiat)" : "",
         image.ordres && image.ordres.avertissement_pas,
         image.ordres && image.ordres.immobiles ? image.ordres.immobiles + " pas de suite sans déplacement constaté (désarmement au troisième)." : ""
       ].filter(Boolean).join(" ");

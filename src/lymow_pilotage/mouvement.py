@@ -19,7 +19,7 @@ from collections.abc import Coroutine
 from dataclasses import dataclass
 from typing import Any
 
-from . import diagnostic, garde_carte, protocole, securite
+from . import diagnostic, garde_carte, protocole, recalage, securite
 from .config import Calibration
 from .etat import LIBELLES_STATUT, Pose
 from .securite import Consigne, RefusSecurite
@@ -460,6 +460,11 @@ def _surveiller(session: Session, attestable: bool = False) -> None:
         raise EchecOrdre(f"mouvement interrompu en cours de route : {refus}") from None
 
 
+def _sur_la_carte(session: Session, pose: Pose | None) -> tuple[float, float] | None:
+    """La pose annoncée, située sur la carte : avec le recalage d'affichage de l'opérateur s'il y en a un."""
+    return None if pose is None else recalage.appliquer((pose.est_m, pose.nord_m), session.decalage_carte)
+
+
 def _age_de_la_pose(session: Session) -> float | None:
     recue = session.etat.recu_pose
     return None if recue is None else session.horloge() - recue
@@ -480,7 +485,7 @@ def _garder_le_pas(session: Session, ordre: Ordre) -> tuple[Ordre, dict[str, Any
     pose, precision = session.etat.pose, session.etat.precision_m
     sens = 1.0 if ordre.nom == "avancer" else -1.0
     jugement = garde_carte.juger_pas(
-        session.carte_reference, None if pose is None else (pose.est_m, pose.nord_m),
+        session.carte_reference, _sur_la_carte(session, pose),
         None if pose is None else pose.cap_deg, sens * ordre.valeur, precision, _age_de_la_pose(session),
     )
     infos: dict[str, Any] = {"garde_carte": jugement.motif}
@@ -586,7 +591,7 @@ async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
     if "garde_carte" in garde_fou and not session.arret_aux_bords:  # la carte, après le pas aussi
         apres = session.etat.pose
         suite = garde_carte.juger_pas(
-            session.carte_reference, None if apres is None else (apres.est_m, apres.nord_m),
+            session.carte_reference, _sur_la_carte(session, apres),
             None if apres is None else apres.cap_deg, math.copysign(1.0, consigne.lineaire), session.etat.precision_m,
             _age_de_la_pose(session),
         )
