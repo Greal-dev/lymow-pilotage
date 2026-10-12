@@ -906,8 +906,8 @@ def test_sec07_sequence_interrompue_par_le_statut_propose_la_reprise(session, li
     assert bilan["reprise"] == {
         "etape": 2,
         "ordres": [
-            {"nom": "tourner", "valeur": 90.0, "vitesse": None, "duree": None, "force": False},
-            {"nom": "avancer", "valeur": None, "vitesse": 0.2, "duree": 2.0, "force": False},
+            {"nom": "tourner", "valeur": 90.0, "vitesse": None, "duree": None, "force": False, "angle": None},
+            {"nom": "avancer", "valeur": None, "vitesse": 0.2, "duree": 2.0, "force": False, "angle": None},
         ],
     }
     assert len(lien.consignes) == 40  # rien n'est parti après le changement de statut

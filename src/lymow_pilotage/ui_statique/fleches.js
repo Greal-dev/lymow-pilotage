@@ -10,7 +10,14 @@
   "use strict";
 
   var DIRECTIONS = { ArrowUp: "haut", ArrowDown: "bas", ArrowLeft: "gauche", ArrowRight: "droite" };
-  var SYMBOLES = { haut: "↑", bas: "↓", gauche: "←", droite: "→" };
+  var SYMBOLES = {
+    haut: "↑", bas: "↓", gauche: "←", droite: "→",
+    "haut-gauche": "↖", "haut-droite": "↗", "bas-gauche": "↙", "bas-droite": "↘"
+  };
+  /* Diagonales : avancer ou reculer en tournant (ordre « arc »). [signe des mètres, signe des degrés] — en
+   * marche arrière, comme une voiture : « bas-gauche » envoie l'arrière à gauche, le cap tourne donc à droite. */
+  var DIAGONALES = { "haut-gauche": [1, 1], "haut-droite": [1, -1], "bas-gauche": [-1, -1], "bas-droite": [-1, 1] };
+  var PAVE_NUMERIQUE = { Numpad7: "haut-gauche", Numpad9: "haut-droite", Numpad1: "bas-gauche", Numpad3: "bas-droite" };
 
   /* Flèche et pas → l'étape, sous la forme des ordres de la page ; null si la flèche est inconnue. */
   /* `vitesse` : allure choisie (null = auto, l'outil choisit) ; `force` : garde-fou carte levé pour ce pas. */
@@ -20,6 +27,12 @@
       if (force) { etape.force = true; }
       return etape;
     };
+    if (DIAGONALES[direction]) {
+      return {
+        nom: "arc", valeur: DIAGONALES[direction][0] * distance, angle: DIAGONALES[direction][1] * angle,
+        vitesse: vitesse === undefined ? null : vitesse, duree: null
+      };
+    }
     if (direction === "haut") { return pas("avancer"); }
     if (direction === "bas") { return pas("reculer"); }
     if (direction === "gauche") { return { nom: "tourner", valeur: angle, vitesse: null, duree: null }; }
@@ -36,6 +49,11 @@
     if (ordre.nom === "avancer") { return "haut"; }
     if (ordre.nom === "reculer") { return "bas"; }
     if (ordre.nom === "tourner") { return ordre.valeur < 0 ? "droite" : "gauche"; }
+    if (ordre.nom === "arc" && typeof ordre.angle === "number") {
+      var avant = ordre.valeur >= 0;
+      // En marche arrière, l'arrière part du côté opposé au sens de rotation du cap.
+      return (avant ? "haut-" : "bas-") + ((ordre.angle >= 0) === avant ? "gauche" : "droite");
+    }
     return null;
   }
 
@@ -44,6 +62,7 @@
     if (typeof ordre === "string") { return ordre; } // étape d'un bilan : déjà en clair (« reculer 2 »)
     var direction = directionDe(ordre);
     if (!direction || typeof ordre.valeur !== "number") { return ordre.nom; }
+    if (ordre.nom === "arc") { return SYMBOLES[direction] + " " + Math.abs(ordre.valeur) + " m / " + Math.abs(ordre.angle) + "°"; }
     return SYMBOLES[direction] + " " + Math.abs(ordre.valeur) + (ordre.nom === "tourner" ? "°" : " m");
   }
 
@@ -62,6 +81,21 @@
         y += sens * valeur * Math.sin(cap * Math.PI / 180);
         distance += Math.abs(valeur);
         if (vitesses && vitesses.lineaire) { duree += Math.abs(valeur) / vitesses.lineaire; }
+      } else if (valeur !== null && ordre.nom === "arc" && typeof ordre.angle === "number") {
+        // Arc de cercle : parcouru par petits morceaux, pour que la miniature le trace courbe.
+        var morceaux = 12, courbe = [];
+        for (var m = 0; m < morceaux; m += 1) {
+          cap += ordre.angle / morceaux / 2;
+          x += valeur / morceaux * Math.cos(cap * Math.PI / 180);
+          y += valeur / morceaux * Math.sin(cap * Math.PI / 180);
+          cap += ordre.angle / morceaux / 2;
+          if (m < morceaux - 1) { courbe.push({ x: x, y: y }); }
+        }
+        distance += Math.abs(valeur);
+        rotation += Math.abs(ordre.angle);
+        if (vitesses && vitesses.lineaire) { duree += Math.abs(valeur) / vitesses.lineaire; }
+        points.push({ x: x, y: y, cap: cap, courbe: courbe });
+        return;
       } else if (valeur !== null && ordre.nom === "tourner") {
         cap += valeur;
         rotation += Math.abs(valeur);
@@ -160,6 +194,38 @@
     return "stop";
   }
 
+  /* Deux flèches → la diagonale, ou rien si elles ne se combinent pas (haut + bas, gauche + droite). */
+  function diagonale(a, b) {
+    var vertical = a === "haut" || a === "bas" ? a : (b === "haut" || b === "bas" ? b : null);
+    var lateral = a === "gauche" || a === "droite" ? a : (b === "gauche" || b === "droite" ? b : null);
+    return vertical && lateral && a !== b ? vertical + "-" + lateral : null;
+  }
+
+  /* Combinaisons de flèches au clavier. Une flèche seule attend 120 ms avant de partir : si une seconde,
+   * combinable, arrive dans les 150 ms, c'est la diagonale qui part — jamais un pas droit d'abord. Une
+   * flèche pressée pendant qu'une autre est tenue donne aussi la diagonale. Rend le nouvel état, ce qu'il
+   * faut émettre, et le délai à armer (0 : aucun). */
+  var DELAI_FLECHE_SEULE_MS = 120, FENETRE_COMBINAISON_MS = 150;
+  function combiner(etat, e) {
+    var tenues = (etat.tenues || []).slice(), attente = etat.attente || null, depuis = etat.depuis || 0, emettre = [];
+    if (e.type === "relache") {
+      tenues = tenues.filter(function (d) { return d !== e.direction; });
+      return { etat: { attente: attente, depuis: depuis, tenues: tenues }, emettre: [], attendreMs: 0 };
+    }
+    if (e.type === "echeance") {
+      if (attente) { emettre.push(attente); }
+      return { etat: { attente: null, depuis: 0, tenues: tenues }, emettre: emettre, attendreMs: 0 };
+    }
+    var autres = tenues.filter(function (d) { return d !== e.direction; });
+    if (tenues.indexOf(e.direction) === -1) { tenues.push(e.direction); }
+    var combinee = attente && e.t - depuis <= FENETRE_COMBINAISON_MS ? diagonale(attente, e.direction) : null;
+    if (combinee) { return { etat: { attente: null, depuis: 0, tenues: tenues }, emettre: [combinee], attendreMs: 0 }; }
+    if (attente) { emettre.push(attente); }  // elle ne se combine pas : elle part, telle quelle
+    var avecTenue = attente ? null : autres.map(function (d) { return diagonale(d, e.direction); }).filter(Boolean)[0];
+    if (avecTenue) { return { etat: { attente: null, depuis: 0, tenues: tenues }, emettre: emettre.concat([avecTenue]), attendreMs: 0 }; }
+    return { etat: { attente: e.direction, depuis: e.t, tenues: tenues }, emettre: emettre, attendreMs: DELAI_FLECHE_SEULE_MS };
+  }
+
   /* Clavier, flèches actives : la touche fait bouger le robot, PAS la page (constat du 2026-10-12 : la
    * page défilait). L'interception vaut quel que soit l'élément qui a le focus — `body`, un bouton — et
    * jamais dans un champ de saisie, une liste déroulante ou une zone éditable. Une touche maintenue
@@ -169,7 +235,9 @@
     var saisie = balise === "INPUT" || balise === "SELECT" || balise === "TEXTAREA" || Boolean(evenement.editable);
     if (!evenement.actives || saisie) { return { intercepter: false, action: null }; }
     var action = null;
-    if (DIRECTIONS[evenement.key]) { action = { type: "fleche", direction: DIRECTIONS[evenement.key] }; }
+    // Pavé numérique 7, 9, 1, 3 : les quatre diagonales, d'une touche (reconnues par leur position, pas par leur chiffre).
+    if (PAVE_NUMERIQUE[evenement.code]) { action = { type: "fleche", direction: PAVE_NUMERIQUE[evenement.code], diagonale: true }; }
+    else if (DIRECTIONS[evenement.key]) { action = { type: "fleche", direction: DIRECTIONS[evenement.key] }; }
     else if (evenement.key === "Enter") { action = { type: "previsualiser" }; }
     else if (evenement.key === "Backspace") { action = { type: "annuler" }; }
     else if (evenement.key !== " " && evenement.key !== "Spacebar") { return { intercepter: false, action: null }; }
@@ -181,6 +249,9 @@
 
   var api = {
     ordreDe: ordreDe,
+    diagonale: diagonale,
+    combiner: combiner,
+    DIRECTIONS: DIRECTIONS,
     vitesseLente: vitesseLente,
     basculer: basculer,
     libelleBascule: libelleBascule,

@@ -35,3 +35,8 @@ plateau_haut_mm = 100
 #   "socle"    : avec userCtrl 50 (ha-lymow)
 #   "lymow-ha" : sans userCtrl    (Lymow-HA)
 variante_hauteur = "socle"
+
+# Voie : écart entre les deux chenilles, en mètres. ESTIMATION, À CALIBRER (aucune des sources ne la donne).
+# Elle sert aux arcs (`lymow arc`, flèches diagonales) : la chenille intérieure garde au moins 20 % de la
+# vitesse de l'ordre, pour virer sans pivoter sur place. Une voie plus grande adoucit les virages.
+voie_m = 0.45

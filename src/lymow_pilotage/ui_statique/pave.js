@@ -85,7 +85,11 @@
       direct.arme ? faites : aVenir.slice(0, dejaFaites), direct.arme ? aVenir : aVenir.slice(dejaFaites)
     );
     for (var i = 1; i < points.length; i += 1) {
-      miniature.appendChild(trait(i <= dejaFaites ? "fait" : "prevu", points[i - 1], points[i]));
+      // Un arc se trace courbe : par ses points intermédiaires.
+      var chemin = [points[i - 1]].concat(points[i].courbe || [], [points[i]]);
+      for (var j = 1; j < chemin.length; j += 1) {
+        miniature.appendChild(trait(i <= dejaFaites ? "fait" : "prevu", chemin[j - 1], chemin[j]));
+      }
     }
     var taille = marge * 0.35;
     var origine = document.createElementNS(NS, "circle");
@@ -261,9 +265,11 @@
 
   async function flecheDirecte(direction) {
     var lineaire = direction === "haut" || direction === "bas";
-    var pas = lineaire ? Number($("pave-distance").value) : Number($("pave-angle").value);
+    var arc = direction.indexOf("-") !== -1;  // diagonale : distance ET angle, d'une seule consigne
+    var pas = lineaire || arc ? Number($("pave-distance").value) : Number($("pave-angle").value);
     var demande = { jeton: jeton, direction: direction, pas: pas };
     if (lineaire) { demande.allure = $("pave-allure").value; demande.forcer = forcerCePas(direction); }
+    if (arc) { demande.angle = Number($("pave-angle").value); demande.allure = $("pave-allure").value; }
     try {
       var reponse = await page.appeler("/api/direct/fleche", demande);
       jeton = reponse.jeton;
@@ -316,7 +322,8 @@
   document.addEventListener("keydown", function (evenement) {
     var cible = evenement.target || {};
     var decision = Fleches.interception({
-      key: evenement.key, repeat: evenement.repeat, balise: cible.tagName, editable: cible.isContentEditable, actives: actives
+      key: evenement.key, code: evenement.code, repeat: evenement.repeat, balise: cible.tagName, editable: cible.isContentEditable,
+      actives: actives
     });
     if (!decision.intercepter) { return; }
     if (evenement.key === " " || evenement.key === "Spacebar") { return; } // STOP : traité par la page, qui retient aussi la touche
@@ -324,9 +331,27 @@
     evenement.stopPropagation();
     var action = decision.action;
     if (!action) { return; }
-    if (action.type === "fleche") { fleche(action.direction); }
+    if (action.type === "fleche" && action.diagonale) { fleche(action.direction); }  // pavé numérique : tout de suite
+    else if (action.type === "fleche") { jouer(Fleches.combiner(combinaison, { type: "appui", direction: action.direction, t: Date.now() })); }
     if (action.type === "annuler" && !enDirect()) { page.annulerDerniere(); }
     if (action.type === "previsualiser" && !enDirect()) { page.previsualiserSequence(); }
+  }, true);
+  // Deux flèches ensemble → la diagonale ; une flèche seule part après 120 ms (voir Fleches.combiner).
+  var combinaison = { attente: null, depuis: 0, tenues: [] };
+  var minuterieFleche = null;
+  function jouer(resultat) {
+    combinaison = resultat.etat;
+    resultat.emettre.forEach(fleche);
+    if (resultat.attendreMs > 0 || !combinaison.attente) { window.clearTimeout(minuterieFleche); }
+    if (resultat.attendreMs > 0) {
+      minuterieFleche = window.setTimeout(function () {
+        jouer(Fleches.combiner(combinaison, { type: "echeance", t: Date.now() }));
+      }, resultat.attendreMs);
+    }
+  }
+  document.addEventListener("keyup", function (evenement) {
+    var direction = Fleches.DIRECTIONS[evenement.key];
+    if (direction) { jouer(Fleches.combiner(combinaison, { type: "relache", direction: direction, t: Date.now() })); }
   }, true);
   window.addEventListener("pagehide", function () {
     if (direct.arme && navigator.sendBeacon) { navigator.sendBeacon("/api/direct/desarmer"); }

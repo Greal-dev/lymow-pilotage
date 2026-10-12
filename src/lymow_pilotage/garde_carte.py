@@ -157,6 +157,8 @@ def annoncer(
     annonces: list[str] = []
     position, cap = depart, cap_deg
     for numero, (nom, valeur) in enumerate(etapes, 1):
+        if nom == "arc":
+            break  # après un arc, la suite n'est plus projetée ici : l'émission rejuge chaque pas
         if nom not in ("avancer", "reculer", "tourner"):
             continue
         if valeur is None:

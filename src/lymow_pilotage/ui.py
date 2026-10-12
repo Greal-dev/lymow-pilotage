@@ -168,7 +168,9 @@ def ordres_depuis(corps: Any) -> list[Ordre]:
         force = entree.get("force", False)
         if not isinstance(force, bool) or (force and nom not in ("avancer", "reculer")):
             raise ErreurSaisie("« forcer ce pas » ne vaut que pour avancer ou reculer")
-        if set(entree) - {"nom", "valeur", "vitesse", "duree", "force"}:
+        if nom != "arc" and entree.get("angle") is not None:
+            raise ErreurSaisie("« angle » ne vaut que pour un arc")
+        if set(entree) - {"nom", "valeur", "vitesse", "duree", "force", "angle"}:
             raise ErreurSaisie("champ inattendu dans un ordre")
         mobile = nom in mouvement.MOUVEMENTS or nom == mouvement.ESSAI
         if not mobile and (entree.get("vitesse") is not None or entree.get("duree") is not None):
@@ -178,7 +180,7 @@ def ordres_depuis(corps: Any) -> list[Ordre]:
         ordres.append(
             Ordre(
                 nom, _nombre(entree.get("valeur"), entier=nom == "plateau"),
-                _nombre(entree.get("vitesse")), _nombre(entree.get("duree")), force,
+                _nombre(entree.get("vitesse")), _nombre(entree.get("duree")), force, _nombre(entree.get("angle")),
             )
         )
     if len(ordres) > 1 and any(ordre.nom not in mouvement.ETAPES_SEQUENCE for ordre in ordres):
@@ -784,7 +786,7 @@ class ServeurUI:
                 "libelles": conduite.LIBELLES,
                 "fleches": {
                     "distances_m": list(fleches.DISTANCES_M), "angles_deg": list(fleches.ANGLES_DEG),
-                    "allures": fleches.ALLURES,
+                    "allures": fleches.ALLURES, "voie_m": self.cal.voie_m,
                     "distance_defaut_m": fleches.DISTANCE_DEFAUT_M, "angle_defaut_deg": fleches.ANGLE_DEFAUT_DEG,
                     "file_max": fleches.FILE_MAX, "armement_s": fleches.DUREE_ARMEMENT_S,
                 },
@@ -1066,7 +1068,7 @@ class ServeurUI:
     def _munir_du_garde_fou(self, ordres: list[Ordre]) -> None:
         """SEC-13 : la carte n'est lue (disque, décodage) que pour une avance ou un recul — jamais pour STOP,
         pause ou rotation ; et un échec ici ne retient aucun ordre (pas de garde-fou, c'est dit au bilan)."""
-        if not any(ordre.nom in ("avancer", "reculer") for ordre in ordres):
+        if not any(ordre.nom in ("avancer", "reculer", "arc") for ordre in ordres):
             return
         self.session.arret_aux_bords = self.arret_aux_bords
         self.session.decalage_carte = self._recalage.decalage
@@ -1444,11 +1446,11 @@ class ServeurUI:
             self._desarmer(str(refus))
             return _refus(409, str(refus))
         try:
-            if set(corps) - {"jeton", "direction", "pas", "allure", "forcer"}:
+            if set(corps) - {"jeton", "direction", "pas", "allure", "forcer", "angle"}:
                 raise ErreurSaisie("champ inattendu : le pilotage direct n'accepte qu'une flèche, son pas et son allure")
             ordre = fleches.ordre(
                 corps.get("direction"), corps.get("pas"), corps.get("allure", "auto"), corps.get("forcer", False),
-                self.cal.facteur_distance,
+                self.cal.facteur_distance, corps.get("angle"),
             )
         except ErreurSaisie as erreur:  # refus de validation : dit, sans désarmer
             self.direct.prolonger()

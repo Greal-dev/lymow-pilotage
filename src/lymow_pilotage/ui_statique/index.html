@@ -68,12 +68,16 @@
           </p>
           <p id="pave-focus" class="vers-pastilles"></p>
           <div class="pilotage">
-            <div class="croix" role="group" aria-label="Flèches : avancer, reculer, tourner ; STOP au centre">
+            <div class="croix" role="group" aria-label="Flèches : avancer, reculer, tourner, et les quatre diagonales ; STOP au centre">
+              <button type="button" class="fleche haut-gauche" data-fleche="haut-gauche" aria-label="Avancer en virant à gauche" title="Avancer en virant à gauche : distance et angle choisis, d'une seule consigne (pavé numérique 7, ou ↑ et ← ensemble)" disabled>↖</button>
               <button type="button" class="fleche haut" data-fleche="haut" aria-label="Avancer" title="Avancer (flèche haut)" disabled>↑</button>
+              <button type="button" class="fleche haut-droite" data-fleche="haut-droite" aria-label="Avancer en virant à droite" title="Avancer en virant à droite : distance et angle choisis, d'une seule consigne (pavé numérique 9, ou ↑ et → ensemble)" disabled>↗</button>
               <button type="button" class="fleche gauche" data-fleche="gauche" aria-label="Tourner à gauche" title="Tourner à gauche (flèche gauche)" disabled>←</button>
               <button id="stop-centre" type="button" class="stop-centre" title="STOP : annule tout, arrête le robot (Échap ou Espace)">STOP</button>
               <button type="button" class="fleche droite" data-fleche="droite" aria-label="Tourner à droite" title="Tourner à droite (flèche droite)" disabled>→</button>
+              <button type="button" class="fleche bas-gauche" data-fleche="bas-gauche" aria-label="Reculer, l'arrière partant à gauche" title="Reculer, l'arrière partant à gauche : distance et angle choisis, d'une seule consigne (pavé numérique 1, ou ↓ et ← ensemble)" disabled>↙</button>
               <button type="button" class="fleche bas" data-fleche="bas" aria-label="Reculer" title="Reculer (flèche bas)" disabled>↓</button>
+              <button type="button" class="fleche bas-droite" data-fleche="bas-droite" aria-label="Reculer, l'arrière partant à droite" title="Reculer, l'arrière partant à droite : distance et angle choisis, d'une seule consigne (pavé numérique 3, ou ↓ et → ensemble)" disabled>↘</button>
             </div>
             <div class="reglages">
               <p class="pas">
@@ -168,10 +172,14 @@
             <video id="video" muted playsinline></video>
             <span id="video-etat" class="etat-video">arrêtée</span>
             <div class="pave" role="group" aria-label="Flèches : avancer, reculer, tourner">
+              <button type="button" class="fleche haut-gauche" data-fleche="haut-gauche" aria-label="Avancer en virant à gauche" title="Avancer en virant à gauche : distance et angle choisis, d'une seule consigne (pavé numérique 7, ou ↑ et ← ensemble)" disabled>↖</button>
               <button type="button" class="fleche haut" data-fleche="haut" aria-label="Avancer" disabled>↑</button>
+              <button type="button" class="fleche haut-droite" data-fleche="haut-droite" aria-label="Avancer en virant à droite" title="Avancer en virant à droite : distance et angle choisis, d'une seule consigne (pavé numérique 9, ou ↑ et → ensemble)" disabled>↗</button>
               <button type="button" class="fleche gauche" data-fleche="gauche" aria-label="Tourner à gauche" disabled>←</button>
               <button type="button" class="fleche droite" data-fleche="droite" aria-label="Tourner à droite" disabled>→</button>
+              <button type="button" class="fleche bas-gauche" data-fleche="bas-gauche" aria-label="Reculer, l'arrière partant à gauche" title="Reculer, l'arrière partant à gauche : distance et angle choisis, d'une seule consigne (pavé numérique 1, ou ↓ et ← ensemble)" disabled>↙</button>
               <button type="button" class="fleche bas" data-fleche="bas" aria-label="Reculer" disabled>↓</button>
+              <button type="button" class="fleche bas-droite" data-fleche="bas-droite" aria-label="Reculer, l'arrière partant à droite" title="Reculer, l'arrière partant à droite : distance et angle choisis, d'une seule consigne (pavé numérique 3, ou ↓ et → ensemble)" disabled>↘</button>
             </div>
           </div>
           <div id="vue-carte" class="vue-carte" role="tabpanel" hidden>

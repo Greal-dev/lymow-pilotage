@@ -154,6 +154,10 @@ def construire_analyseur() -> argparse.ArgumentParser:
         "base": "retour à la base en conservant la tâche",
         "annuler": "annuler la tâche, arrêt sur place",
     }
+    arc = ajouter("arc", "avancer ou reculer en tournant, d'une seule consigne : <mètres> <degrés>")
+    arc.add_argument("valeur", type=nombre, metavar="mètres", help="distance le long de l'arc ; négatif = recul")
+    arc.add_argument("angle", type=nombre, metavar="degrés", help="rotation du cap pendant l'arc ; positif = gauche")
+    arc.add_argument("--vitesse", type=nombre, default=None, metavar="V", help="vitesse en m/s, de 0.05 à 0.25 (réduite si les plafonds l'exigent)")
     phares = ajouter("phares", "allumer ou éteindre les phares (éclairage de la caméra) ; allumage jamais essayé par le cloud")
     phares.add_argument("sens", choices=("allumer", "eteindre"))
     voyants = ajouter("voyants", "allumer ou éteindre les voyants LED du robot (ce ne sont pas les phares)")
@@ -258,7 +262,7 @@ def _ordres(args: argparse.Namespace) -> list[Ordre]:
         return [Ordre(f"{args.commande}-{args.sens}")]
     if args.commande == "reprendre" and lire("position_imprecise_acceptee"):
         return [Ordre(mouvement.REPRISE_FORCEE)]  # SEC-12 : garde levée explicitement
-    return [Ordre(args.commande, lire("valeur"), lire("vitesse"), lire("duree"), bool(lire("forcer")))]
+    return [Ordre(args.commande, lire("valeur"), lire("vitesse"), lire("duree"), bool(lire("forcer")), lire("angle"))]
 
 
 def _sans_echec(fonction: Any) -> Any:

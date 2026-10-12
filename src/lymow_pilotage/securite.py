@@ -154,8 +154,10 @@ class Consigne:
     lineaire: float
     angulaire: float
     duree: float
-    attendu: str  # "translation" ou "rotation"
+    attendu: str  # "translation", "rotation" ou "arc"
     valeur: float  # ordre signé : mètres (positif = avant) ou degrés (positif = gauche)
+    angle: float = 0.0  # arc seulement : rotation commandée, en degrés signés (après adoucissement éventuel)
+    annonce: str | None = None  # arc seulement : ce que le calcul a dû changer (virage adouci, allure réduite)
 
 
 def _nombre_fini(valeur: float, nom: str) -> float:
@@ -306,6 +308,71 @@ def consigne_rotation(
         (ANGLE_MAX_DEG, "°", 1),
     )
     return Consigne(0.0, math.copysign(v, degres) * signe, tenue, "rotation", degres)
+
+
+# Arc : la chenille intérieure garde au moins cette part de la vitesse de l'ordre — elle ne s'arrête ni ne
+# s'inverse jamais (demande du propriétaire, 2026-10-12 : virer en douceur, sans patiner).
+PART_CHENILLE_INTERIEURE_MIN = 0.20
+
+
+def consigne_arc(
+    metres: float, degres: float, facteur_distance: float = 1.0, facteur_angle: float = 1.0, signe: int = 1,
+    voie_m: float = 0.45, *, vitesse: float | None = None,
+) -> Consigne:
+    """SEC-02 : UNE consigne tenue, vitesse linéaire ET angulaire. `metres` signé (négatif = recul, 2 m au
+    plus), `degres` signé (positif = le cap tourne à gauche, 180° au plus), parcourus sur la même durée
+    (9 s au plus). Les deux chenilles vont dans le même sens : sinon le virage est adouci, et c'est annoncé.
+    Vitesses sous les plafonds linéaire, angulaire, et de chenille (celle d'une ligne droite)."""
+    metres, degres = _nombre_fini(metres, "distance"), _nombre_fini(degres, "angle")
+    if metres == 0 or abs(metres) > DISTANCE_MAX_M:
+        raise RefusSecurite(f"distance refusée : entre 0 (exclu) et {DISTANCE_MAX_M:g} m par ordre (SEC-02)")
+    if degres == 0 or abs(degres) > ANGLE_MAX_DEG:
+        raise RefusSecurite(f"angle refusé : entre 0 (exclu) et {ANGLE_MAX_DEG:g}° par ordre (SEC-02)")
+    for facteur in (facteur_distance, facteur_angle, voie_m):
+        if not _nombre_fini(facteur, "facteur de calibration") > 0:
+            raise RefusSecurite("facteur de calibration invalide")
+    distance, rotation = abs(metres) / facteur_distance, math.radians(abs(degres)) / facteur_angle  # commandés
+    if distance > DISTANCE_MAX_M * (1 + 1e-9) or rotation > math.radians(ANGLE_MAX_DEG) * (1 + 1e-9):
+        raise RefusSecurite("déplacement commandé au-dessus du plafond une fois le facteur de calibration appliqué (SEC-02)")
+    annonces = []
+    # Chenille intérieure : v − w·voie/2 ≥ 20 % de v. Ce rapport ne dépend que de la géométrie (angle / distance).
+    courbure_max = (1 - PART_CHENILLE_INTERIEURE_MIN) * 2 / voie_m
+    obtenu = abs(degres)
+    if rotation / distance > courbure_max * (1 + 1e-9):
+        rotation = courbure_max * distance
+        obtenu = math.degrees(rotation * facteur_angle)
+        annonces.append(f"virage adouci : {obtenu:.0f}° au lieu de {abs(degres):g}° (les deux chenilles restent dans le même sens)")
+    demandee = _vitesse(vitesse, VITESSE_LINEAIRE_M_S, VITESSE_LINEAIRE_MIN_M_S, "vitesse linéaire")
+    exterieure = 1 + rotation / distance * voie_m / 2  # vitesse de la chenille extérieure, rapportée à v
+    v = min(demandee, VITESSE_LINEAIRE_M_S / exterieure, VITESSE_ANGULAIRE_RAD_S * distance / rotation)
+    if v < VITESSE_LINEAIRE_MIN_M_S * (1 - 1e-9):
+        raise RefusSecurite(
+            f"arc refusé : pour tenir les plafonds de vitesse il faudrait descendre sous {VITESSE_LINEAIRE_MIN_M_S:g} m/s — "
+            "choisissez un angle plus petit ou une distance plus grande (SEC-02)"
+        )
+    if vitesse is not None and v < demandee * (1 - 1e-9):  # dit seulement si l'opérateur avait choisi sa vitesse
+        annonces.append(f"allure réduite à {v:.2f} m/s pour tenir les plafonds de vitesse")
+    duree = distance / v
+    if duree > DUREE_MAX_S:
+        raise RefusSecurite(
+            f"arc refusé : il durerait {duree:.1f} s, plus que les {DUREE_MAX_S:g} s permises par ordre — "
+            "choisissez une distance plus courte ou un angle plus petit (SEC-02)"
+        )
+    duree = _duree_bornee(duree)
+    w = rotation / duree
+    return Consigne(
+        math.copysign(v, metres), math.copysign(w, degres) * signe, duree, "arc", metres,
+        angle=math.copysign(obtenu, degres), annonce=" ; ".join(annonces) or None,
+    )
+
+
+def arrivee_arc(metres: float, degres: float) -> tuple[float, float]:
+    """Où mène un arc, dans le repère du robot au départ : (vers l'avant, vers la gauche), en mètres."""
+    angle = math.radians(degres)
+    if abs(angle) < 1e-9:
+        return metres, 0.0
+    rayon = metres / angle
+    return rayon * math.sin(angle), rayon * (1 - math.cos(angle))
 
 
 def consigne_essai(vitesse: float | None, observation: float | None) -> Consigne:
