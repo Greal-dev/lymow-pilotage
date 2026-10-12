@@ -173,6 +173,10 @@ def construire_analyseur() -> argparse.ArgumentParser:
     interface.add_argument(
         "--port", type=_lire_port, default=PORT_UI, metavar="N", help=f"port local (défaut : {PORT_UI})"
     )
+    interface.add_argument(
+        "--demo", action="store_true",
+        help="démonstration : robot et jardin fictifs en mémoire, aucun compte, aucun réseau (incompatible avec --reel)",
+    )
     return analyseur
 
 
@@ -188,7 +192,12 @@ async def _commande_ui(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, in
 
     if not 1024 <= args.port <= 65535:
         raise ErreurSaisie("port attendu entre 1024 et 65535")
-    return {"interface": await ui.servir(ctx.cal, ctx.journal, reel=args.reel, port=args.port, dossier=ctx.dossier)}, 0
+    if args.demo and args.reel:
+        raise ErreurSaisie("--demo et --reel sont incompatibles : la démonstration ne parle jamais au vrai robot")
+    message = await ui.servir(
+        ctx.cal, ctx.journal, reel=args.reel, port=args.port, dossier=ctx.dossier, demonstration=args.demo
+    )
+    return {"interface": message}, 0
 
 
 def _ordres(args: argparse.Namespace) -> list[Ordre]:

@@ -65,12 +65,14 @@ def refuser(ordres: list[Ordre], cal: Calibration, journal: Journal, mode: str) 
     return {"mode": mode, "etapes": []} | refus
 
 
-def simuler_ordres(ordres: list[Ordre], cal: Calibration, journal: Journal) -> tuple[dict[str, Any], int]:
+def simuler_ordres(
+    ordres: list[Ordre], cal: Calibration, journal: Journal, appareil: str | None = None
+) -> tuple[dict[str, Any], int]:
     """SEC-05 : ce chemin n'ouvre aucune liaison et ne publie rien."""
     refus = refuser(ordres, cal, journal, "simulation")
     if refus:
         return refus, CODE_REFUS
-    appareil = coffre.appareil_connu()
+    appareil = appareil or coffre.appareil_connu()  # appareil fourni (démonstration) : coffre jamais lu
     etapes = [mouvement.simuler(ordre, cal, appareil) for ordre in ordres]
     for etape in etapes:
         journal.ecrire("ordre-simule", **etape)  # SEC-06

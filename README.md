@@ -43,7 +43,7 @@ Python 3.12) ; il se régénère avec
 | `lymow stop` | Consigne nulle émise 3 fois, sans précondition, puis mise en pause de la tâche (userCtrl 3 ; 21 si le dernier état connu indique un retour à la base). |
 | `lymow sequence "plateau 90; tourner 45 --vitesse 0.2; reculer --duree 2 --vitesse 0.1"` | Enchaîne ; rien ne part si une étape est refusable ; s'arrête au premier refus, échec ou constat non confirmé. Étapes : `tourner`, `avancer`, `reculer`, `plateau`, `plateau-haut`, `stop`. `--reel` et `essai-arret-auto` y sont interdits. |
 | `lymow reprendre` / `base` / `annuler` | Reprise de tâche (4), retour base tâche conservée (33), annulation sur place (28). |
-| `lymow ui [--reel] [--port N]` | Interface web locale avec retour vidéo (voir « Interface web locale »). |
+| `lymow ui [--reel \| --demo] [--port N]` | Interface web locale avec retour vidéo (voir « Interface web locale ») ; `--demo` : robot et jardin fictifs, sans compte ni réseau. |
 | `lymow carte` | Carte du robot : zones, zones interdites, passages, station (lecture seule ; contours complets avec `--json`). |
 | `lymow ajuster-zone <nom\|id> --de I --a J --cm X [--cote court\|long\|tout] [--raccord M]` | Élargit ou rogne une bande le long d'un bord d'une zone (voir « Carte et ajustement de zone »). |
 | `lymow restaurer-zone <sauvegarde.pb> [--zone nom]` | Remet le contour d'une zone depuis une sauvegarde. |
@@ -95,6 +95,18 @@ navigateur et s'arrête sur Ctrl+C. `lancer-lymow.cmd` (double-clic) lance
 - Au double-clic, une erreur de démarrage reste affichée jusqu'à l'appui sur
   Entrée. Si le navigateur ne s'ouvre pas, l'adresse à ouvrir est affichée
   dans la fenêtre, qui reste ouverte.
+- **Démonstration** : `lymow ui --demo` (incompatible avec `--reel`) ouvre la
+  même page sur un robot et un jardin FICTIFS tenus en mémoire — deux
+  parterres, une allée en équerre, un bassin et un massif interdits, deux
+  passages dont celui de la station. Aucun compte n'est lu, aucun coffre,
+  aucune connexion au cloud ; un bandeau permanent « DÉMONSTRATION — robot
+  fictif » le rappelle. Les ordres et la retouche de zone y sont « émis » vers
+  le robot fictif, qui se déplace et applique le contour : de quoi essayer
+  l'interface de bout en bout, avec les mêmes règles. La vidéo et le compte y
+  sont désactivés. Les sauvegardes de carte vont dans
+  `sauvegardes-carte/demonstration/` et sont refusées pour une restauration
+  réelle. Le robot fictif ne dit rien du vrai : il avance d'un pas par
+  consigne reçue et acquitte tout.
 - La page passe par les mêmes fonctions que la ligne de commande : mêmes
   validations, mêmes règles SEC-01 à SEC-07, même journal.
 - Sans `--reel` au lancement, le serveur refuse tout ordre réel quoi que
