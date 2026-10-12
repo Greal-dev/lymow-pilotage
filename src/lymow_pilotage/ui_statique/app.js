@@ -18,7 +18,7 @@
   var videoOuverte = false;
   var unClicActif = false;
   var CLES_ETAT = [
-    "en_ligne", "statut_libelle", "batterie_pct", "erreurs", "avertissements", "rtk", "rtk_satellites",
+    "en_ligne", "statut_libelle", "tache_libelle", "batterie_pct", "erreurs", "avertissements", "rtk", "rtk_satellites",
     "signal_4g", "signal_wifi", "wifi_rssi_dbm", "position_est_m", "position_nord_m", "cap_deg",
     "hauteur_coupe_mm", "micrologiciel", "age_etat_s"
   ];

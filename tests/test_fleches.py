@@ -16,7 +16,7 @@ from lymow_pilotage.config import Calibration
 from lymow_pilotage.mouvement import ErreurSaisie
 from lymow_pilotage.protocole import est_requete_pure
 
-SANS_POSE = {"workStatus": 1, "battery": 80}
+SANS_POSE = {"robotState": 1, "workStatus": 1, "battery": 80}
 
 
 async def armer(http, serveur) -> str:
@@ -200,7 +200,7 @@ def test_direct_file_limitee_a_cinq_et_stop_vide_la_file_et_desarme(tmp_path, mo
 
 
 def test_direct_refus_sec01_desarme_et_vide_la_file(tmp_path, monkeypatch, session_reelle, lien):
-    lien.robot = {"workStatus": 4, "battery": 80}  # retour à la base : hors liste blanche
+    lien.robot = {"robotState": 4, "workStatus": 4, "battery": 80}  # retour à la base : hors liste blanche
 
     async def scenario():
         async with serveur_ui(tmp_path, monkeypatch, reel=True, session=session_reelle) as (serveur, http):

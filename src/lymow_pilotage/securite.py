@@ -64,6 +64,11 @@ SENS_MARGE_DEG = 10.0
 # SEC-01 : seuls statuts où les lames sont tenues pour arrêtées. Tout autre
 # statut — tonte (2, 8, 9), retour (4, 10, 14), arrêt d'urgence (13), mise à
 # jour (11), essais d'usine (15, 16), inconnu, hors ligne (-1) — refuse.
+# Constat du 2026-10-12 (captures réelles d'ordres) : cette liste s'applique au statut VIVANT du
+# robot, `robotStatus` (champ 1 de robotInfo), et à lui seul. `workStatus` (champ 6) reste à 2
+# (tonte) pendant toute la tâche, pause comprise — le juger refusait à tort un robot en pause.
+# Valeurs réelles (f1/f6) : en charge 5/1, au repos 1/1, tâche en pause 3/2, et 6/2 pendant une
+# trentaine de secondes après toute trame de pilotage manuel. Le contenu de la liste ne change pas.
 STATUTS_LAMES_ARRET = frozenset(
     {
         socle.WORK_STATUS_NONE,

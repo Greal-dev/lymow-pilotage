@@ -22,8 +22,8 @@ from lymow_pilotage.securite import RefusSecurite
 
 PAUSE = bytes.fromhex("10 31 28 03")
 PAUSE_RETOUR = bytes.fromhex("10 31 28 15")
-EN_TONTE = {"workStatus": 2, "battery": 80}
-EN_PAUSE = {"workStatus": 3, "battery": 80}
+EN_TONTE = {"robotState": 2, "workStatus": 2, "battery": 80}
+EN_PAUSE = {"robotState": 3, "workStatus": 2, "battery": 80}
 PAGE = (ui.STATIQUE / "index.html").read_text(encoding="utf-8")
 
 
@@ -158,8 +158,13 @@ def test_page_sections_fermees_par_defaut_et_compte_ouverte_si_non_connecte():
 
 @sans_node
 def test_page_etat_du_robot_en_une_ligne_et_gestes_proposes():
-    etat = {"en_ligne": True, "statut_libelle": "tonte en cours", "batterie_pct": 80, "rtk": "FIXED"}
-    assert js("ordres.js", "M.resumeEtat(a[0])", etat) == "en ligne · tonte en cours · batterie 80 % · RTK FIXED"
+    etat = {"en_ligne": True, "statut_libelle": "tonte en pause", "tache_libelle": "tonte en cours", "batterie_pct": 80,
+            "rtk": "précision horizontale 0.02 m"}
+    assert js("ordres.js", "M.resumeEtat(a[0])", etat) == (
+        "en ligne · tonte en pause (tâche : tonte en cours) · batterie 80 % · précision horizontale 0.02 m"
+    )
+    pres = {"statut": "tonte en pause", "tache": "tonte en cours", "mouvement_refuse": None}
+    assert js("ordres.js", "M.texteEtatDesOrdres(a[0])", pres) == "Robot : tonte en pause (tâche : tonte en cours)"
     assert js("ordres.js", "M.resumeEtat(a[0])", etat | {"en_ligne": False, "perime": True}).startswith("HORS LIGNE")
     assert js("ordres.js", "M.resumeEtat(null)") == "état du robot inconnu"
     tonte = {"action": "pause", "reprise_possible": False, "pause": None}
@@ -287,7 +292,7 @@ def test_pause_non_confirmee_dite_et_fleches_toujours_refusees(tmp_path, monkeyp
 
 
 def test_pause_par_previsualiser_puis_emettre_et_en_simulation_rien_n_est_emis(tmp_path, monkeypatch, session_reelle, lien):
-    lien.robot = {"workStatus": 4, "battery": 80}  # retour à la base : la pause est le code 21
+    lien.robot = {"robotState": 4, "workStatus": 4, "battery": 80}  # retour à la base : la pause est le code 21
 
     async def reel():
         async with serveur_ui(tmp_path, monkeypatch, reel=True, session=session_reelle) as (serveur, http):
@@ -315,7 +320,7 @@ def test_ordre_pause_meme_code_que_la_pause_de_stop_sans_consignes_nulles(sessio
     rapport = asyncio_run(mouvement.executer(session, Ordre("pause")))
     assert rapport["codes_emis"] == [3] and lien.ordres == [PAUSE] and lien.arrets == []
     lien.publies.clear()
-    lien.robot = {"workStatus": 6, "battery": 80}  # télécommande : la pause part seule, sans « quitter la télécommande »
+    lien.robot = {"robotState": 6, "workStatus": 2, "battery": 80}  # télécommande : la pause part seule, sans « quitter la télécommande »
     assert asyncio_run(mouvement.executer(session, Ordre("pause")))["codes_emis"] == [3]
     lien.robot = None
     session.etat.recu_statut = None

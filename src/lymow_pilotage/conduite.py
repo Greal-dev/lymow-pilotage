@@ -32,7 +32,7 @@ LIBELLES = {
     "rotation_deg": "rotation (°)", "est_m": "est (m)", "nord_m": "nord (m)", "cap_deg": "cap (°)",
     "arrets_acquittes": "arrêts acquittés", "codes_emis": "codes émis", "echec": "échec", "etapes": "étapes",
     "sequence": "séquence", "en_ligne": "en ligne", "batterie_pct": "batterie (%)",
-    "statut_libelle": "statut (libellé)", "position_est_m": "position est (m)",
+    "statut_libelle": "statut du robot", "tache_libelle": "tâche en cours", "position_est_m": "position est (m)",
     "position_nord_m": "position nord (m)", "age_position_s": "âge de la position (s)",
     "rtk_satellites": "satellites RTK", "signal_4g": "signal 4G", "signal_wifi": "signal Wi-Fi",
     "wifi_rssi_dbm": "Wi-Fi RSSI (dBm)", "age_etat_s": "âge de l'état (s)", "etape": "étape",

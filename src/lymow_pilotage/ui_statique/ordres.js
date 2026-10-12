@@ -47,6 +47,7 @@
   function texteEtatDesOrdres(ordres) {
     if (!ordres) { return ""; }
     var texte = ordres.statut ? "Robot : " + ordres.statut : "Robot : état inconnu";
+    if (ordres.tache) { texte += " (tâche : " + ordres.tache + ")"; }
     return ordres.mouvement_refuse ? texte + " — " + ordres.mouvement_refuse : texte;
   }
 
@@ -54,9 +55,9 @@
   function resumeEtat(etat) {
     if (!etat) { return "état du robot inconnu"; }
     var morceaux = [etat.en_ligne === true ? "en ligne" : etat.en_ligne === false ? "HORS LIGNE" : "présence inconnue"];
-    morceaux.push(etat.statut_libelle || "statut inconnu");
+    morceaux.push((etat.statut_libelle || "statut inconnu") + (etat.tache_libelle ? " (tâche : " + etat.tache_libelle + ")" : ""));
     if (typeof etat.batterie_pct === "number") { morceaux.push("batterie " + etat.batterie_pct + " %"); }
-    if (etat.rtk) { morceaux.push("RTK " + etat.rtk); }
+    if (etat.rtk) { morceaux.push(etat.rtk); }
     return morceaux.join(" · ") + (etat.perime ? " (état ancien)" : "");
   }
 

@@ -306,7 +306,16 @@ réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même
   propriétaire le 2026-10-11 ; arrêt des lames dans ces deux statuts à
   constater robot à vue lors de la calibration). Tout le reste refuse : tonte
   (2), reprise (8), tonte de zone (9), retour à la base (4, 10, 14), arrêt
-  d'urgence (13), mise à jour, inconnu, hors ligne. Le statut est revérifié à chaque consigne : s'il sort de la
+  d'urgence (13), mise à jour, inconnu, hors ligne.
+  **Le statut jugé est le statut VIVANT du robot**, `robotStatus` (champ 1 de
+  `robotInfo`), et lui seul. Constat du 2026-10-12, trames réelles :
+  `workStatus` (champ 6), jugé jusque-là, reste à 2 (tonte) pendant toute la
+  tâche, pause comprise — l'outil refusait donc à tort un robot en pause.
+  Valeurs observées (champ 1 / champ 6) : en charge 5/1, au repos 1/1, tâche
+  en pause 3/2, télécommande 6/2. Le champ 6 n'est plus qu'une information
+  (« tâche : tonte en cours »). Une trame sans champ 1 laisse le statut
+  inconnu : refus, jamais de repli sur le champ 6. La liste elle-même n'a pas
+  changé. Le statut est revérifié à chaque consigne : s'il sort de la
   liste ou si le robot passe hors ligne, arrêt immédiat. L'outil ne sait
   émettre aucun ordre de démarrage de tonte ; seul `reprendre` peut relancer
   les lames.
@@ -500,7 +509,14 @@ tonte ; la surface et les bornes que le robot recalcule ne sont pas comparées.
 - `plateau-haut` : l'effet d'un changement de hauteur de coupe robot à l'arrêt
   est inconnu.
 - Le statut « télécommande » (6) est tenu pour « lames à l'arrêt » afin de
-  pouvoir enchaîner deux ordres ; à vérifier robot à vue.
+  pouvoir enchaîner deux ordres ; à vérifier robot à vue. Constat du
+  2026-10-12 : toute trame de pilotage manuel, y compris la consigne nulle
+  de l'arrêt, fait passer le robot en « télécommande » (6) pendant une
+  trentaine de secondes (26 à 32 s observées), puis il revient en pause (3).
+- Qualité de position : les sources se contredisent sur le sens des valeurs
+  (1 = point seul, ou flottant). L'outil affiche la précision horizontale en
+  mètres quand le robot la donne, et le libellé seulement comme indication
+  « non confirmé ».
 - `stop` met aussi la tâche en pause, même si l'arrêt des consignes n'est pas
   confirmé ; un échec de la pause est signalé à part. L'effet réel de la pause
   sur une tonte autonome reste à constater. L'arrêt automatique de fin de

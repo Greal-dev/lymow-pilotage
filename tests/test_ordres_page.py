@@ -18,8 +18,8 @@ from test_ui import attendre, executer, poster, serveur_ui
 
 from lymow_pilotage import capture, mouvement, ui
 
-SANS_POSE = {"workStatus": 1, "battery": 80}  # le robot réel : un état, jamais de position
-EN_RETOUR = {"workStatus": 4, "battery": 80}
+SANS_POSE = {"robotState": 1, "workStatus": 1, "battery": 80}  # le robot réel : un état, jamais de position
+EN_RETOUR = {"robotState": 4, "workStatus": 4, "battery": 80}
 RECULER = {"nom": "reculer", "duree": 0.3, "vitesse": 0.1}
 TROIS_ETAPES = [RECULER, {"nom": "tourner", "duree": 0.3, "vitesse": 0.2}, {"nom": "avancer", "duree": 0.3, "vitesse": 0.1}]
 TRAME = json.dumps({"message": base64.b64encode(b"\x2a\x04\x08\x05\x30\x01").decode()})

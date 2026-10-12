@@ -592,6 +592,7 @@ class ServeurUI:
             refus, action = "Pause demandée : attente de la confirmation du robot.", None
         return {
             "statut": libelle, "mouvement_refuse": refus, "action": action, "pause": pause,
+            "tache": etat.resume(session.horloge())["tache_libelle"],  # dite seulement si elle diffère du statut
             # Après un dégagement, la reprise reste proposée clairement (les lames peuvent redémarrer).
             "reprise_possible": etat.statut == socle.WORK_STATUS_PAUSE,
         }

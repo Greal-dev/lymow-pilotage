@@ -21,7 +21,7 @@ CONSIGNE_AVANT = bytes.fromhex("10 31 52 0a 0d 00 00 80 3e 15 00 00 00 00")
 PAUSE = bytes.fromhex("10 31 28 03")
 IMMOBILE = "le robot n'a pas bougé (patinage ou ordre ignoré)"
 NON_RAFRAICHI = "aucune trame d'état fraîche reçue en 12 s après l'ordre : liaison douteuse"
-SANS_POSE = {"workStatus": 1, "battery": 80}  # le robot réel au repos : un état, jamais de position
+SANS_POSE = {"robotState": 1, "workStatus": 1, "battery": 80}  # le robot réel au repos : un état, jamais de position
 
 
 def au_premier_arret(action):
@@ -505,7 +505,7 @@ def test_sec04_etat_non_rafraichi_dit_plutot_qu_affirme(session, lien):
 
 def test_sec04_position_de_depart_non_fraiche_constat_impossible(session, lien):
     session.recevoir_etat(fragment(est=5.0))  # vieille pose, antérieure à la sollicitation
-    lien.robot = {"workStatus": 1, "battery": 80}  # le robot répond sans position
+    lien.robot = {"robotState": 1, "workStatus": 1, "battery": 80}  # le robot répond sans position
     lien.sur_publication = robot_ensuite(fragment(est=6.0))
     rapport = lancer(mouvement.executer_mouvement(session, AVANCER_1))
     assert rapport["avant"] is None and rapport["verifie"] is False
@@ -897,7 +897,7 @@ def test_sec07_sequence_continue_quand_le_robot_ne_fournit_pas_sa_position(sessi
 def test_sec07_sequence_interrompue_par_le_statut_propose_la_reprise(session, lien):
     """Le cas réel : après le premier ordre, le robot passe en « retour à la base » (4)."""
     lien.robot = dict(SANS_POSE)
-    lien.sur_publication = robot_ensuite({"workStatus": 4, "battery": 80})
+    lien.sur_publication = robot_ensuite({"robotState": 4, "workStatus": 4, "battery": 80})
     ordres = [Ordre("reculer", 1.0), Ordre("tourner", 90.0), Ordre("avancer", None, 0.2, 2.0)]
     bilan = lancer(mouvement.executer_sequence(session, ordres))
     assert bilan["interrompue"] is True and "retour à la base" in bilan["motif"]
@@ -917,7 +917,7 @@ def test_sec07_ordre_refuse_reprise_a_cette_etape_et_aucune_apres_un_arret_non_c
     lien.robot = dict(SANS_POSE)
     bilan = lancer(mouvement.executer_sequence(session, [Ordre("reculer", 1.0)]))
     assert bilan["interrompue"] is False
-    lien.robot = {"workStatus": 4, "battery": 80}
+    lien.robot = {"robotState": 4, "workStatus": 4, "battery": 80}
     bilan = lancer(mouvement.executer_sequence(session, [Ordre("reculer", 1.0), AVANCER_1]))
     assert bilan["interrompue"] is True and bilan["etapes"][0]["issue"] == "non émise ou échouée"
     assert bilan["reprise"]["etape"] == 1 and len(bilan["reprise"]["ordres"]) == 2

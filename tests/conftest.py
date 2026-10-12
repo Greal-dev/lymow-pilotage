@@ -42,8 +42,12 @@ class Horloge:
         await asyncio.sleep(0)
 
 
-def fragment(statut: int = 1, est: float = 0.0, nord: float = 0.0, theta: float = 0.0) -> dict:
-    return {"workStatus": statut, "poseEastM": est, "poseNorthM": nord, "poseThetaRad": theta, "battery": 80}
+def fragment(statut: int = 1, est: float = 0.0, nord: float = 0.0, theta: float = 0.0, tache: int | None = None) -> dict:
+    """État décodé, de la forme réelle : statut VIVANT (robotStatus, f1) et tâche (workStatus, f6)."""
+    return {
+        "robotState": statut, "workStatus": statut if tache is None else tache,
+        "poseEastM": est, "poseNorthM": nord, "poseThetaRad": theta, "battery": 80,
+    }
 
 
 def est_consigne(octets: bytes) -> bool:
