@@ -19,7 +19,9 @@ Modifications par rapport à l'original :
 - ``reconnect`` retiré ; ``connect`` accepte ``subscribe=False`` (reconnexion
   de secours pour publier un arrêt sans attendre les abonnements) ;
 - les deux fonctions de rappel reçoivent en plus l'indicateur ``retain`` du
-  message (un message conservé par le serveur n'a pas d'âge connu).
+  message (un message conservé par le serveur n'a pas d'âge connu) ;
+- ``on_raw`` (facultatif) : reçoit chaque message tel quel (sujet, charge,
+  ``retain``) avant tout décodage — capture de diagnostic.
 """
 
 from __future__ import annotations
@@ -141,6 +143,7 @@ class LymowMqttClient:
         self._region = region
         self._on_state = on_state
         self._on_online = on_online
+        self.on_raw: Callable[[str, bytes | str, bool], None] | None = None
 
         self._things: list[str] = []
         self._client: aiomqtt.Client | None = None
@@ -227,6 +230,11 @@ class LymowMqttClient:
     def _dispatch(self, message: aiomqtt.Message) -> None:
         topic = str(message.topic)
         payload = message.payload
+        if self.on_raw is not None:
+            try:
+                self.on_raw(topic, payload, bool(getattr(message, "retain", False)))
+            except Exception as err:  # noqa: BLE001 — la capture ne doit jamais tuer l'écoute
+                _LOGGER.warning("MQTT raw hook failed (%s)", type(err).__name__)
 
         thing_name: str | None = None
         for thing in self._things:

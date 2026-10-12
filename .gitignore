@@ -3,6 +3,7 @@ sources/
 journaux/
 sauvegardes-carte/
 apercus-carte/
+captures/
 ui-ports.txt
 __pycache__/
 *.pyc

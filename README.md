@@ -35,6 +35,7 @@ Python 3.12) ; il se régénère avec
 | `lymow rappel-installer` / `rappel-desinstaller` | Active ou retire la connexion Google en un clic (gestionnaire Windows du protocole `myapp`, registre de l'utilisateur). |
 | `lymow diagnostic` | Jeton présent, rafraîchissement, appareils, MQTT, réception d'un état, micrologiciel. Ne publie rien. |
 | `lymow etat` | État du robot. `--passif` : n'émet aucune requête. `--attente S` : attente maximale (75 s). |
+| `lymow capture` | Diagnostic, lecture seule : écoute `--secondes N` (30 par défaut, 120 au plus) et enregistre chaque message reçu tel quel dans `captures/<horodatage>/` (ou `--dossier D`) : une fiche par message, `index.jsonl`, et un vidage structurel du protobuf. `--carte` : demande aussi la carte. Ces fichiers contiennent l'origine GPS du jardin : ils restent hors du dépôt. |
 | `lymow tourner (<degrés> \| --duree S) [--vitesse V]` | Pivote ; positif = gauche. 180° au plus. |
 | `lymow avancer (<mètres> \| --duree S) [--vitesse V]` | Avance ; 2 m au plus. |
 | `lymow reculer (<mètres> \| --duree S) [--vitesse V]` | Recule ; 2 m au plus. |

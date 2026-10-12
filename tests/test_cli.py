@@ -395,7 +395,11 @@ def test_deconnexion_efface_les_quatre_entrees_du_coffre_et_rien_d_autre(capsys,
     from lymow_pilotage import coffre
 
     effacees = []
+    # Le vrai coffre n'est ni lu ni modifié : le jeton y est simulé en deux morceaux.
+    contenu = {"jeton-rafraichissement": "#morceaux:2"}
+    monkeypatch.setattr(keyring, "get_password", lambda _service, cle: contenu.get(cle))
     monkeypatch.setattr(keyring, "delete_password", lambda service, cle: effacees.append((service, cle)))
     code, sortie = lancer(capsys, tmp_path, "deconnexion")
     assert code == 0 and "effacée" in sortie["connexion"]
-    assert effacees == [(coffre.SERVICE, cle) for cle in ("jeton-rafraichissement", "region", "appareil", "methode")]
+    attendues = ("jeton-rafraichissement#1", "jeton-rafraichissement#2", "jeton-rafraichissement", "region", "appareil", "methode")
+    assert effacees == [(coffre.SERVICE, cle) for cle in attendues]

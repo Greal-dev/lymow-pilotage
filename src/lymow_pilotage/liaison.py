@@ -13,7 +13,7 @@ jamais deux obtentions en parallèle.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 import re
@@ -161,6 +161,8 @@ async def ouvrir_session(
     autorisees: frozenset[Categorie],
     ident: Identifiants | None = None,
     acces: Acces | None = None,
+    *,
+    brut: Callable[[str, bytes | str, bool], None] | None = None,
 ) -> AsyncIterator[Session]:
     ident = ident or lire_identifiants()
     if acces is None:
@@ -173,6 +175,7 @@ async def ouvrir_session(
         on_state=lambda _appareil, fragment, retenu: receveur[0].recevoir_etat(fragment, retenu),
         on_online=lambda _appareil, en_ligne, retenu: receveur[0].recevoir_presence(en_ligne, retenu),
     )
+    client.on_raw = brut  # capture de diagnostic : chaque message, avant tout décodage
     lien = LienMqtt(client, ident, acces)
     receveur.append(Session(lien, ident.appareil, journal, cal, autorisees))
     await lien.connecter()
