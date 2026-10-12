@@ -19,7 +19,7 @@ from typing import Any
 
 import aiohttp
 
-from . import auth, carte, compte, conduite, config, journal, liaison, mouvement, rappel, retouche, securite
+from . import auth, capture, carte, compte, conduite, config, journal, liaison, mouvement, protocole, rappel, retouche, securite
 from .conduite import CODE_ARRET_NON_CONFIRME, CODE_REFUS
 from .journal import Journal, masquer
 from .mouvement import ErreurSaisie, Ordre
@@ -82,6 +82,20 @@ def construire_analyseur() -> argparse.ArgumentParser:
     diagnostic = ajouter("diagnostic", "vérifier l'accès de bout en bout, sans rien publier")
     etat = ajouter("etat", "afficher l'état du robot (lecture seule)")
     etat.add_argument("--passif", action="store_true", help="écoute seule : aucune requête émise")
+    ecoute = ajouter(
+        "capture",
+        "diagnostic : enregistrer tels quels les messages reçus du robot (lecture seule ; "
+        "n'émet que présence, demande de configuration et, avec --carte, demande de carte)",
+    )
+    ecoute.add_argument(
+        "--secondes", type=mouvement.lire_entier, default=capture.SECONDES_DEFAUT, metavar="N",
+        help=f"durée d'écoute, de 1 à {capture.SECONDES_MAX} (défaut : {capture.SECONDES_DEFAUT})",
+    )
+    ecoute.add_argument("--carte", action="store_true", help="demander aussi la carte entière (lecture)")
+    ecoute.add_argument(
+        "--dossier", default=None, metavar="D",
+        help=f"dossier des captures (défaut : {capture.DOSSIER}/ du dossier de données)",
+    )
     for lecture in (etat, diagnostic):
         lecture.add_argument(
             "--attente", type=mouvement.lire_nombre, default=75.0, metavar="S", help="attente maximale d'un état"
@@ -234,6 +248,29 @@ async def _commande_etat(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, 
     if not recu:
         resume["note"] = f"aucun état reçu en {ctx.attente:g} s : valeurs inconnues"
     return resume, 0 if recu else 1
+
+
+async def _commande_capture(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
+    if not 1 <= args.secondes <= capture.SECONDES_MAX:
+        raise ErreurSaisie(f"--secondes : de 1 à {capture.SECONDES_MAX}")
+    racine = Path(args.dossier).expanduser().resolve() if args.dossier else ctx.dossier / capture.DOSSIER
+    ecoute = capture.Enregistreur(racine / datetime.now().strftime("%Y%m%d-%H%M%S"))
+    # Lecture seule : `Session.publier` n'y laisse passer que la liste blanche des requêtes pures.
+    async with liaison.ouvrir_session(ctx.journal, ctx.cal, _LECTURE, brut=ecoute.recevoir) as session:
+        await session.solliciter()
+        if args.carte:
+            trame = protocole.trame_demande_carte(session.cal)
+            await session.publier(trame, 3.0)
+            session.journaliser("requete-emise", sujet=session.sujet, trame=trame.description())
+        fin = session.horloge() + args.secondes
+        while session.horloge() < fin and session.lien.connecte:
+            await session.dormir(min(1.0, fin - session.horloge()))
+        coupee = not session.lien.connecte
+    bilan = ecoute.resume() | {"secondes": args.secondes, "carte_demandee": args.carte}
+    if coupee:
+        bilan["note"] = "liaison perdue avant la fin de l'écoute"
+    ctx.journal.ecrire("capture", messages=bilan["messages"], octets=bilan["octets"])
+    return bilan, 0 if bilan["messages"] else 1
 
 
 async def _commande_diagnostic(_args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
@@ -425,7 +462,7 @@ _COMMANDES = {
     "rappel-installer": _commande_un_clic, "rappel-desinstaller": _commande_un_clic,
     "carte": _commande_carte, "ajuster-zone": _commande_ajuster, "restaurer-zone": _commande_restaurer,
     "connexion": _commande_connexion, "deconnexion": _commande_deconnexion,
-    "diagnostic": _commande_diagnostic, "etat": _commande_etat,
+    "diagnostic": _commande_diagnostic, "etat": _commande_etat, "capture": _commande_capture,
     "ui": _commande_ui,
 }
 

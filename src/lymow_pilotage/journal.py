@@ -34,6 +34,18 @@ _MOTIFS = (
 )
 
 
+_ACCES = re.compile(
+    rb"eyJ[\w-]{8,}\.[\w-]{8,}\.|(?:wss?|https?|myapp)://|X-Amz-|(?:AKIA|ASIA)[A-Z0-9]{12,}", re.ASCII
+)
+
+
+def contient_acces(octets: bytes) -> bool:
+    """SEC-06, pour des octets bruts : un secret connu, un jeton ou une URL y figure-t-il ?
+
+    Motifs stricts, en ASCII : un contenu binaire ne doit pas être écarté par hasard."""
+    return bool(_ACCES.search(octets)) or any(secret.encode() in octets for secret in _secrets_connus)
+
+
 def declarer_secret(valeur: object) -> None:
     """Enregistre une valeur à ne jamais laisser sortir (jeton, clé, mot de passe)."""
     if isinstance(valeur, str) and len(valeur) >= 6:
