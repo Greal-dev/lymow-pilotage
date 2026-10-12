@@ -30,9 +30,11 @@ CHAMP_REMOTE_CONTROL = 10
 CHAMP_MAP = 12
 CHAMP_UUID = 27
 CHAMP_MAP_RUN_TIME_CONFIG = 13
+CHAMP_BT_MAP = 23
 VERSIONS = (49, 40)
 
 _APPAREIL_VALIDE = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
+_ZONE_VALIDE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
 class Categorie(enum.Enum):
@@ -41,6 +43,7 @@ class Categorie(enum.Enum):
     ARRET = "arrêt"
     TACHE = "tâche"
     REGLAGE = "réglage"
+    CARTE = "écriture de carte"
 
 
 # SEC-01 : seuls codes userCtrl émissibles. Aucun ne démarre une tonte neuve ;
@@ -197,10 +200,41 @@ def trame_demande_configuration(cal: Calibration) -> Trame:
     return Trame("demande de configuration", Categorie.REQUETE_PURE, octets, champs)
 
 
+def trame_demande_carte(cal: Calibration) -> Trame:
+    """Demande de la carte entière (userCtrl 19, index 0) : une lecture, rien n'est modifié."""
+    octets = pb.encode_query_map(0, cal.version_protocole)
+    champs = {"version": cal.version_protocole, "userCtrl": socle.USER_CTRL_QUERY_MAP, "demande": "carte entière"}
+    return Trame("demande de carte", Categorie.REQUETE_PURE, octets, champs)
+
+
+def trame_contour_zone(identifiant: str, contour: list[tuple[float, float]], cal: Calibration) -> Trame:
+    """Retouche du contour d'UNE zone de tonte : userCtrl 9 + zone{identifiant, polygone}.
+
+    Seule écriture de carte de l'outil ; c'est la seule que le socle dit vérifiée en réel.
+    L'envoi de carte entière (que le robot ignore) n'existe pas ici. Bornes : SEC-10, dans `retouche`.
+    """
+    if not _ZONE_VALIDE.fullmatch(identifiant):
+        raise ValueError("identifiant de zone invalide")
+    if not 3 <= len(contour) <= securite.SOMMETS_MAX:
+        raise securite.RefusSecurite("contour refusé : nombre de sommets hors bornes (SEC-10)")
+    points = []
+    for x, y in contour:
+        securite._nombre_fini(x, "coordonnée")
+        securite._nombre_fini(y, "coordonnée")
+        points.append({"x": x, "y": y})
+    octets = pb.encode_set_zone_polygon(identifiant, points, cal.version_protocole)
+    champs = {
+        "version": cal.version_protocole, "userCtrl": socle.USER_CTRL_MODIFY_ZONE_INFO,
+        "zone": identifiant, "sommets": len(contour),
+    }
+    return Trame("retouche du contour d'une zone", Categorie.CARTE, octets, champs)
+
+
 def est_requete_pure(octets: bytes) -> bool:
     """Liste blanche structurelle des messages émissibles en lecture seule.
 
-    Deux formes exactes, rien d'autre :
+    Trois formes exactes, rien d'autre :
+    - demande de carte : {version(2), userCtrl(5)=19, champ 23={1: 0, 4: 1}} ;
     - présence : {appConnect(7)=2, uuid(27)} ;
     - demande de configuration : {version(2), baseInput(9)={champ 10 = 1}}.
     """
@@ -209,6 +243,15 @@ def est_requete_pure(octets: bytes) -> bool:
         numeros = sorted(numero for numero, _type, _valeur in champs)
         if numeros == [CHAMP_APP_CONNECT, CHAMP_UUID]:
             return pb._first(champs, CHAMP_APP_CONNECT) == 2
+        if numeros == [CHAMP_VERSION, CHAMP_USER_CTRL, CHAMP_BT_MAP]:
+            demande = pb._first(champs, CHAMP_BT_MAP)
+            return (
+                pb._first(champs, CHAMP_VERSION) in VERSIONS
+                and pb._first(champs, CHAMP_USER_CTRL) == socle.USER_CTRL_QUERY_MAP
+                and isinstance(demande, bytes)
+                and pb._decode_fields(demande) == [(1, 0, 0), (4, 0, 1)]
+                and octets == pb.encode_query_map(0, pb._first(champs, CHAMP_VERSION))
+            )
         if numeros == [CHAMP_VERSION, CHAMP_BASE_INPUT]:
             interne = pb._first(champs, CHAMP_BASE_INPUT)
             return (

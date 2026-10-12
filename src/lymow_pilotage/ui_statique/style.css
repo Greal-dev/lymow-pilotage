@@ -104,6 +104,35 @@ section, .ordre {
 .grille ul { margin: 0; padding-left: 1.1rem; }
 .perime .grille { opacity: 0.45; }
 .mise-en-avant { border: 2px solid var(--accent); }
+.large-bloc { grid-column: 1 / -1; }
+.cadre-carte { position: relative; border: 1px solid var(--trait); border-radius: 0.4rem; overflow: hidden; }
+.cadre-carte svg { display: block; width: 100%; height: min(70vh, 34rem); touch-action: none; cursor: grab; }
+.cadre-carte .nord { position: absolute; top: 0.4rem; right: 0.6rem; font-weight: 700; }
+.cadre-carte .echelle { position: absolute; left: 0.6rem; bottom: 0.4rem; font-size: 0.85rem; }
+#carte-barre { display: inline-block; height: 0.35rem; border: 2px solid var(--texte); border-top: 0;
+  margin-right: 0.4rem; vertical-align: middle; }
+.carte-zone { fill: #3f9d5c33; stroke: #2e7d46; }
+.carte-zone.choisie { fill: #3f9d5c66; stroke-width: 2.5px; }
+.carte-interdite { fill: #c6282855; stroke: #c62828; }
+.carte-passage { fill: none; stroke: #1565c0; }
+.carte-passage.station { stroke-dasharray: 6 4; }
+.carte-station { fill: #6a1b9a; }
+.carte-robot { fill: #ef6c00; stroke: var(--texte); }
+.carte-sommet { fill: var(--carte); stroke: #2e7d46; cursor: pointer; }
+.carte-sommet.borne { fill: #ef6c00; stroke: #ef6c00; }
+.carte-ancien { fill: none; stroke: #777777; stroke-dasharray: 4 4; }
+.carte-nouveau { fill: #ef6c0022; stroke: #ef6c00; stroke-width: 2.5px; }
+.cadre-carte svg * { vector-effect: non-scaling-stroke; }
+.carte-nom { fill: var(--texte); stroke: none; text-anchor: middle; }
+.legende { list-style: none; display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; padding: 0; margin: 0.5rem 0;
+  font-size: 0.9rem; }
+.legende span[class^="pastille-"] { display: inline-block; width: 0.9rem; height: 0.9rem; vertical-align: middle;
+  border: 2px solid; margin-right: 0.2rem; }
+.pastille-zone { background: #3f9d5c33; border-color: #2e7d46 !important; }
+.pastille-interdite { background: #c6282855; border-color: #c62828 !important; }
+.pastille-passage { border-color: #1565c0 !important; border-width: 0 0 3px 0 !important; }
+.pastille-station { background: #6a1b9a; border-color: #6a1b9a !important; }
+.pastille-robot { background: #ef6c00; border-color: var(--texte) !important; border-radius: 50%; }
 input.large { width: 100%; }
 code { font-family: ui-monospace, Consolas, monospace; font-size: 0.9em; }
 label { display: block; margin: 0.35rem 0; }

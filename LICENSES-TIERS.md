@@ -13,6 +13,11 @@ réécrit, avec l'attribution ci-dessous.
   copies partielles de `custom_components/lymow/` ; chaque fichier liste ses
   modifications dans son en-tête.
 
+- Jeu d'essai : `tests/donnees/reponse_trajet_ha_lymow.b64` est la copie de
+  `tests/data/query_path_response.b64` du même dépôt (réponse de trajet
+  capturée par son auteur), utilisée pour vérifier qu'elle n'est pas prise pour
+  une carte. Le dépôt ne contient aucune réponse de carte capturée.
+
 ```
 MIT License
 

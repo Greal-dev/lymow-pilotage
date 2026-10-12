@@ -71,6 +71,46 @@
       </p>
     </section>
 
+    <section id="bloc-carte" class="large-bloc" aria-labelledby="titre-carte">
+      <h2 id="titre-carte">Carte</h2>
+      <p class="actions">
+        <button id="carte-actualiser" type="button">Actualiser la carte</button>
+        <button id="carte-zoom-plus" type="button" aria-label="Zoomer">+</button>
+        <button id="carte-zoom-moins" type="button" aria-label="Dézoomer">−</button>
+        <button id="carte-recadrer" type="button">Recadrer</button>
+        <span id="carte-etat" class="note">aucune carte : cliquez sur « Actualiser la carte »</span>
+      </p>
+      <div class="cadre-carte">
+        <svg id="carte-dessin" role="img" aria-label="Carte du terrain, nord en haut"></svg>
+        <span class="nord" aria-hidden="true">N ↑</span>
+        <span class="echelle"><span id="carte-barre"></span><span id="carte-echelle"></span></span>
+      </div>
+      <ul class="legende">
+        <li><span class="pastille-zone"></span> zone de tonte</li>
+        <li><span class="pastille-interdite"></span> zone interdite</li>
+        <li><span class="pastille-passage"></span> passage (tirets : passage de station)</li>
+        <li><span class="pastille-station"></span> station</li>
+        <li><span class="pastille-robot"></span> robot (pointe = cap) <span id="carte-rtk"></span></li>
+      </ul>
+      <form id="carte-ajustement" class="ordre">
+        <h3>Ajuster la bordure d'une zone</h3>
+        <p class="note">Jamais essayé sur ce robot : commencez par +5 cm sur une zone sans enjeu. Choisissez la zone,
+          puis cliquez deux sommets de son contour sur la carte (début et fin de la portion).</p>
+        <label>Zone <select id="carte-zone"></select></label>
+        <label>Du sommet <input id="carte-de" inputmode="numeric" autocomplete="off"></label>
+        <label>au sommet <input id="carte-a" inputmode="numeric" autocomplete="off"></label>
+        <label>Côté de la boucle
+          <select id="carte-cote"><option value="court">le plus court</option><option value="long">le plus long</option>
+            <option value="tout">tout le contour</option></select>
+        </label>
+        <label>Largeur (cm) <input id="carte-cm" inputmode="decimal" autocomplete="off">
+          <small>de −50 à 50 ; positif = élargir vers l'extérieur, négatif = rogner</small></label>
+        <label>Raccords (m) <input id="carte-raccord" inputmode="decimal" autocomplete="off">
+          <small>0 à 5 (défaut 0,5) : longueur sur laquelle la bande s'efface à chaque extrémité</small></label>
+        <p class="actions"><button type="submit">Prévisualiser l'ajustement</button></p>
+      </form>
+    </section>
+
     <section aria-labelledby="titre-ordres">
       <h2 id="titre-ordres">Ordres</h2>
       <p class="note">Chaque ordre se prévisualise d'abord. Remplissez soit l'angle ou la distance, soit la durée.</p>
@@ -167,5 +207,6 @@
 
   <script src="/statique/signalisation.js"></script>
   <script src="/statique/app.js"></script>
+  <script src="/statique/carte.js"></script>
 </body>
 </html>

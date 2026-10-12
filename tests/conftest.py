@@ -18,6 +18,8 @@ APPAREIL = "robot-test"
 SUJET = "/device/robot-test/pbinput"
 ARRET = bytes.fromhex("10 31 52 0a 0d 00 00 00 00 15 00 00 00 00")
 DEMANDE_CONFIGURATION = bytes.fromhex("10 31 4a 02 50 01")
+DEMANDE_CARTE = bytes.fromhex("10 31 28 13 ba 01 04 08 00 20 01")
+ENTETE_ECRITURE_CARTE = bytes.fromhex("10 31 28 09")
 
 
 class Horloge:
@@ -62,6 +64,9 @@ class FauxLien:
         self.muet = False
         self.robot: dict | None = fragment()
         self.delai_robot = 0.0
+        self.carte: bytes | None = None  # contenu brut renvoyé à chaque demande de carte
+        self.carte_apres: bytes | None = None  # carte du faux robot après une écriture (None : il l'ignore)
+        self.ecritures: list[bytes] = []
         self.en_vol = 0
         self.max_en_vol = 0
 
@@ -79,6 +84,15 @@ class FauxLien:
         finally:
             self.en_vol -= 1
         self.publies.append((sujet, octets))
+        if octets == DEMANDE_CARTE and self.carte is not None and self.session is not None:
+            if self.delai_robot:
+                await asyncio.sleep(self.delai_robot)
+            self.horloge.t += 0.01
+            self.session.recevoir_etat({"mapRaw": self.carte})
+        if octets.startswith(ENTETE_ECRITURE_CARTE):  # userCtrl 9 : le faux robot applique, ou non
+            self.ecritures.append(octets)
+            if self.carte_apres is not None:
+                self.carte = self.carte_apres
         if octets == DEMANDE_CONFIGURATION and self.robot is not None and self.session is not None:
             if self.delai_robot:  # horloge réelle : la réponse doit être datée après la demande
                 await asyncio.sleep(self.delai_robot)

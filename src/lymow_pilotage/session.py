@@ -57,6 +57,7 @@ class Session:
         self.dormir = dormir
         self.signaler = signaler
         self.etat = Etat()
+        self.carte_brute: tuple[bytes, float] | None = None
         self.arret_en_cours = False
         self._differes: list[tuple[str, dict[str, Any]]] = []
         self._identifiant = uuid.uuid4().hex
@@ -80,6 +81,12 @@ class Session:
             self.journaliser("etat-retenu-ignore")
             return
         instant = self.horloge()
+        fragment = dict(fragment)
+        carte = fragment.pop("mapRaw", None)
+        if isinstance(carte, bytes):
+            # Octets gardés tels quels : la sauvegarde (SEC-09) et la comparaison (SEC-11) en dépendent.
+            self.carte_brute = (carte, instant)
+            self.journaliser("carte-recue", octets=len(carte))
         self.etat.appliquer(fragment, instant)
         # Un état émis à l'instant par le robot vaut preuve de présence.
         self.etat.en_ligne = True

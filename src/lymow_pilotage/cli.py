@@ -12,11 +12,13 @@ import getpass
 import json
 import sys
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import aiohttp
 
-from . import auth, compte, conduite, config, liaison, mouvement, securite
+from . import auth, carte, compte, conduite, config, liaison, mouvement, retouche, securite
 from .conduite import CODE_ARRET_NON_CONFIRME, CODE_REFUS
 from .journal import Journal, masquer
 from .mouvement import ErreurSaisie, Ordre
@@ -46,6 +48,7 @@ class Contexte:
     cal: config.Calibration
     journal: Journal
     attente: float
+    dossier: Path = Path(".")
 
 
 def _communs(defauts: bool) -> argparse.ArgumentParser:
@@ -130,6 +133,27 @@ def construire_analyseur() -> argparse.ArgumentParser:
         "sequence", 'enchaîner : "plateau 90; tourner 45 --vitesse 0.2; reculer --duree 2 --vitesse 0.1"'
     )
     sequence.add_argument("etapes", metavar='"étape; étape; …"')
+    ajouter("carte", "afficher la carte du robot : zones, zones interdites, passages, station (lecture seule)")
+    ajuster = ajouter(
+        "ajuster-zone",
+        "élargir (cm > 0) ou rogner (cm < 0) une bande le long d'une portion du contour d'une zone ; "
+        "simulation sans --reel",
+    )
+    ajuster.add_argument("zone", metavar="nom|identifiant")
+    ajuster.add_argument("--de", type=mouvement.lire_entier, required=True, metavar="I", help="indice du premier sommet")
+    ajuster.add_argument("--a", type=mouvement.lire_entier, required=True, metavar="J", help="indice du dernier sommet")
+    ajuster.add_argument(
+        "--cm", type=nombre, required=True, metavar="X",
+        help=f"largeur de la bande en cm, de -{securite.AJUSTEMENT_MAX_M * 100:g} à {securite.AJUSTEMENT_MAX_M * 100:g}",
+    )
+    ajuster.add_argument("--cote", choices=("court", "long", "tout"), default="court", help="côté de la boucle (défaut : court)")
+    ajuster.add_argument(
+        "--raccord", type=nombre, default=None, metavar="M",
+        help=f"longueur des raccords progressifs en m (défaut : {securite.RACCORD_DEFAUT_M:g})",
+    )
+    restaurer = ajouter("restaurer-zone", "remettre le contour d'une zone depuis une sauvegarde ; simulation sans --reel")
+    restaurer.add_argument("fichier", metavar="sauvegarde.pb")
+    restaurer.add_argument("--zone", default=None, metavar="nom|identifiant")
     interface = ajouter(
         "ui", "interface web locale (127.0.0.1 seulement) ; simulation sans --reel, quoi que demande la page ; "
         "la connexion au compte Google peut s'y faire"
@@ -152,7 +176,7 @@ async def _commande_ui(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, in
 
     if not 1024 <= args.port <= 65535:
         raise ErreurSaisie("port attendu entre 1024 et 65535")
-    return {"interface": await ui.servir(ctx.cal, ctx.journal, reel=args.reel, port=args.port)}, 0
+    return {"interface": await ui.servir(ctx.cal, ctx.journal, reel=args.reel, port=args.port, dossier=ctx.dossier)}, 0
 
 
 def _ordres(args: argparse.Namespace) -> list[Ordre]:
@@ -266,7 +290,54 @@ async def _commande_deconnexion(_args: argparse.Namespace, ctx: Contexte) -> tup
     return {"connexion": "effacée de ce poste (Gestionnaire d'identification Windows)"}, 0
 
 
+def _sans_contours(objet: Any) -> Any:
+    """Sortie lisible : les listes de points ne sont utiles qu'en JSON."""
+    if isinstance(objet, dict):
+        return {cle: _sans_contours(valeur) for cle, valeur in objet.items() if cle not in ("contour", "trace")}
+    if isinstance(objet, list):
+        return [_sans_contours(element) for element in objet]
+    return objet
+
+
+async def _commande_carte(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
+    async with liaison.ouvrir_session(ctx.journal, ctx.cal, _LECTURE) as session:
+        await session.solliciter()
+        recue = await carte.demander(session, securite.ATTENTE_CARTE_S)
+        await session.attendre("pose", None, 5.0)
+        etat = session.etat.resume(session.horloge())
+    robot = {cle: etat[cle] for cle in ("position_est_m", "position_nord_m", "cap_deg", "rtk", "age_position_s")}
+    resultat = {"horodatage": datetime.now().isoformat(timespec="seconds")} | carte.vers_json(recue) | {"robot": robot}
+    return (resultat if args.json else _sans_contours(resultat)), 0
+
+
+async def _retoucher(args: argparse.Namespace, ctx: Contexte, preparer: Any) -> tuple[Any, int]:
+    """Simulation : lit la carte (comme `etat`), calcule, écrit un aperçu. Réel : SEC-08 à SEC-11."""
+    autorisees = _AUTORISEES_ORDRES if args.reel else _LECTURE
+    async with liaison.ouvrir_session(ctx.journal, ctx.cal, autorisees) as session:
+        operation = preparer(await carte.demander(session, securite.ATTENTE_CARTE_S))
+        if args.reel:
+            return await retouche.emettre(session, operation, ctx.dossier)
+    apercu = retouche.ecrire_apercu(operation, ctx.dossier, datetime.now())
+    ctx.journal.ecrire("carte-simulee", ordre=operation.description, resume=operation.resume, apercu=str(apercu))
+    note = "simulation : la carte a été lue, rien n'a été écrit sur le robot ; ajoutez --reel pour émettre"
+    return {"mode": "simulation", "ordre": operation.description} | operation.resume | {"apercu": str(apercu), "note": note}, 0
+
+
+async def _commande_ajuster(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
+    return await _retoucher(
+        args, ctx, lambda recue: retouche.preparer_ajustement(recue, args.zone, args.de, args.a, args.cm, args.cote, args.raccord)
+    )
+
+
+async def _commande_restaurer(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
+    sauvegarde = retouche.charger_sauvegarde(Path(args.fichier))
+    return await _retoucher(
+        args, ctx, lambda recue: retouche.preparer_restauration(recue, sauvegarde, args.zone, args.fichier)
+    )
+
+
 _COMMANDES = {
+    "carte": _commande_carte, "ajuster-zone": _commande_ajuster, "restaurer-zone": _commande_restaurer,
     "connexion": _commande_connexion, "deconnexion": _commande_deconnexion,
     "diagnostic": _commande_diagnostic, "etat": _commande_etat,
     "ui": _commande_ui,
@@ -318,7 +389,7 @@ def main(argv: list[str] | None = None) -> int:
     fabrique = asyncio.SelectorEventLoop if sys.platform == "win32" else None
     try:
         dossier = config.dossier_donnees(args.donnees)
-        ctx = Contexte(config.charger_calibration(dossier), Journal(dossier), getattr(args, "attente", 75.0))
+        ctx = Contexte(config.charger_calibration(dossier), Journal(dossier), getattr(args, "attente", 75.0), dossier)
         commande = _COMMANDES.get(args.commande, _commande_ordres)
         resultat, code = asyncio.run(commande(args, ctx), loop_factory=fabrique)
     except (KeyboardInterrupt, asyncio.CancelledError):
@@ -330,7 +401,7 @@ def main(argv: list[str] | None = None) -> int:
             return CODE_ARRET_NON_CONFIRME
         if args.commande == "ui":
             _retenir_la_fenetre()
-        refus = (RefusSecurite, ErreurSaisie, config.ErreurConfiguration)
+        refus = (RefusSecurite, ErreurSaisie, config.ErreurConfiguration, carte.CarteIllisible)
         return CODE_REFUS if isinstance(erreur, refus) else 1
     if code == CODE_ARRET_NON_CONFIRME:
         print(_ALERTE_ARRET, file=sys.stderr, flush=True)  # en tête, avant tout compte rendu

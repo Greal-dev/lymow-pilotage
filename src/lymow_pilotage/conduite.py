@@ -46,6 +46,11 @@ LIBELLES = {
     "avance_m": "avance le long du cap (m)", "verifie": "ordre vérifié par le constat",
     "lecture": "lecture de l'essai", "exposition": "exposition maximale",
     "etat_recu": "état reçu", "perime": "état périmé", "code_sortie": "code de sortie",
+    "ecart_cm": "écart (cm)", "raccord_m": "raccord (m)", "sommets_deplaces": "sommets déplacés",
+    "deplacement_max_cm": "déplacement maximal (cm)", "surface_avant_m2": "surface avant (m²)",
+    "surface_apres_m2": "surface après (m²)", "variation_m2": "variation de surface (m²)",
+    "surface_m2": "surface (m²)", "zones_interdites": "zones interdites", "passage_de_station": "passage de station",
+    "cote": "côté", "apercu": "aperçu", "differences": "différences", "horodatage": "horodatage",
 }
 
 

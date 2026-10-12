@@ -43,6 +43,9 @@ Python 3.12) ; il se régénère avec
 | `lymow sequence "plateau 90; tourner 45 --vitesse 0.2; reculer --duree 2 --vitesse 0.1"` | Enchaîne ; rien ne part si une étape est refusable ; s'arrête au premier refus, échec ou constat non confirmé. Étapes : `tourner`, `avancer`, `reculer`, `plateau`, `plateau-haut`, `stop`. `--reel` et `essai-arret-auto` y sont interdits. |
 | `lymow reprendre` / `base` / `annuler` | Reprise de tâche (4), retour base tâche conservée (33), annulation sur place (28). |
 | `lymow ui [--reel] [--port N]` | Interface web locale avec retour vidéo (voir « Interface web locale »). |
+| `lymow carte` | Carte du robot : zones, zones interdites, passages, station (lecture seule ; contours complets avec `--json`). |
+| `lymow ajuster-zone <nom\|id> --de I --a J --cm X [--cote court\|long\|tout] [--raccord M]` | Élargit ou rogne une bande le long d'un bord d'une zone (voir « Carte et ajustement de zone »). |
+| `lymow restaurer-zone <sauvegarde.pb> [--zone nom]` | Remet le contour d'une zone depuis une sauvegarde. |
 | `lymow essai-arret-auto [--vitesse V] [--observation S]` | Calibration, robot à vue : une seule consigne avant, puis silence, puis arrêt (voir « Calibration »). |
 
 Options communes, avant ou après la commande : `--reel` (émettre vraiment),
@@ -122,8 +125,9 @@ navigateur et s'arrête sur Ctrl+C. `lancer-lymow.cmd` (double-clic) lance
   réservée à la ligne de commande. Ces actions sont refusées pendant un
   mouvement.
 - Avec un compte enregistré, l'interface ouvre la liaison même en simulation,
-  pour afficher l'état : elle n'émet alors que les deux requêtes pures
-  (présence et demande de configuration), jamais un ordre.
+  pour afficher l'état : elle n'émet alors que des requêtes pures (présence,
+  demande de configuration, et demande de carte sur « Actualiser la carte »),
+  jamais un ordre ni une écriture de carte.
 - En mode réel, ne fermez pas la fenêtre du terminal pendant un mouvement
   (voir « Ce que l'arrêt garanti ne couvre pas »).
 
@@ -258,10 +262,89 @@ Secrets : seul le jeton de rafraîchissement est conservé, dans le Gestionnaire
 d'identification Windows (service `lymow-pilotage`), avec la région,
 l'identifiant d'appareil et la méthode de connexion. Rien dans un fichier.
 
-En lecture (`etat`), deux messages « requête pure » peuvent partir, et eux
-seuls : le battement de présence (`appConnect = 2` + identifiant de session) et
-la demande de configuration (`version` + champ 9 `{10: 1}`). `--passif` et
-`diagnostic` n'émettent rien.
+En lecture, trois messages « requête pure » peuvent partir, et eux seuls,
+contrôlés sur la structure exacte de leurs octets : le battement de présence
+(`appConnect = 2` + identifiant de session), la demande de configuration
+(`version` + champ 9 `{10: 1}`) et la demande de carte entière (`version`,
+`userCtrl 19`, champ 23 `{1: 0, 4: 1}`). `--passif` et `diagnostic` n'émettent
+rien. La demande de trajet parcouru (userCtrl 23) n'est pas retenue : elle
+porte un index de paquet, et rien ne dit qu'un seul paquet suffise.
+
+## Carte et ajustement de zone
+
+**La retouche de contour n'a jamais été essayée sur ce robot.** Le socle la dit
+« vérifiée en réel » sur le sien ; ici, seule la logique est testée, sur un faux
+robot. Commencez par **+5 cm sur une zone sans enjeu**, robot à la station, et
+regardez le verdict et l'application du fabricant avant d'aller plus loin.
+
+Lecture : `lymow carte [--json]` et le panneau « Carte » de la page affichent
+les zones de tonte (nom, contour, surface), les zones interdites, les passages
+(dont le passage de station), la station, la position et le cap du robot en
+direct et la qualité RTK, dans le repère local en mètres (est vers la droite,
+nord en haut), avec échelle, zoom, déplacement et légende. La carte reçue est
+gardée en mémoire par le serveur ; son heure de réception est affichée. C'est
+une lecture : disponible sans `--reel` dès qu'un compte est connecté.
+
+Ajustement : « cette zone est en fait plus grande, ou plus petite, d'une bande
+de X cm le long de ce bord ».
+
+- Page : choisir la zone, cliquer deux sommets de son contour (début et fin de
+  la portion), choisir le côté court ou long de la boucle ou tout le contour,
+  saisir X en cm (positif = élargir vers l'extérieur, négatif = rogner) et la
+  longueur des raccords, puis « Prévisualiser l'ajustement » : ancien et
+  nouveau contours superposés, surface avant et après, déplacement maximal,
+  nombre de sommets déplacés, avertissements. « Émettre » ensuite, comme pour
+  un ordre (prévisualisation à usage unique, 60 s, confirmation).
+- Commande : `lymow ajuster-zone <nom|id> --de I --a J --cm X [--cote
+  court|long|tout] [--raccord M]`. Sans `--reel` : lit la carte, affiche le
+  résumé et écrit un aperçu SVG dans `apercus-carte/`. Les indices de sommet
+  sont ceux de `lymow carte --json` (à partir de 0).
+- Retour arrière : `lymow restaurer-zone <sauvegarde.pb> [--zone nom]` renvoie
+  l'ancien contour d'UNE zone par le même chemin et sous les mêmes règles
+  (donc 50 cm au plus par restauration : une sauvegarde par opération).
+
+Ce que fait le calcul : il déplace les sommets existants de la portion le long
+de la normale extérieure, sans en ajouter ni en retirer ; sur une portion
+ouverte l'écart croît de 0 à X sur la longueur du raccord à chaque extrémité.
+Aux angles, la bande est donc un peu plus mince que X.
+
+| Paramètre | Bornes | Défaut |
+|---|---|---|
+| Largeur X | −50 à +50 cm, non nulle | obligatoire |
+| Sommets `--de`, `--a` | indices du contour de la zone | obligatoires |
+| Côté | `court`, `long`, `tout` | `court` |
+| Raccord | 0 à 5 m (0 = toute la portion d'un bloc) | 0,5 m |
+
+Règles, codées en dur :
+
+- **SEC-08** Une carte ne s'écrit qu'en mode réel, après prévisualisation,
+  robot en ligne avec un état frais et un statut au repos ou en charge (0, 1,
+  5, 12 — refus en tonte, pause, erreur, télécommande, retour), et sans aucun
+  autre ordre en cours.
+- **SEC-09** Avant toute écriture, la carte complète telle que reçue est
+  sauvegardée dans `sauvegardes-carte/` (octets bruts `.pb` et JSON lisible),
+  puis relue ; si la carte en mémoire a plus de 60 s elle est redemandée ; si
+  elle a changé depuis la prévisualisation, ou si la sauvegarde échoue : refus.
+- **SEC-10** Bornes de la retouche : |X| ≤ 50 cm ; contour résultant simple,
+  sans sommets confondus, de même sens et de même nombre de sommets ; surface
+  qui varie dans le sens de X ; aucun sommet déplacé de plus de |X| ; toute
+  zone interdite rattachée reste strictement à l'intérieur ; chaque passage et
+  la station qui touchaient la zone la touchent encore. Un seul manquement :
+  refus, avec le motif exact.
+- **SEC-11** Après l'écriture, la carte est redemandée et comparée : contour
+  relu contre contour envoyé, et nom, réglages, zones interdites, passages,
+  station et autres zones inchangés. Verdict : « appliqué », « ignoré par le
+  robot » ou « DIFFÉRENCE INATTENDUE » (message en tête, chemin de la
+  sauvegarde et commande de restauration) ; « non vérifié » si la carte n'a pas
+  pu être relue.
+
+Seule écriture de carte de l'outil : la retouche du contour d'une zone
+(userCtrl 9 + zone et polygone). L'envoi de carte entière, que le robot ignore
+d'après le socle, n'existe pas dans ce projet.
+
+À savoir : la carte est supposée tenir dans une seule réponse du robot ; les
+contrôles de SEC-10 ne regardent pas le chevauchement avec une autre zone de
+tonte ; la surface et les bornes que le robot recalcule ne sont pas comparées.
 
 ## Ce qui reste incertain
 
