@@ -25,7 +25,15 @@
         <button id="compte-connecter" type="button">Se connecter avec Google</button>
         <button id="compte-deconnecter" type="button" hidden>Se déconnecter de ce poste</button>
       </p>
+      <p class="actions">
+        <span id="un-clic-etat" class="note">connexion en un clic : …</span>
+        <button id="un-clic-activer" type="button" hidden>Activer la connexion en un clic</button>
+        <button id="un-clic-desactiver" type="button" hidden>Désactiver</button>
+      </p>
+      <p id="un-clic-attente" class="note" hidden>Windows va demander d'ouvrir Lymow : acceptez. Cette page se mettra
+        à jour seule dès la connexion faite.</p>
       <div id="compte-marche" hidden>
+        <p class="note">Repli manuel, si la connexion en un clic est inactive ou n'aboutit pas :</p>
         <ol>
           <li>Dans l'onglet qui vient de s'ouvrir, ouvrez les outils de développement (F12), onglet « Réseau ».</li>
           <li>Cochez « Conserver le journal » (« Preserve log ») <strong>avant</strong> de valider la connexion Google.</li>

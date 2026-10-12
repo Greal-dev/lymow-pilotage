@@ -117,6 +117,66 @@ class FauxLien:
         return [o for o in self.trames if o == ARRET]
 
 
+class FauxRegistre:
+    """Double du module `winreg` : un dictionnaire en mémoire, jamais le registre de la machine."""
+
+    HKEY_CURRENT_USER = "HKCU"
+    REG_SZ = 1
+
+    class _Cle:
+        def __init__(self, valeurs: dict) -> None:
+            self.valeurs = valeurs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    def __init__(self) -> None:
+        self.cles: dict[str, dict[str, str]] = {}
+        self.ecritures = 0
+
+    def OpenKey(self, _racine, chemin):  # noqa: N802 — noms de l'API Windows
+        if chemin not in self.cles:
+            raise FileNotFoundError(chemin)
+        return self._Cle(self.cles[chemin])
+
+    def CreateKey(self, _racine, chemin):  # noqa: N802
+        morceaux = chemin.split("\\")
+        for rang in range(1, len(morceaux) + 1):  # comme Windows : les clés parentes sont créées
+            self.cles.setdefault("\\".join(morceaux[:rang]), {})
+        self.ecritures += 1
+        return self._Cle(self.cles[chemin])
+
+    def SetValueEx(self, cle, nom, _reserve, _type, valeur):  # noqa: N802
+        cle.valeurs[nom] = valeur
+        self.ecritures += 1
+
+    def QueryValueEx(self, cle, nom):  # noqa: N802
+        if nom not in cle.valeurs:
+            raise FileNotFoundError(nom)
+        return cle.valeurs[nom], self.REG_SZ
+
+    def DeleteKey(self, _racine, chemin):  # noqa: N802
+        if chemin not in self.cles:
+            raise FileNotFoundError(chemin)
+        if any(autre.startswith(chemin + "\\") for autre in self.cles):
+            raise PermissionError("la clé a des sous-clés")
+        del self.cles[chemin]
+        self.ecritures += 1
+
+
+@pytest.fixture(autouse=True)
+def registre(monkeypatch) -> FauxRegistre:
+    """Aucun test ne lit ni n'écrit le registre Windows réel."""
+    from lymow_pilotage import rappel
+
+    faux = FauxRegistre()
+    monkeypatch.setattr(rappel, "_registre_reel", lambda: faux)
+    return faux
+
+
 @pytest.fixture(autouse=True)
 def _isolement(monkeypatch):
     def interdit(*_args, **_kwargs):
