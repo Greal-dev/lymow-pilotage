@@ -79,13 +79,13 @@ section, .ordre {
 .pilotage { display: grid; gap: 0.9rem; grid-template-columns: minmax(0, 2fr) minmax(17rem, 1fr); align-items: start; }
 @media (max-width: 56rem) { .pilotage { grid-template-columns: 1fr; } }
 .pave { position: absolute; right: 0.5rem; bottom: 0.5rem; display: grid; grid-template-columns: repeat(3, 2.9rem);
-  grid-template-rows: repeat(2, 2.9rem); gap: 0.3rem; }
+  grid-template-rows: repeat(3, 2.9rem); gap: 0.3rem; }
 .pave .fleche { border: 2px solid #ffffff; border-radius: 0.4rem; background: #000000aa; color: #ffffff; cursor: pointer; }
 .pave .fleche:disabled { opacity: 0.35; cursor: default; }
 .fleche { font-size: 1.7rem; font-weight: 700; }
 .fleche.haut { grid-column: 2; grid-row: 1; }
 .fleche.gauche { grid-column: 1; grid-row: 2; }
-.fleche.bas { grid-column: 2; grid-row: 2; }
+.fleche.bas { grid-column: 2; grid-row: 3; }
 .fleche.droite { grid-column: 3; grid-row: 2; }
 .miniature { display: block; width: 8rem; height: 5.2rem; flex: none; border: 1px solid var(--trait); border-radius: 0.4rem; }
 .miniature * { vector-effect: non-scaling-stroke; }
@@ -364,3 +364,9 @@ button.pastille-etat { cursor: pointer; min-height: 2.5rem; }
 #direct-etat:empty { display: none; }
 .vue-carte input[type="checkbox"] { width: auto; margin: 0; }
 .actions-robot { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+/* Diagonales (arcs) : aux quatre coins des deux pavés. */
+.fleche.haut-gauche { grid-column: 1; grid-row: 1; }
+.fleche.haut-droite { grid-column: 3; grid-row: 1; }
+.fleche.bas-gauche { grid-column: 1; grid-row: 3; }
+.fleche.bas-droite { grid-column: 3; grid-row: 3; }
+.croix .fleche.haut-gauche, .croix .fleche.haut-droite, .croix .fleche.bas-gauche, .croix .fleche.bas-droite { font-size: 1.4rem; }

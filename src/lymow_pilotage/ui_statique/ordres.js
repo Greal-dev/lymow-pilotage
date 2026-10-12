@@ -248,6 +248,7 @@
   function raccourciDistance(e) {
     var balise = String(e.balise || "").toUpperCase();
     if (!e.actives || balise === "INPUT" || balise === "SELECT" || balise === "TEXTAREA" || e.editable) { return null; }
+    if (String(e.code || "").indexOf("Numpad") === 0) { return null; }  // pavé numérique : les diagonales
     var rang = ["1", "2", "3", "4", "5", "6"].indexOf(e.key);
     return rang >= 0 && rang < e.nombre ? rang : null;
   }

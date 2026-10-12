@@ -36,7 +36,7 @@ POSITION_NON_FOURNIE = (
     "position non fournie par le robot : déplacement non vérifiable par l'outil (utilisez la vidéo)"
 )
 
-MOUVEMENTS = ("tourner", "avancer", "reculer")
+MOUVEMENTS = ("tourner", "avancer", "reculer", "arc")
 ESSAI = "essai-arret-auto"
 EXPOSITION_ESSAI = (
     f"au plus {securite.ESSAI_VITESSE_MAX_M_S:g} m/s × {securite.ESSAI_OBSERVATION_MAX_S:g} s = "
@@ -82,11 +82,14 @@ class Ordre:
     vitesse: float | None = None
     duree: float | None = None
     force: bool = False  # SEC-13 : « Forcer ce pas » — le garde-fou carte est levé pour cet ordre, et journalisé
+    angle: float | None = None  # arc seulement : rotation en degrés (positif = le cap tourne à gauche)
 
     def __str__(self) -> str:
         mots = [self.nom]
         if self.valeur is not None:
             mots.append(f"{self.valeur:g}")
+        if self.angle is not None:
+            mots.append(f"{self.angle:g}")
         if self.duree is not None:
             mots.append(f"{'--observation' if self.nom == ESSAI else '--duree'} {self.duree:g}")
         if self.vitesse is not None:
@@ -128,14 +131,15 @@ def analyser_etape(texte: str) -> Ordre:
                 raise ErreurSaisie(f"option « {mot} » refusée dans l'étape « {texte.strip()} »")
             else:
                 positionnels.append(mot)
-        attendus = (0, 1) if nom in MOUVEMENTS else (1,) if nom == "plateau" else (0,)
+        attendus = (2,) if nom == "arc" else (0, 1) if nom in MOUVEMENTS else (1,) if nom == "plateau" else (0,)
         if len(positionnels) not in attendus:
             raise ErreurSaisie(f"nombre de valeurs inattendu dans « {texte.strip()} »")
         lire = lire_entier if nom == "plateau" else lire_nombre
         valeur = lire(positionnels[0]) if positionnels else None
+        angle = lire_nombre(positionnels[1]) if nom == "arc" else None
     except ValueError:
         raise ErreurSaisie(f"valeur illisible dans « {texte.strip()} »") from None
-    return Ordre(nom, valeur, options.get("--vitesse"), options.get("--duree"))
+    return Ordre(nom, valeur, options.get("--vitesse"), options.get("--duree"), angle=angle)
 
 
 def analyser_sequence(texte: str) -> list[Ordre]:
@@ -150,6 +154,15 @@ def consigne_de(ordre: Ordre, cal: Calibration) -> Consigne:
     """SEC-02 : plafonds appliqués ici, en simulation comme en réel."""
     if ordre.nom == ESSAI:
         return securite.consigne_essai(ordre.vitesse, ordre.duree)
+    if ordre.nom == "arc":
+        if ordre.valeur is None or ordre.angle is None or ordre.duree is not None:
+            raise RefusSecurite("arc : une distance et un angle sont exigés, sans --duree (SEC-02)")
+        return securite.consigne_arc(
+            ordre.valeur, ordre.angle, cal.facteur_distance, cal.facteur_angle, cal.signe_angulaire, cal.voie_m,
+            vitesse=ordre.vitesse,
+        )
+    if ordre.angle is not None:
+        raise RefusSecurite(f"« {ordre.nom} » n'accepte pas d'angle (SEC-02)")
     if ordre.nom == "tourner":
         return securite.consigne_rotation(
             ordre.valeur, cal.facteur_angle, cal.signe_angulaire, vitesse=ordre.vitesse, duree=ordre.duree
@@ -182,6 +195,13 @@ def valider(ordre: Ordre, cal: Calibration) -> None:
 
 def _grandeurs(consigne: Consigne) -> dict[str, Any]:
     """Vitesse et déplacement commandé (vitesse × durée), toujours affichés."""
+    if consigne.attendu == "arc":
+        return {
+            "vitesse_m_s": round(abs(consigne.lineaire), 3), "vitesse_rad_s": round(abs(consigne.angulaire), 3),
+            "deplacement_commande_m": round(abs(consigne.lineaire) * consigne.duree, 3),
+            "deplacement_commande_deg": round(math.degrees(abs(consigne.angulaire) * consigne.duree), 1),
+            "rotation_visee_deg": round(consigne.angle, 1),
+        } | ({"arc": consigne.annonce} if consigne.annonce else {})
     if consigne.attendu == "rotation":
         return {
             "vitesse_rad_s": abs(consigne.angulaire),
@@ -476,6 +496,22 @@ def _age_de_la_pose(session: Session) -> float | None:
     return None if recue is None else session.horloge() - recue
 
 
+def _avertir_de_l_arc(session: Session, ordre: Ordre) -> dict[str, Any]:
+    """SEC-13 pour un arc : toujours un simple avertissement, calculé sur son point d'arrivée (la corde)."""
+    consigne = consigne_de(ordre, session.cal)
+    devant, gauche = securite.arrivee_arc(consigne.valeur, consigne.angle)
+    pose = session.etat.pose
+    corde = math.hypot(devant, gauche)
+    jugement = garde_carte.juger_pas(
+        session.carte_reference, _sur_la_carte(session, pose),
+        None if pose is None else pose.cap_deg + math.degrees(math.atan2(gauche, devant)), corde,
+        session.etat.precision_m, _age_de_la_pose(session),
+    )
+    texte, alerte = garde_carte.constat(jugement, corde)
+    texte = texte.replace(" devant à ", " vers l'arrivée de l'arc à ").replace(" derrière à ", " vers l'arrivée de l'arc à ")
+    return {"garde_carte": texte, "garde_carte_alerte": alerte}
+
+
 def _garder_le_pas(session: Session, ordre: Ordre) -> tuple[Ordre, dict[str, Any]]:
     """SEC-13 : une avance ou un recul est projeté sur la carte de référence avant d'être émis.
 
@@ -486,6 +522,8 @@ def _garder_le_pas(session: Session, ordre: Ordre) -> tuple[Ordre, dict[str, Any
     être fausse, et il faut pouvoir sortir d'une zone) : c'est journalisé. Sans pose ou sans carte, aucun
     garde-fou n'est possible : dit au bilan, sans bloquer. L'allure lente est choisie près d'un bord ou
     quand la position n'est pas fiable, sauf vitesse choisie par l'opérateur."""
+    if ordre.nom == "arc":
+        return ordre, _avertir_de_l_arc(session, ordre)
     if ordre.nom not in ("avancer", "reculer") or ordre.valeur is None:
         return ordre, {}
     pose, precision = session.etat.pose, session.etat.precision_m
@@ -594,7 +632,9 @@ async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
     rapport = {"mode": "réel", "ordre": str(ordre), "emissions": emissions} | depart | sous_attestation | garde_fou | await constater(
         session, avant, instant_arret, consigne
     )
-    if "garde_carte" in garde_fou and not session.arret_aux_bords:  # la carte, après le pas aussi
+    if consigne.annonce:
+        rapport["arc"] = consigne.annonce
+    if "garde_carte" in garde_fou and not session.arret_aux_bords and consigne.attendu != "arc":  # la carte, après le pas aussi
         apres = session.etat.pose
         suite = garde_carte.juger_pas(
             session.carte_reference, _sur_la_carte(session, apres),
@@ -885,6 +925,28 @@ def _juger_rotation(avant: Pose, apres: Pose, ordre_deg: float) -> tuple[dict[st
     return mesures, None
 
 
+def _juger_arc(avant: Pose, apres: Pose, ordre_m: float, ordre_deg: float) -> tuple[dict[str, Any], str | None]:
+    """Arc : distance ET rotation mesurées contre commandées (la distance mesurée est la corde de l'arc)."""
+    distance, rotation = avant.vers(apres)
+    avance = avant.avance(apres)
+    corde = math.hypot(*securite.arrivee_arc(ordre_m, ordre_deg))
+    mesures = {
+        "deplacement_m": round(distance, 3), "avance_m": round(avance, 3), "rotation_deg": round(rotation, 1),
+        "corde_attendue_m": round(corde, 3), "rotation_attendue_deg": round(ordre_deg, 1),
+    }
+    if distance < securite.SEUIL_DEPLACEMENT_M and abs(rotation) < securite.SEUIL_ROTATION_DEG:
+        return mesures, IMMOBILE
+    if avance * ordre_m < 0 and distance >= securite.SEUIL_DEPLACEMENT_M:
+        return mesures, f"déplacement dans le mauvais sens ({avance:+.2f} m mesurés pour {ordre_m:+g} m ordonnés)"
+    if abs(rotation) >= securite.SENS_MARGE_DEG and rotation * ordre_deg < 0:
+        return mesures, f"rotation dans le mauvais sens ({rotation:+.0f}° mesurés pour {ordre_deg:+.0f}° ordonnés)"
+    if distance > securite.EXCES_FACTEUR * corde + securite.EXCES_MARGE_M:
+        return mesures, f"déplacement nettement supérieur à l'ordre ({distance:.2f} m pour {corde:.2f} m)"
+    if abs(rotation) > securite.EXCES_FACTEUR * abs(ordre_deg) + securite.EXCES_MARGE_DEG:
+        return mesures, f"rotation nettement supérieure à l'ordre ({abs(rotation):.0f}° pour {abs(ordre_deg):.0f}°)"
+    return mesures, None
+
+
 async def constater(
     session: Session, avant: Pose | None, instant: float, consigne: Consigne | None
 ) -> dict[str, Any]:
@@ -924,8 +986,11 @@ async def constater(
     elif apres is None or avant is None:
         rapport |= {"constat": POSITION_NON_FOURNIE, "cause_probable": diagnostic.CAUSE_POSE_RARE}
     else:
-        juger = _juger_translation if consigne.attendu == "translation" else _juger_rotation
-        mesures, anomalie = juger(avant, apres, consigne.valeur)
+        if consigne.attendu == "arc":
+            mesures, anomalie = _juger_arc(avant, apres, consigne.valeur, consigne.angle)
+        else:
+            juger = _juger_translation if consigne.attendu == "translation" else _juger_rotation
+            mesures, anomalie = juger(avant, apres, consigne.valeur)
         rapport |= mesures | {
             "verifie": anomalie is None, "verification": ANOMALIE if anomalie else VERIFIEE,
             "constat": anomalie or "déplacement constaté",

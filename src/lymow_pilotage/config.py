@@ -69,6 +69,7 @@ class Calibration:
     version_protocole: int = 49
     plateau_haut_mm: int = 100
     variante_hauteur: str = "socle"
+    voie_m: float = 0.45  # écart entre les chenilles : estimation, à calibrer
 
 
 _CHOIX = {
@@ -87,6 +88,8 @@ def _valider(nom: str, valeur: object, defaut: object) -> None:
         raise ErreurConfiguration(f"{NOM_CALIBRATION} : « {nom} » doit valoir l'un de {_CHOIX[nom]}")
     if nom.startswith("facteur_") and not _FACTEUR_MIN <= valeur <= _FACTEUR_MAX:
         raise ErreurConfiguration(f"{NOM_CALIBRATION} : « {nom} » doit rester entre {_FACTEUR_MIN} et {_FACTEUR_MAX}")
+    if nom == "voie_m" and not 0.2 <= valeur <= 1.0:
+        raise ErreurConfiguration(f"{NOM_CALIBRATION} : « {nom} » doit rester entre 0.2 et 1.0 m")
     if nom == "plateau_haut_mm" and not securite.PLATEAU_HAUT_MIN_MM <= valeur <= securite.HAUTEUR_MAX_MM:
         raise ErreurConfiguration(
             f"{NOM_CALIBRATION} : « {nom} » doit rester entre "

@@ -355,6 +355,56 @@ réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même
   à vue ou vidéo ouverte. Non vérifié en réel : ce panneau n'a été testé que
   hors ligne.
 
+### Les huit directions, et l'arc
+
+Les deux pavés (à gauche, et sur la caméra) ont huit flèches autour de STOP.
+Les diagonales émettent un **arc** : une seule consigne tenue, vitesse
+linéaire ET angulaire, les deux chenilles dans le même sens à des vitesses
+différentes — pour virer en douceur, sans pivoter sur place.
+
+| Flèche | Effet | Clavier | Commande équivalente (pas de 1 m, 45°) |
+|---|---|---|---|
+| ↑ | avancer | ↑ | `lymow avancer 1` |
+| ↓ | reculer | ↓ | `lymow reculer 1` |
+| ← | tourner à gauche, sur place | ← | `lymow tourner 45` |
+| → | tourner à droite, sur place | → | `lymow tourner -45` |
+| ↖ | avancer en virant à gauche | pavé numérique 7, ou ↑ et ← ensemble | `lymow arc 1 45` |
+| ↗ | avancer en virant à droite | pavé numérique 9, ou ↑ et → ensemble | `lymow arc 1 -45` |
+| ↙ | reculer, l'arrière partant à gauche | pavé numérique 1, ou ↓ et ← ensemble | `lymow arc -1 -45` |
+| ↘ | reculer, l'arrière partant à droite | pavé numérique 3, ou ↓ et → ensemble | `lymow arc -1 45` |
+
+`lymow arc <mètres> <degrés>` : mètres négatifs = recul ; degrés positifs =
+le cap tourne à gauche. En marche arrière, c'est comme une voiture : pour
+que l'arrière parte à gauche, le cap tourne à droite (degrés négatifs).
+`--vitesse` est accepté ; l'arc entre aussi dans `sequence` (« arc 1 45 »),
+dans le pilotage direct et dans la composition (pastille « ↗ 1 m / 45° »,
+tracé courbe dans la miniature).
+
+Calcul : la distance et l'angle sont parcourus sur la même durée ; la
+vitesse est réduite jusqu'à tenir les plafonds (linéaire 0,25 m/s,
+angulaire 0,35 rad/s, et chenille extérieure pas plus rapide qu'en ligne
+droite). Mêmes bornes que les ordres simples (SEC-02) : 2 m, 180°, 9 s —
+un arc trop long est refusé avec ce qu'il faut changer (« 2 m / 90° »
+durerait 9,4 s). La chenille intérieure garde au moins 20 % de la vitesse
+de l'ordre : si l'angle demandé l'arrêterait ou l'inverserait, **le virage
+est adouci et c'est annoncé** (« virage adouci : 51° au lieu de 90° » pour
+un pas de 0,25 m). Tous les autres invariants valent comme pour un pas
+droit : statut du robot, arrêt garanti, un seul mouvement, surveillance,
+journal. Après l'arc, la distance (la corde de l'arc) et la rotation
+mesurées sont comparées à celles commandées ; l'avertissement de carte est
+calculé sur le point d'arrivée, et reste un simple avertissement.
+
+Au clavier, une flèche seule part après 120 ms : si une seconde flèche
+arrive dans les 150 ms (ou pendant que la première est tenue), c'est la
+diagonale qui part, jamais un pas droit d'abord.
+
+**Le rayon du virage dépend de la voie** (écart entre les chenilles),
+`voie_m = 0.45` dans `calibration.toml` : c'est une **estimation, à
+calibrer** — aucune des sources ne la donne. Une voie plus grande adoucit
+davantage. `calibration-constat` ne traite pas encore les arcs : comparer à
+la main « rotation mesurée » et « rotation attendue » dans le retour des
+pas. Rien de tout cela n'a été essayé sur le robot réel.
+
 ### Robot en erreur
 
 Constat de l'essai réel du 2026-10-12 : en statut « en erreur » (erreur 44,

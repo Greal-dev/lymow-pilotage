@@ -8,7 +8,7 @@ dépendance (aiohttp, déjà requis, parle au navigateur par son protocole de d�
 ou Chrome s'il en trouve un ; sinon il le dit et s'arrête.
 
 Usage :
-    python outils/essai_navigateur.py <dossier-de-sortie> [recalage] [boutons] [--navigateur CHEMIN]
+    python outils/essai_navigateur.py <dossier-de-sortie> [recalage] [boutons] [diagonales] [--navigateur CHEMIN]
 """
 
 from __future__ import annotations
@@ -91,6 +91,12 @@ class Page:
     async def touche(self, nom: str) -> None:
         for genre in ("rawKeyDown", "keyUp"):
             await self.appel("Input.dispatchKeyEvent", type=genre, key=nom, code=nom, windowsVirtualKeyCode=TOUCHES[nom])
+
+    async def appuyer(self, nom: str) -> None:
+        await self.appel("Input.dispatchKeyEvent", type="rawKeyDown", key=nom, code=nom, windowsVirtualKeyCode=TOUCHES[nom])
+
+    async def relacher(self, nom: str) -> None:
+        await self.appel("Input.dispatchKeyEvent", type="keyUp", key=nom, code=nom, windowsVirtualKeyCode=TOUCHES[nom])
 
     async def clic(self, x: float, y: float) -> None:
         """Un clic de souris RÉEL (pressé puis relâché), aux coordonnées de la fenêtre."""
@@ -253,6 +259,59 @@ async def scenario_boutons(page: Page, serveur: Any, donnees: Path) -> dict[str,
     return bilan
 
 
+async def scenario_diagonales(page: Page, serveur: Any, donnees: Path) -> dict[str, Any]:
+    """Clique réellement les quatre diagonales du pavé de gauche : le robot fictif doit décrire un arc (position ET
+    cap changent). Puis ↑ et ← pressées ensemble : une diagonale, sans pas droit avant."""
+    import math
+
+    bilan: dict[str, Any] = {"clics": {}}
+    robot = serveur.session.lien
+    await page.cliquer("#onglet-camera")
+    await page.cliquer("#segments-distance button:nth-child(2)")  # 0,5 m
+    await page.cliquer("#segments-angle button:nth-child(2)")  # 45°
+    if not await page.js("document.getElementById('etat-main').textContent.indexOf('Vous avez la main') !== -1"):
+        await page.cliquer("#prendre-main")
+    await page.jusqu_a("!document.querySelector('.croix [data-fleche=\\'haut-gauche\\']').disabled")
+
+    async def fin_du_pas(nombre: int) -> None:
+        for _ in range(200):
+            if not serveur.occupe and len(serveur.direct.faites) > nombre:
+                return
+            await page.attendre(0.2)
+
+    for direction in ("haut-gauche", "haut-droite", "bas-gauche", "bas-droite"):
+        avant = (robot.est, robot.nord, robot.cap)
+        nombre = len(serveur.direct.faites)
+        clique = await page.cliquer(f".croix [data-fleche='{direction}']")
+        await fin_du_pas(nombre)
+        rapport = serveur.direct.faites[-1]["rapport"] if len(serveur.direct.faites) > nombre else {}
+        dx, dy = robot.est - avant[0], robot.nord - avant[1]
+        devant = dx * math.cos(avant[2]) + dy * math.sin(avant[2])
+        gauche = -dx * math.sin(avant[2]) + dy * math.cos(avant[2])
+        tourne = math.degrees((robot.cap - avant[2] + math.pi) % (2 * math.pi) - math.pi)
+        bilan["clics"][direction] = {
+            "clique": clique, "ordre": rapport.get("ordre"), "verification": rapport.get("verification"),
+            "vers_l_avant_m": round(devant, 2), "vers_la_gauche_m": round(gauche, 2), "cap_deg": round(tourne, 1),
+        }
+    bilan["pastilles"] = await page.js("document.getElementById('fil').textContent")
+    # Clavier : ↑ puis ← aussitôt (tenues ensemble) → UNE diagonale, aucun pas droit.
+    nombre = len(serveur.direct.faites)
+    await page.appuyer("ArrowUp")
+    await page.appuyer("ArrowLeft")
+    await page.relacher("ArrowUp")
+    await page.relacher("ArrowLeft")
+    await fin_du_pas(nombre)
+    await page.attendre(1.0)
+    bilan["clavier_haut_et_gauche"] = [f["rapport"].get("ordre") for f in serveur.direct.faites[nombre:]]
+    # Une flèche seule part toujours, après sa courte temporisation.
+    nombre = len(serveur.direct.faites)
+    await page.touche("ArrowRight")
+    await fin_du_pas(nombre)
+    bilan["clavier_droite_seule"] = [f["rapport"].get("ordre") for f in serveur.direct.faites[nombre:]]
+    await page.capture("diagonales.png")
+    return bilan
+
+
 async def principal(sortie: Path, scenarios: list[str], navigateur: str | None) -> int:
     chemin = navigateur or next((n for n in NAVIGATEURS if Path(n).exists()), None)
     if chemin is None:
@@ -291,6 +350,8 @@ async def principal(sortie: Path, scenarios: list[str], navigateur: str | None) 
                 await page.capture("ouverture.png")
                 if "recalage" in scenarios:
                     compte_rendu["recalage"] = await scenario_recalage(page, serveur, donnees)
+                if "diagonales" in scenarios:
+                    compte_rendu["diagonales"] = await scenario_diagonales(page, serveur, donnees)
                 if "boutons" in scenarios:
                     compte_rendu["boutons"] = await scenario_boutons(page, serveur, donnees)
                 compte_rendu["boites_de_dialogue"] = page.dialogues
@@ -312,4 +373,4 @@ if __name__ == "__main__":
         del arguments[rang : rang + 2]
     if not arguments:
         raise SystemExit(__doc__)
-    raise SystemExit(asyncio.run(principal(Path(arguments[0]).resolve(), arguments[1:] or ["recalage", "boutons"], navigateur)))
+    raise SystemExit(asyncio.run(principal(Path(arguments[0]).resolve(), arguments[1:] or ["recalage", "diagonales", "boutons"], navigateur)))

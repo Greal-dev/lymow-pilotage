@@ -73,7 +73,7 @@ def test_sections_repliees_par_defaut_et_ecran_principal_dans_un_seul_bloc():
     assert positions == sorted(positions)
     for identifiant in ("onglet-camera", "onglet-carte", "video", "vue-camera", "vue-carte", "carte-dessin", "carte-suivre", "carte-precision"):
         assert f'id="{identifiant}"' in droite and f'id="{identifiant}"' not in gauche
-    assert droite.count("data-fleche=") == 4 and 'id="vue-carte" class="vue-carte" role="tabpanel" hidden' in droite
+    assert droite.count("data-fleche=") == 8 and 'id="vue-carte" class="vue-carte" role="tabpanel" hidden' in droite
     style = (ui.STATIQUE / "style.css").read_text(encoding="utf-8")
     assert "grid-template-columns: minmax(0, 2fr) minmax(0, 3fr)" in style  # ≈ 40 % / 60 %
     assert "@media (max-width: 1099px)" in style and ".colonne-vue { order: -1; }" in style  # étroit : caméra d'abord
@@ -87,9 +87,9 @@ def test_une_seule_bascule_pour_les_fleches_et_plus_de_bouton_clavier_separe():
     script = (ui.STATIQUE / "pave.js").read_text(encoding="utf-8")
     assert PAGE.count('id="fleches-bascule"') == 1 and "Flèches : activer" in PAGE and 'aria-pressed="false"' in PAGE
     assert "pave-clavier" not in PAGE + script and "Activer le clavier" not in PAGE
-    assert PAGE.count("data-fleche=") == 8 and PAGE.count('data-fleche="haut" aria-label="Avancer"') == 2  # gauche + caméra
+    assert PAGE.count("data-fleche=") == 16 and PAGE.count('data-fleche="haut" aria-label="Avancer"') == 2  # gauche + caméra
     cadre = PAGE[PAGE.index('id="vue-camera"') : PAGE.index('id="vue-carte"')]
-    assert cadre.count("data-fleche=") == 4 and 'id="video"' in cadre  # flèches en surimpression de la caméra
+    assert cadre.count("data-fleche=") == 8 and 'id="video"' in cadre  # flèches en surimpression de la caméra
     assert "bouton.disabled = !actives" in script and "if (!actives) { return; }" in script and "actives: actives" in script
     # UN geste : la bascule arme aussi le pilotage direct ; plus de second interrupteur.
     assert "direct-interrupteur" not in PAGE + script and 'id="composer" type="checkbox"' in PAGE

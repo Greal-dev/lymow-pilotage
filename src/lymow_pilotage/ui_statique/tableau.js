@@ -97,7 +97,7 @@
   document.addEventListener("keydown", function (evenement) {
     var cible = evenement.target || {};
     var rang = Ordres.raccourciDistance({
-      key: evenement.key, balise: cible.tagName, editable: cible.isContentEditable,
+      key: evenement.key, code: evenement.code, balise: cible.tagName, editable: cible.isContentEditable,
       actives: Boolean(window.LymowPave && window.LymowPave.flechesActives()), nombre: $("pave-distance").options.length
     });
     if (rang === null) { return; }

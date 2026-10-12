@@ -29,6 +29,11 @@ DIRECTIONS: dict[str, tuple[str, float]] = {
 }
 # Allure d'une avance ou d'un recul : « auto » laisse l'outil choisir (lente près d'un bord, SEC-13).
 ALLURES: dict[str, float | None] = {"auto": None, "lente": 0.10, "normale": 0.25}
+# Diagonales : avancer ou reculer en tournant (ordre « arc »). (signe des mètres, signe des degrés) — en marche
+# arrière, comme une voiture : « bas-gauche » envoie l'arrière à gauche, donc le cap tourne à DROITE.
+DIAGONALES: dict[str, tuple[float, float]] = {
+    "haut-gauche": (1.0, 1.0), "haut-droite": (1.0, -1.0), "bas-gauche": (-1.0, -1.0), "bas-droite": (-1.0, 1.0),
+}
 FILE_MAX = 8  # appuis empilés pendant un pas (5 jusqu'au 2026-10-12)
 # Inactivité : cinq minutes sans action sur la page (60 s jusqu'au 2026-10-12 : la main se perdait trop vite).
 DUREE_ARMEMENT_S = 300.0
@@ -41,11 +46,25 @@ class RefusDirect(Exception):
 
 
 def ordre(
-    direction: object, pas: object, allure: object = "auto", forcer: object = False, facteur_distance: float = 1.0
+    direction: object, pas: object, allure: object = "auto", forcer: object = False, facteur_distance: float = 1.0,
+    angle: object = None,
 ) -> Ordre:
     """La flèche et son pas → l'ordre. Tout ce qui n'est pas exactement dans les listes est refusé."""
+    if isinstance(direction, str) and direction in DIAGONALES:
+        for valeur, permis, nom in ((pas, DISTANCES_M, "distance"), (angle, ANGLES_DEG, "angle")):
+            if isinstance(valeur, bool) or not isinstance(valeur, (int, float)) or valeur not in permis:
+                raise ErreurSaisie(f"{nom} hors liste pour une diagonale : " + ", ".join(f"{v:g}" for v in permis))
+        if not isinstance(allure, str) or allure not in ALLURES or forcer is not False:
+            raise ErreurSaisie("allure inconnue : auto, lente ou normale")
+        signe_m, signe_deg = DIAGONALES[direction]
+        vitesse = ALLURES[allure]
+        if allure == "lente":  # comme un pas droit : la plus faible vitesse qui tient dans la durée d'un ordre
+            vitesse = garde_carte.vitesse_lente(float(pas), facteur_distance)
+        return Ordre("arc", signe_m * float(pas), vitesse=vitesse, angle=signe_deg * float(angle))
+    if angle is not None:
+        raise ErreurSaisie("un angle ne vaut que pour une diagonale")
     if not isinstance(direction, str) or direction not in DIRECTIONS:
-        raise ErreurSaisie("flèche inconnue : haut, bas, gauche ou droite")
+        raise ErreurSaisie("flèche inconnue : haut, bas, gauche, droite, ou une diagonale")
     if isinstance(pas, bool) or not isinstance(pas, (int, float)):
         raise ErreurSaisie("pas numérique attendu")
     nom, signe = DIRECTIONS[direction]
