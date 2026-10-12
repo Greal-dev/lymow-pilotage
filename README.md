@@ -44,6 +44,7 @@ Python 3.12) ; il se régénère avec
 | `lymow stop` | Consigne nulle émise 3 fois, sans précondition, puis mise en pause de la tâche (userCtrl 3 ; 21 si le dernier état connu indique un retour à la base). |
 | `lymow sequence "plateau 90; tourner 45 --vitesse 0.2; reculer --duree 2 --vitesse 0.1"` | Enchaîne ; rien ne part si une étape est refusable ; s'arrête au premier refus, échec ou constat non confirmé. Étapes : `tourner`, `avancer`, `reculer`, `plateau`, `plateau-haut`, `stop`. `--reel` et `essai-arret-auto` y sont interdits. |
 | `lymow pause` | Met la tâche en pause (3), ou le retour à la base (21) : la pause de `stop`, sans les consignes nulles. |
+| `lymow calibration-constat` | Hors ligne : relit les constats vérifiés des ordres réels du journal et donne, par vitesse, le rapport mesuré / commandé, sa dispersion et le facteur suggéré. Ne modifie rien. |
 | `lymow reprendre` / `base` / `annuler` | Reprise de tâche (4), retour base tâche conservée (33), annulation sur place (28). |
 | `lymow ui [--reel \| --demo] [--port N]` | Interface web locale avec retour vidéo (voir « Interface web locale ») ; `--demo` : robot et jardin fictifs, sans compte ni réseau. |
 | `lymow carte` | Carte du robot : zones, zones interdites, passages, station (lecture seule ; contours complets avec `--json`). Une grande carte arrive coupée à 81 920 octets (constat du 2026-10-12) : les tranches suivantes sont demandées une à une (hypothèse à confirmer en réel), et une carte restée tronquée est refusée avec son motif. |
@@ -399,6 +400,32 @@ réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même
   « émise, non vérifiable »…, pourquoi la séquence s'est arrêtée, et les
   étapes restantes ; la page propose « Reprendre à l'étape N », qui repasse
   par Prévisualiser puis Émettre.
+- **SEC-12 Reprise et qualité de localisation** (constat du 2026-10-12 :
+  après une perte de signal, la position annoncée suit les manœuvres mais
+  reste imprécise de 1,1 à 1,5 m, et la tonte reprise ainsi « fait n'importe
+  quoi »). La qualité se lit sur la précision horizontale en mètres que le
+  robot annonce à chaque trame : **fiable** jusqu'à 0,10 m, **dégradée**
+  jusqu'à 0,50 m, **perdue** au-delà ou si elle est inconnue. Elle est
+  affichée dans l'en-tête et sous la vidéo (« position : ±1,32 m —
+  perdue »). `reprendre` est refusé quand elle n'est pas fiable, avec ce
+  qu'il faut faire ; « Reprendre quand même » (page) ou
+  `lymow reprendre --position-imprecise-acceptee` lève la garde, sur
+  confirmation, et le journal le note (`reprise-forcee`) : c'est une aide,
+  pas un verrou. Le retour à la base porte le même avertissement, sans
+  blocage. Dans les trames réelles, seuls existent : satellites, précision
+  horizontale, précision verticale, qualité, état du nœud de localisation ;
+  ni l'âge des corrections RTK ni l'état du lien radio de la base n'y
+  figurent.
+- **Retrouver le signal.** Après chaque pas, le retour donne la précision et
+  sa tendance (« position ±0,84 m ↘ en amélioration »). La précision est
+  relevée par position dans `releve-precision.jsonl` (dossier de données,
+  hors dépôt ; un point au plus tous les 2 m ou 30 s) et la carte peut
+  l'afficher (case « précision relevée » : vert, orange, rouge).
+- **Rendre la main à l'application** (barre de commande) : ferme la liaison
+  de l'outil et suspend sa reconnexion automatique jusqu'à « Reprendre la
+  liaison » ; retire l'attestation et l'armement direct ; n'émet rien vers
+  le robot ; refusé pendant un mouvement. Si le robot est encore en
+  télécommande, la page propose d'attendre son retour en pause.
 - **Diagnostic des ordres réels** : pendant un ordre réel (et 20 s après,
   depuis la page), les trames reçues sont enregistrées telles quelles dans
   `captures/ordre-<horodatage>/`, au format de `lymow capture`. Jamais

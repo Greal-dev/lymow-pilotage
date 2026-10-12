@@ -57,7 +57,8 @@
     var morceaux = [etat.en_ligne === true ? "en ligne" : etat.en_ligne === false ? "HORS LIGNE" : "présence inconnue"];
     morceaux.push((etat.statut_libelle || "statut inconnu") + (etat.tache_libelle ? " (tâche : " + etat.tache_libelle + ")" : ""));
     if (typeof etat.batterie_pct === "number") { morceaux.push("batterie " + etat.batterie_pct + " %"); }
-    if (etat.rtk) { morceaux.push(etat.rtk); }
+    // La précision en mètres, pas un libellé RTK non confirmé.
+    if (etat.localisation_texte) { morceaux.push(etat.localisation_texte); }
     return morceaux.join(" · ") + (etat.perime ? " (état ancien)" : "");
   }
 
@@ -85,6 +86,10 @@
     return {
       pause: Boolean(ordres && ordres.action === "pause" && !occupe),
       reprendre: Boolean(ordres && ordres.reprise_possible && !occupe),
+      // SEC-12 : position imprécise — la reprise simple serait refusée ; « quand même » reste possible.
+      avertissementPosition: ordres && ordres.reprise_possible && ordres.avertissement_position
+        ? ordres.avertissement_position : "",
+      reprendreQuandMeme: Boolean(ordres && ordres.reprise_possible && ordres.avertissement_position && !occupe),
       texte: ordres && ordres.pause ? ordres.pause.texte : ""
     };
   }
@@ -104,7 +109,12 @@
       + (reste < 600 ? "0" : "") + Math.floor(reste / 60) + ":" + (secondes < 10 ? "0" : "") + secondes;
   }
 
+  function libelleLiaison(suspendue) {
+    return suspendue ? "Reprendre la liaison" : "Rendre la main à l'application";
+  }
+
   var api = {
+    libelleLiaison: libelleLiaison,
     messageStatutDeclare: messageStatutDeclare,
     bandeauAttestation: bandeauAttestation,
     texteOrdre: texteOrdre,

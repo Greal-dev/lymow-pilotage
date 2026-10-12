@@ -18,6 +18,7 @@
   var apercu = null;
   var vue = { x: -10, y: -10, l: 20, h: 15 };
   var glisse = null;
+  var releve = []; // précision relevée : [est, nord, précision, qualité]
 
   function $(id) { return document.getElementById(id); }
 
@@ -112,6 +113,13 @@
           x: carte.station.est_m - demi, y: -carte.station.nord_m - demi, width: 2 * demi, height: 2 * demi
         }), "station de charge"));
       }
+    }
+    if ($("carte-precision").checked) {  // couche optionnelle : où le signal décroche, où il revient
+      releve.forEach(function (point) {
+        dessin.appendChild(titre(svg("circle", "releve " + point[3], {
+          cx: point[0], cy: -point[1], r: 4 * parPixel
+        }), "précision relevée : ±" + point[2] + " m (" + point[3] + ")"));
+      });
     }
     if (apercu) {
       dessin.appendChild(svg("polygon", "carte-ancien", { points: points(apercu.avant) }));
@@ -330,6 +338,15 @@
   $("carte-recadrer").addEventListener("click", toutVoir);
   $("carte-robot-cadrer").addEventListener("click", cadrerSurLeRobot);
   $("carte-noms").addEventListener("change", dessiner);
+  function lireReleve() {
+    if (!$("carte-precision").checked) { dessiner(); return; }
+    fetch("/api/releve", { credentials: "same-origin", cache: "no-store" })
+      .then(function (reponse) { return reponse.json(); })
+      .then(function (corps) { releve = corps.points || []; dessiner(); })
+      .catch(function () { return undefined; });
+  }
+  $("carte-precision").addEventListener("change", lireReleve);
+  window.setInterval(function () { if ($("carte-precision").checked) { lireReleve(); } }, 15000);
   $("carte-zone").addEventListener("change", zoneChangee);
   ["carte-de", "carte-a"].forEach(function (id) { $(id).addEventListener("input", function () { apercu = null; dessiner(); }); });
   $("carte-ajustement").addEventListener("submit", previsualiserAjustement);

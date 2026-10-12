@@ -305,6 +305,46 @@ def consigne_essai(vitesse: float | None, observation: float | None) -> Consigne
 
 
 
+# SEC-12 — qualité de localisation, jugée sur la PRÉCISION HORIZONTALE en mètres annoncée par le robot
+# (sous-champ 2 de la localisation). Constat du 2026-10-12 : 0,03 m le matin sur la station ; 1,14 à
+# 1,55 m pendant un pilotage après perte du signal, et la tonte reprise ensuite « fait n'importe quoi ».
+# Fiable jusqu'à 0,10 m ; dégradée jusqu'à 0,50 m ; perdue au-delà, ou inconnue.
+PRECISION_FIABLE_M = 0.10
+PRECISION_DEGRADEE_M = 0.50
+FIABLE, DEGRADEE, PERDUE = "fiable", "dégradée", "perdue"
+
+
+def qualite_position(precision_m: float | None) -> str:
+    if precision_m is None or not math.isfinite(precision_m) or precision_m < 0:
+        return PERDUE
+    return FIABLE if precision_m <= PRECISION_FIABLE_M else DEGRADEE if precision_m <= PRECISION_DEGRADEE_M else PERDUE
+
+
+def texte_precision(precision_m: float | None) -> str:
+    """« ±1,32 m », ou « précision inconnue » ; virgule décimale, comme le reste de la page."""
+    if precision_m is None or not math.isfinite(precision_m) or precision_m < 0:
+        return "précision inconnue"
+    return f"±{precision_m:.2f} m".replace(".", ",")
+
+
+def avertissement_position(precision_m: float | None) -> str | None:
+    """SEC-12 : ce que risque une tâche automatique lancée avec cette précision ; rien si elle est fiable."""
+    if qualite_position(precision_m) == FIABLE:
+        return None
+    cible = f"±{PRECISION_FIABLE_M:.2f} m".replace(".", ",")
+    return (
+        f"Position imprécise ({texte_precision(precision_m)}) : la tonte reprendrait au mauvais endroit. "
+        f"Conduisez le robot vers un endroit dégagé jusqu'à {cible}, ou renvoyez-le à la base."
+    )
+
+
+def verifier_precision_pour_reprise(precision_m: float | None) -> None:
+    """SEC-12 : pas de reprise à l'aveugle. Une aide, pas un verrou : « reprendre quand même » existe."""
+    avertissement = avertissement_position(precision_m)
+    if avertissement:
+        raise RefusSecurite(f"{avertissement} (SEC-12)")
+
+
 # Statuts où la mise en pause rend la main : tonte (2, 8, 9), retour à la base (4), dégagement (14).
 # Le retour déjà en pause (10) n'en fait pas partie : une seconde pause n'y changerait rien.
 STATUTS_PAUSE_UTILE = socle.WORK_STATUS_MOWING_GROUP | {socle.WORK_STATUS_DOCKING, socle.WORK_STATUS_ESCAPING}

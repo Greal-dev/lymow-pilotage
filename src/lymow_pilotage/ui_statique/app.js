@@ -9,6 +9,7 @@
   var previsualisation = null;
   var Ordres = window.LymowOrdres;
   var occupe = false;
+  var liaisonSuspendue = false;
   var noteEmission = "";
   var reprise = null;
   var modeReel = false;
@@ -127,6 +128,13 @@
     $("pause-raccourci").hidden = !gestes.pause;
     $("reprendre-rappel").hidden = !gestes.reprendre;
     $("pause-etat").textContent = gestes.texte;
+    $("reprise-avertissement").textContent = gestes.avertissementPosition;
+    $("reprendre-quand-meme").hidden = !gestes.reprendreQuandMeme;
+    // Qualité de localisation : la précision en mètres, à chaque trame.
+    $("localisation").textContent = image.etat ? image.etat.localisation_texte : "";
+    $("localisation").className = "localisation " + (image.etat ? image.etat.localisation : "perdue");
+    liaisonSuspendue = Boolean(image.liaison_suspendue);
+    $("rendre-main").textContent = Ordres.libelleLiaison(liaisonSuspendue);
     afficherAttestation(image.attestation);
     afficherEmission();
     $("appareil").textContent = image.appareil || "";
@@ -607,6 +615,19 @@
   $("sequence-previsualiser").addEventListener("click", function () { previsualiser(sequence.slice(), false); });
   $("sequence-vider").addEventListener("click", function () { sequence = []; afficherSequence(); });
   $("emettre").addEventListener("click", emettre);
+  $("rendre-main").addEventListener("click", async function () {
+    // Rendre la main : la liaison est fermée et ne se rouvre plus seule ; rien n'est émis vers le robot.
+    try {
+      if (liaisonSuspendue) { await appeler("/api/liaison/reprendre"); return; }
+      var reponse = await appeler("/api/liaison/rendre", {});
+      if (reponse.attendre && window.confirm(reponse.message + "\n\nRendre la main sans attendre ?")) {
+        reponse = await appeler("/api/liaison/rendre", { sans_attendre: true });
+      }
+      $("pause-etat").textContent = reponse.message || "";
+    } catch (erreur) {
+      $("pause-etat").textContent = "Refusé : " + erreur.message;
+    }
+  });
   $("pause-raccourci").addEventListener("click", async function () {
     // Une confirmation, puis la pause seule. Aucun mouvement n'est enchaîné : c'est à vous de rappuyer.
     if (!window.confirm("Mettre la tâche du robot en pause, pour prendre la main ?")) { return; }

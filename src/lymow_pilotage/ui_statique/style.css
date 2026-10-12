@@ -218,6 +218,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .ligne { margin: 0.1rem 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ligne:empty { display: none; }
 .ligne-etat { margin: 0.15rem 0; align-items: center; }
+.localisation { padding: 0.05rem 0.5rem; border-radius: 0.4rem; border: 2px solid #2e7d46; }
+.localisation.dégradée { border-color: #ef6c00; }
+.localisation.perdue { border-color: var(--danger); color: var(--danger); }
+.releve { stroke: none; }
+.releve.fiable { fill: #2e7d46; }
+.releve.dégradée { fill: #ef6c00; }
+.releve.perdue { fill: #c62828; }
 .ligne-etat .etat-ordres { margin: 0; }
 .raccourci { font-weight: 800; border: 2px solid var(--danger); border-radius: 0.4rem; padding: 0.25rem 0.7rem; }
 .ligne-sequence { display: flex; gap: 0.7rem; align-items: flex-start; margin-top: 0.3rem; }

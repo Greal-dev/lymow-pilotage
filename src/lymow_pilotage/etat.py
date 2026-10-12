@@ -10,6 +10,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import securite
 from .vendor.ha_lymow import const as socle
 
 CLE_STATUT, CLE_TACHE = "robotState", "workStatus"
@@ -108,6 +109,12 @@ class Etat:
         return Pose(round(est, 3), round(nord, 3), round(math.degrees(theta), 1))
 
     @property
+    def precision_m(self) -> float | None:
+        """Précision horizontale annoncée par le robot, en mètres (clé « rtkEastM » du socle, mal nommée)."""
+        valeur = self.donnees.get("rtkEastM")
+        return valeur if isinstance(valeur, float) and math.isfinite(valeur) and 0 <= valeur < 1000 else None
+
+    @property
     def hauteur_coupe_mm(self) -> int | None:
         return self.donnees.get("rcCutHeight")
 
@@ -132,6 +139,12 @@ class Etat:
             "age_position_s": None if self.recu_pose is None else round(instant - self.recu_pose, 1),
             "rtk": _libelle_rtk(rtk, d.get("rtkEastM")),
             "rtk_satellites": d.get("rtkSatellites"),
+            # SEC-12 : la qualité de localisation se lit sur la précision en mètres, à chaque trame.
+            "precision_m": None if self.precision_m is None else round(self.precision_m, 2),
+            "localisation": securite.qualite_position(self.precision_m),
+            "localisation_texte": (
+                f"position : {securite.texte_precision(self.precision_m)} — {securite.qualite_position(self.precision_m)}"
+            ),
             "signal_4g": d.get("lteSignalQuality"),
             "signal_wifi": d.get("wifiSignalQuality"),
             "wifi_rssi_dbm": d.get("wifiRssiDbm"),

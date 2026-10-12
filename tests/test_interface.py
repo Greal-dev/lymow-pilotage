@@ -159,24 +159,24 @@ def test_page_sections_fermees_par_defaut_et_compte_ouverte_si_non_connecte():
 @sans_node
 def test_page_etat_du_robot_en_une_ligne_et_gestes_proposes():
     etat = {"en_ligne": True, "statut_libelle": "tonte en pause", "tache_libelle": "tonte en cours", "batterie_pct": 80,
-            "rtk": "précision horizontale 0.02 m"}
+            "localisation_texte": "position : ±0,02 m — fiable"}
     assert js("ordres.js", "M.resumeEtat(a[0])", etat) == (
-        "en ligne · tonte en pause (tâche : tonte en cours) · batterie 80 % · précision horizontale 0.02 m"
+        "en ligne · tonte en pause (tâche : tonte en cours) · batterie 80 % · position : ±0,02 m — fiable"
     )
     pres = {"statut": "tonte en pause", "tache": "tonte en cours", "mouvement_refuse": None}
     assert js("ordres.js", "M.texteEtatDesOrdres(a[0])", pres) == "Robot : tonte en pause (tâche : tonte en cours)"
     assert js("ordres.js", "M.resumeEtat(a[0])", etat | {"en_ligne": False, "perime": True}).startswith("HORS LIGNE")
     assert js("ordres.js", "M.resumeEtat(null)") == "état du robot inconnu"
     tonte = {"action": "pause", "reprise_possible": False, "pause": None}
-    assert js("ordres.js", "M.gestesProposes(a[0], false)", tonte) == {"pause": True, "reprendre": False, "texte": ""}
+    gestes = js("ordres.js", "M.gestesProposes(a[0], false)", tonte)
+    assert (gestes["pause"], gestes["reprendre"], gestes["texte"], gestes["reprendreQuandMeme"]) == (True, False, "", False)
     assert js("ordres.js", "M.gestesProposes(a[0], true)", tonte)["pause"] is False  # pas pendant un ordre
     attente = {"action": None, "reprise_possible": False, "pause": {"etat": "en attente", "texte": "Pause demandée…"}}
     assert "attente de confirmation" in js("ordres.js", "M.blocageDesFleches(a[0])", attente)
     confirmee = {"action": None, "reprise_possible": True, "pause": {"etat": "confirmée", "texte": "Pause confirmée : flèches disponibles."}}
     assert js("ordres.js", "M.blocageDesFleches(a[0])", confirmee) == ""
-    assert js("ordres.js", "M.gestesProposes(a[0], false)", confirmee) == {
-        "pause": False, "reprendre": True, "texte": "Pause confirmée : flèches disponibles.",
-    }
+    gestes = js("ordres.js", "M.gestesProposes(a[0], false)", confirmee)
+    assert (gestes["pause"], gestes["reprendre"], gestes["texte"]) == (False, True, "Pause confirmée : flèches disponibles.")
 
 
 # --- refus en clair et actionnables (SEC-01 inchangé, seul l'énoncé change) -----------

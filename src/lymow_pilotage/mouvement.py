@@ -50,7 +50,10 @@ TACHES = {
     "annuler": socle.USER_CTRL_FORCE_REINIT,
     # Mise en pause de la tâche, seule : la même pause que celle de `stop`, sans les consignes nulles.
     "pause": socle.USER_CTRL_PAUSE,
+    # SEC-12 : la reprise malgré une position imprécise — même ordre, garde levée explicitement.
+    "reprendre-quand-meme": socle.USER_CTRL_RESUME,
 }
+REPRISE_FORCEE = "reprendre-quand-meme"
 ETAPES_SEQUENCE = (*MOUVEMENTS, *PLATEAUX, "stop")
 OPTIONS_MOUVEMENT = ("--vitesse", "--duree")
 _STATUTS_REPRISE = (socle.WORK_STATUS_PAUSE, socle.WORK_STATUS_REMOTE_CONTROL)
@@ -220,6 +223,8 @@ def simuler(ordre: Ordre, cal: Calibration, appareil: str | None) -> dict[str, A
         }
     else:
         trame = protocole.trame_tache(TACHES[ordre.nom], cal)
+        if ordre.nom == "reprendre":
+            resultat["garde"] = "refusé en réel si la position du robot est imprécise (SEC-12)"
         if ordre.nom == "pause":
             resultat["variante"] = f"userCtrl {socle.USER_CTRL_PAUSE_DOCK} si le robot rentre à sa base"
         elif ordre.nom != "annuler":
@@ -457,6 +462,7 @@ def _surveiller(session: Session, attestable: bool = False) -> None:
 async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
     consigne = consigne_de(ordre, session.cal)  # SEC-02
     avant = await _exiger_lames_arret(session, attestable=True)  # SEC-01, SEC-01b
+    precision_avant = session.etat.precision_m
     # SEC-01b : tout ordre émis pendant qu'une attestation est active le dit, au journal et au bilan.
     sous_attestation: dict[str, Any] = {}
     if _attestee(session):
@@ -492,7 +498,8 @@ async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
                 await arreter(session)
             finally:
                 session.journal.ecrire("ordre-termine", ordre=str(ordre), emissions=emissions)
-    return {"mode": "réel", "ordre": str(ordre), "emissions": emissions} | sous_attestation | await constater(
+    depart = {"precision_avant_m": None if precision_avant is None else round(precision_avant, 2)}
+    return {"mode": "réel", "ordre": str(ordre), "emissions": emissions} | depart | sous_attestation | await constater(
         session, avant, instant_arret, consigne
     )
 
@@ -627,9 +634,16 @@ async def executer_tache(session: Session, nom: str) -> dict[str, Any]:
         age = etat.age_statut(session.horloge())
         if etat.statut is None or age is None or age > securite.AGE_MAX_ETAT_S:
             raise RefusSecurite(f"« {nom} » refusé : aucun état frais du robot")
-        if nom == "reprendre" and etat.statut not in _STATUTS_REPRISE:
+        if nom in ("reprendre", REPRISE_FORCEE) and etat.statut not in _STATUTS_REPRISE:
             libelle = LIBELLES_STATUT.get(etat.statut, str(etat.statut))
             raise RefusSecurite(f"« reprendre » refusé : rien à reprendre (statut : {libelle})")
+        if nom == "reprendre":
+            securite.verifier_precision_pour_reprise(etat.precision_m)  # SEC-12 : pas de reprise à l'aveugle
+        elif nom == REPRISE_FORCEE:
+            session.journal.ecrire(  # SEC-12 : la garde levée par l'opérateur laisse une trace
+                "reprise-forcee", strict=True, precision_m=etat.precision_m,
+                localisation=securite.qualite_position(etat.precision_m),
+            )
         if nom == "pause":
             codes = [code_pause(etat.statut)]  # 21 pendant un retour à la base, 3 sinon : comme `stop`
         elif etat.statut == socle.WORK_STATUS_REMOTE_CONTROL:
@@ -642,7 +656,13 @@ async def executer_tache(session: Session, nom: str) -> dict[str, Any]:
             "ordre-emis", strict=True, ordre=nom, sujet=session.sujet, trame=trame.description()
         )
         await session.publier(trame, securite.DELAI_ARRET_S)
-    return {"mode": "réel", "ordre": nom, "codes_emis": codes} | await constater(session, avant, instant, None)
+    rapport: dict[str, Any] = {"mode": "réel", "ordre": nom, "codes_emis": codes}
+    if nom in ("base", REPRISE_FORCEE) and securite.avertissement_position(etat.precision_m):
+        # SEC-12 : avertissement sans blocage — le retour à la base aussi part d'une position incertaine.
+        rapport["avertissement"] = (
+            f"position imprécise ({securite.texte_precision(etat.precision_m)}) : le trajet automatique peut être erratique"
+        )
+    return rapport | await constater(session, avant, instant, None)
 
 
 # --- SEC-04 : constat -------------------------------------------------------------
@@ -696,7 +716,10 @@ async def constater(
         await session.attendre("pose", instant, max(0.0, reste))
     recu_pose = session.etat.recu_pose
     apres = session.etat.pose if recu_pose is not None and recu_pose > instant else None
+    precision = session.etat.precision_m if rafraichi else None
     rapport: dict[str, Any] = {
+        # Aide à retrouver le signal : la précision de position après chaque pas.
+        "precision_m": None if precision is None else round(precision, 2),
         "etat_rafraichi": rafraichi,
         "avant": _pose(avant),
         "apres": _pose(apres),

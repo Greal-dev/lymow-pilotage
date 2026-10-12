@@ -47,11 +47,13 @@
           <label title="Pas des flèches ← et →">←→ <select id="pave-angle"></select></label>
           <label class="case discret" title="Pilotage direct : chaque flèche émet tout de suite, sans prévisualisation. Confirmation demandée ; désarmé après 60 s sans action, sur STOP, sur tout refus."><input id="direct-interrupteur" type="checkbox"> Direct : armer</label>
           <button id="pave-plateau" type="button" title="Ajoute « plateau au plus haut » à la séquence">Plateau haut</button>
+          <button id="rendre-main" type="button" title="Ferme la liaison de cet outil et suspend sa reconnexion : l'application Lymow reprend la main. Rien n'est émis vers le robot.">Rendre la main à l'application</button>
           <button id="pause-bouton" type="button" data-tache="pause" title="Met la tâche (ou le retour à la base) en pause : se prévisualise, puis « Émettre ».">Pause</button>
         </div>
         <p id="pave-focus" class="note ligne" role="status"></p>
         <p class="actions ligne-etat">
           <span id="ordres-etat" class="etat-ordres" role="status"></span>
+          <strong id="localisation" class="localisation" role="status" title="Qualité de localisation, jugée sur la précision horizontale annoncée par le robot : fiable jusqu'à 0,10 m, dégradée jusqu'à 0,50 m, perdue au-delà."></strong>
           <button id="pause-raccourci" type="button" class="raccourci" hidden>Mettre en pause</button>
           <span id="pause-etat" class="note" role="status"></span>
           <span class="attestation-proposition" hidden>
@@ -62,6 +64,8 @@
           <span id="reprendre-rappel" hidden>
             <button id="reprendre-bouton" type="button" data-tache="reprendre">Reprendre la tâche</button>
             <span class="note">les lames peuvent redémarrer</span>
+            <span id="reprise-avertissement" class="avertissement" role="alert"></span>
+            <button id="reprendre-quand-meme" type="button" data-tache="reprendre-quand-meme" hidden>Reprendre quand même</button>
           </span>
         </p>
 
@@ -106,6 +110,7 @@
         <button id="carte-recadrer" type="button">Tout voir</button>
         <button id="carte-robot-cadrer" type="button" disabled title="position du robot inconnue">Cadrer sur le robot</button>
         <label class="case"><input id="carte-noms" type="checkbox" checked> noms</label>
+        <label class="case" title="Précision de position relevée au fil des passages : vert jusqu'à 0,10 m, orange jusqu'à 0,50 m, rouge au-delà."><input id="carte-precision" type="checkbox"> précision relevée</label>
         <span id="carte-etat" class="note">aucune carte : cliquez sur « Actualiser la carte »</span>
       </p>
       <div class="cadre-carte">

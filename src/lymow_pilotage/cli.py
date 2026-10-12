@@ -19,7 +19,7 @@ from typing import Any
 
 import aiohttp
 
-from . import auth, capture, carte, compte, conduite, config, journal, liaison, mouvement, rappel, retouche, securite
+from . import auth, calibrage, capture, carte, compte, conduite, config, journal, liaison, mouvement, rappel, retouche, securite
 from .conduite import CODE_ARRET_NON_CONFIRME, CODE_REFUS
 from .journal import Journal, masquer
 from .mouvement import ErreurSaisie, Ordre
@@ -146,7 +146,16 @@ def construire_analyseur() -> argparse.ArgumentParser:
         "annuler": "annuler la tâche, arrêt sur place",
     }
     for nom in _ORDRES_SIMPLES:
-        ajouter(nom, aides[nom])
+        simple = ajouter(nom, aides[nom])
+        if nom == "reprendre":
+            simple.add_argument(
+                "--position-imprecise-acceptee", action="store_true",
+                help="reprendre même si la position du robot est imprécise (SEC-12 : sinon refusé ; journalisé)",
+            )
+    ajouter(
+        "calibration-constat",
+        "hors ligne : rapport mesuré / commandé des ordres réels du journal, et facteurs suggérés (rien n'est modifié)",
+    )
     sequence = ajouter(
         "sequence", 'enchaîner : "plateau 90; tourner 45 --vitesse 0.2; reculer --duree 2 --vitesse 0.1"'
     )
@@ -232,6 +241,8 @@ def _ordres(args: argparse.Namespace) -> list[Ordre]:
     if args.commande == "sequence":
         return mouvement.analyser_sequence(args.etapes)
     lire = lambda nom: getattr(args, nom, None)  # noqa: E731
+    if args.commande == "reprendre" and lire("position_imprecise_acceptee"):
+        return [Ordre(mouvement.REPRISE_FORCEE)]  # SEC-12 : garde levée explicitement
     return [Ordre(args.commande, lire("valeur"), lire("vitesse"), lire("duree"))]
 
 
@@ -288,6 +299,11 @@ async def _commande_ordres(args: argparse.Namespace, ctx: Contexte) -> tuple[Any
     if bilan["etapes"]:
         return resume | bilan["etapes"][0], code
     return {"mode": bilan["mode"], "ordre": str(ordres[0]), "echec": bilan["motif"]} | resume, code
+
+
+async def _commande_calibration(_args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
+    resultat = calibrage.constat(ctx.dossier, ctx.cal)
+    return resultat, 0 if resultat["constats"] else 1
 
 
 async def _commande_etat(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
@@ -518,7 +534,7 @@ _COMMANDES = {
     "carte": _commande_carte, "ajuster-zone": _commande_ajuster, "restaurer-zone": _commande_restaurer,
     "connexion": _commande_connexion, "deconnexion": _commande_deconnexion,
     "diagnostic": _commande_diagnostic, "etat": _commande_etat, "capture": _commande_capture,
-    "ui": _commande_ui,
+    "ui": _commande_ui, "calibration-constat": _commande_calibration,
 }
 
 def _lignes(objet: Any, retrait: int = 0) -> list[str]:

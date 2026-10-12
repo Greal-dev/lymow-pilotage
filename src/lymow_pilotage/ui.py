@@ -28,7 +28,7 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
-from . import auth, capture, compte, conduite, demo, fleches, geometrie, liaison, mouvement, rappel, retouche, securite
+from . import auth, capture, compte, conduite, demo, fleches, geometrie, liaison, releve, mouvement, rappel, retouche, securite
 from . import carte as cartes
 from .config import Calibration
 from .journal import Journal, assainir, declarer_secret, masquer
@@ -72,6 +72,7 @@ SUITE_CAPTURE_S = 20.0
 DELAI_PAUSE_S = 15.0
 # Veille de la liaison : une coupure est vue et réparée sans attendre un clic.
 PERIODE_VEILLE_S = 2.0
+LIAISON_SUSPENDUE = "Liaison suspendue : l'application Lymow a la main"
 LIAISON_COUPEE = (
     "liaison coupée par le service — peut-être reprise par une autre application "
     "(l'application officielle ?) : reconnexion automatique"
@@ -205,6 +206,9 @@ class ServeurUI:
         # Pause demandée : (instant de la demande, échéance, statut attendu) ; jamais suivie d'un mouvement automatique.
         self._pause: tuple[float, float, int] | None = None
         self._direct_en_cours = False
+        # « Rendre la main à l'application » : liaison fermée, reconnexion automatique suspendue.
+        self.suspendue = False
+        self._releve = releve.Releve(self.dossier)
         # SEC-01b : attestation « lames à l'arrêt » de l'opérateur ; en mémoire, jamais active au lancement.
         self.attestation = securite.Attestation(lambda: self.horloge(), self._tracer_attestation)
         self._ecoute: capture.Enregistreur | None = None  # trames brutes pendant un ordre réel
@@ -236,6 +240,9 @@ class ServeurUI:
                 web.post("/api/emettre", self._emettre),
                 web.post("/api/stop", self._stop),
                 web.post("/api/pause", self._pause_raccourci),
+                web.post("/api/liaison/rendre", self._liaison_rendre),
+                web.post("/api/liaison/reprendre", self._liaison_reprendre),
+                web.get("/api/releve", self._releve_lire),
                 web.post("/api/direct/armer", self._direct_armer),
                 web.post("/api/direct/desarmer", self._direct_desarmer),
                 web.post("/api/direct/fleche", self._direct_fleche),
@@ -359,6 +366,7 @@ class ServeurUI:
             return
         self.session.signaler = self._signaler
         self.session.attestation = self.attestation  # SEC-01b : la même règle pour tous les chemins d'ordre
+        self.session.sur_etat = self._relever  # relevé local de la précision, par position
         self.etat_liaison = "connecté"
         await self.session.solliciter()
 
@@ -369,7 +377,7 @@ class ServeurUI:
         while True:
             await asyncio.sleep(PERIODE_VEILLE_S)
             session = self.session
-            if self.demonstration or session is None or session.lien.connecte or self.occupe or self.ferme:
+            if self.suspendue or self.demonstration or session is None or session.lien.connecte or self.occupe or self.ferme:
                 continue
             self.etat_liaison = LIAISON_COUPEE
             self._noter(LIAISON_COUPEE)
@@ -570,10 +578,14 @@ class ServeurUI:
             "etat": etat,
             "resultat": self.resultat,
             "journal": self.fil[-100:],
+            "liaison_suspendue": self.suspendue,
         }
         if complet:
             image |= {
-                "bornes": _bornes(), "libelles": conduite.LIBELLES,
+                "bornes": _bornes() | {
+                    "precision_fiable_m": securite.PRECISION_FIABLE_M, "precision_degradee_m": securite.PRECISION_DEGRADEE_M,
+                },
+                "libelles": conduite.LIBELLES,
                 "fleches": {
                     "distances_m": list(fleches.DISTANCES_M), "angles_deg": list(fleches.ANGLES_DEG),
                     "distance_defaut_m": fleches.DISTANCE_DEFAUT_M, "angle_defaut_deg": fleches.ANGLE_DEFAUT_DEG,
@@ -605,6 +617,8 @@ class ServeurUI:
             "tache": etat.resume(session.horloge())["tache_libelle"],  # dite seulement si elle diffère du statut
             # Après un dégagement, la reprise reste proposée clairement (les lames peuvent redémarrer).
             "reprise_possible": etat.statut == socle.WORK_STATUS_PAUSE,
+            # SEC-12 : dit AVANT de reprendre ou de renvoyer à la base ; rien si la position est fiable.
+            "avertissement_position": securite.avertissement_position(etat.precision_m),
         }
 
     def _etat_de_la_pause(self, etat: Any, maintenant: float) -> dict[str, str] | None:
@@ -678,6 +692,8 @@ class ServeurUI:
     async def _actualiser(self, _requete: web.Request) -> web.StreamResponse:
         if self.occupe:
             return _refus(409, "un ordre est en cours")
+        if self.suspendue:
+            return _refus(409, f"{LIAISON_SUSPENDUE} — cliquez sur « Reprendre la liaison »")
         async with self._verrou_acces:  # deux actualisations ne rouvrent jamais deux liaisons
             if self.session is None or not self.session.lien.connecte:
                 await self._rouvrir_liaison()
@@ -1177,6 +1193,58 @@ class ServeurUI:
             raise ErreurSaisie("appareil hors de la liste proposée")
         self.choix = None
         return await self._compte_enregistrer(choix["jeton"], choix["region"], appareil)
+
+    # --- rendre la main à l'application officielle ------------------------------
+
+    async def _liaison_rendre(self, requete: web.Request) -> web.StreamResponse:
+        """Ferme la liaison et suspend la reconnexion automatique ; n'émet RIEN vers le robot."""
+        corps = await self._corps(requete)
+        corps = corps if isinstance(corps, dict) else {}
+        if self.occupe or self._stop_demande:
+            return _refus(409, "un mouvement est en cours : attendez sa fin (ou STOP), puis rendez la main")
+        session = self.session
+        en_telecommande = session is not None and session.etat.statut == socle.WORK_STATUS_REMOTE_CONTROL
+        if en_telecommande and corps.get("sans_attendre") is not True:
+            # Rien n'est émis pour l'en sortir : le robot revient seul en pause après une trentaine de secondes.
+            return web.json_response({
+                "suspendue": False, "attendre": True,
+                "message": "Le robot est encore en télécommande : il revient seul en pause après une trentaine de "
+                           "secondes. Attendez, ou rendez la main sans attendre.",
+            })
+        self.attestation.retirer("main rendue à l'application")
+        self._desarmer("main rendue à l'application")
+        self.previsualisation = None
+        async with self._verrou_acces:
+            self.suspendue = True
+            await self._pile.aclose()
+            self._pile, self.session = AsyncExitStack(), None
+            self.etat_liaison = LIAISON_SUSPENDUE
+        self.journal.ecrire("liaison-suspendue", mode=self.mode)
+        self._noter(LIAISON_SUSPENDUE)
+        return web.json_response({"suspendue": True, "attendre": False, "message": LIAISON_SUSPENDUE})
+
+    async def _liaison_reprendre(self, _requete: web.Request) -> web.StreamResponse:
+        async with self._verrou_acces:
+            if self.suspendue:
+                self.suspendue = False
+                self.journal.ecrire("liaison-reprise", mode=self.mode)
+                await self._rouvrir_liaison()
+                self._noter(f"liaison reprise : {self.etat_liaison}")
+        return web.json_response({"suspendue": self.suspendue, "liaison": self.etat_liaison})
+
+    # --- relevé local de la précision de position --------------------------------
+
+    def _relever(self, etat: Any, instant: float) -> None:
+        pose, precision = etat.pose, etat.precision_m
+        if pose is not None and precision is not None and etat.recu_pose == instant and not self.demonstration:
+            self._releve.noter(pose.est_m, pose.nord_m, precision, etat.donnees.get("rtkSatellites"), instant)
+
+    async def _releve_lire(self, _requete: web.Request) -> web.StreamResponse:
+        points = [
+            [p["est_m"], p["nord_m"], p["precision_m"], securite.qualite_position(float(p["precision_m"]))]
+            for p in releve.lire(self.dossier)
+        ]
+        return web.json_response({"points": points})
 
     async def _rouvrir_liaison(self) -> None:
         # SEC-01b : nouvelle liaison, état du robot à relire — l'attestation ne lui survit pas.

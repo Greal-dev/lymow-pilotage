@@ -52,6 +52,9 @@ LIBELLES = {
     "surface_m2": "surface (m²)", "zones_interdites": "zones interdites", "passage_de_station": "passage de station",
     "complete": "carte complète", "manques": "ce qui manque", "empreinte": "empreinte à confirmer",
     "connexion_en_un_clic": "connexion en un clic",
+    "precision_m": "précision de position (m)", "precision_avant_m": "précision avant l'ordre (m)",
+    "localisation_texte": "localisation", "rapport_mesure_sur_commande": "rapport mesuré / commandé",
+    "facteur_distance_suggere": "facteur_distance suggéré", "facteur_angle_suggere": "facteur_angle suggéré",
     "verification": "vérification par l'outil", "issue": "issue de l'étape", "reprise": "reprise proposée",
     "cote": "côté", "apercu": "aperçu", "differences": "différences", "horodatage": "horodatage",
 }

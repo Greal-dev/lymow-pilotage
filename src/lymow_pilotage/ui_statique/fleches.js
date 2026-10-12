@@ -102,6 +102,21 @@
     return Boolean(DIRECTIONS[evenement.key]) || evenement.key === "Backspace";
   }
 
+  function metres(valeur) { return "±" + valeur.toFixed(2).replace(".", ",") + " m"; }
+
+  /* Aide à retrouver le signal : la précision de position évolue-t-elle dans le bon sens ? */
+  function tendance(avant, apres) {
+    if (typeof avant !== "number" || typeof apres !== "number") { return ""; }
+    if (Math.abs(apres - avant) < 0.05) { return "→ stable"; }
+    return apres < avant ? "↘ en amélioration" : "↗ en dégradation";
+  }
+
+  function textePrecision(rapport) {
+    if (!rapport || typeof rapport.precision_m !== "number") { return ""; }
+    var sens = tendance(rapport.precision_avant_m, rapport.precision_m);
+    return " — position " + metres(rapport.precision_m) + (sens ? " " + sens : "");
+  }
+
   /* Retour court après une étape : « ↑ 1 m : émise, arrêt acquitté — position non fournie ». */
   function ligneRetour(ordre, rapport) {
     var debut = symbole(ordre) + " : ";
@@ -111,7 +126,7 @@
     var suite = rapport.constat || "";
     if (rapport.verification === "non vérifiable") { suite = "position non fournie"; }
     if (rapport.verification === "vérifiée") { suite = "déplacement constaté"; }
-    return debut + "émise, arrêt acquitté" + (suite ? " — " + suite : "");
+    return debut + "émise, arrêt acquitté" + (suite ? " — " + suite : "") + textePrecision(rapport);
   }
 
   /* Bascule unique des flèches : un seul état pour les boutons sur la vidéo ET le clavier. */
@@ -145,7 +160,8 @@
     annulerDerniere: annulerDerniere,
     actionClavier: actionClavier,
     retientLaTouche: retientLaTouche,
-    ligneRetour: ligneRetour
+    ligneRetour: ligneRetour,
+    tendance: tendance
   };
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;

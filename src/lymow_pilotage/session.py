@@ -60,6 +60,7 @@ class Session:
         self.etat = Etat()
         self.carte_brute: tuple[bytes, float] | None = None
         self.tranche_carte: tuple[bytes, float] | None = None  # dernière réponse de carte, telle quelle
+        self.sur_etat: Callable[[Any, float], None] | None = None  # observateur facultatif de chaque état reçu
         self.arret_en_cours = False
         # SEC-01b : posée par l'appelant (page ou commande), jamais par la session elle-même.
         self.attestation: Attestation | None = None
@@ -98,6 +99,11 @@ class Session:
         # Un état émis à l'instant par le robot vaut preuve de présence.
         self.etat.en_ligne = True
         self.journaliser("etat-recu", **self.etat.resume(instant))  # SEC-06
+        if self.sur_etat is not None and not self.arret_en_cours:  # SEC-03 : rien d'autre pendant un arrêt
+            try:
+                self.sur_etat(self.etat, instant)
+            except Exception:  # noqa: BLE001 — un observateur (relevé de précision) ne gêne jamais la réception
+                self.sur_etat = None
         self._controler_attestation()
 
     def recevoir_presence(self, en_ligne: bool, retenu: bool = False) -> None:
