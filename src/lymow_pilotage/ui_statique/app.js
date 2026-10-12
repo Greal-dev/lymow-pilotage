@@ -156,6 +156,14 @@
       $("erreur-suite").textContent = erreur.suite;
     }
     $("recalage-mention").textContent = image.recalage && image.recalage.actif ? image.recalage.texte : "";
+    var plateau = Ordres.textePlateau(image.plateau);
+    $("plateau-etat").textContent = plateau.texte;
+    $("plateau-jauge").hidden = !plateau.jauge;
+    if (plateau.jauge) {
+      $("plateau-jauge").min = plateau.jauge.min;
+      $("plateau-jauge").max = plateau.jauge.max;
+      $("plateau-jauge").value = plateau.jauge.valeur;
+    }
     liaisonSuspendue = Boolean(image.liaison_suspendue);
     $("diagnostic-rtk").checked = Boolean(image.diagnostic_rtk);
     $("diagnostic-texte").textContent = image.diagnostic_texte || "";

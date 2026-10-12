@@ -416,6 +416,31 @@ de lui-même avant ou au contact, sa détection reste active en pilotage
 manuel ; noter alors le code affiché. S'il pousse le carton, elle ne l'est
 pas : seuls les garde-fous ci-dessus protègent.
 
+## Hauteur du plateau
+
+Le robot **ne transmet aucune hauteur mesurée du plateau** : dans les
+trames reçues le 2026-10-12, ni la sortie de base (qui porterait la hauteur
+de coupe), ni la hauteur de la configuration du robot ne sont présentes ; et
+le « plateau 100 » réel émis ce jour-là n'a été suivi d'aucune hauteur.
+
+Ce qui se lit : la **consigne enregistrée par le robot**, dans la carte
+(réglages globaux de tonte, hauteur de coupe confirmée par le socle contre
+l'application ; ou réglages de la tâche en cours, s'ils sont présents). La
+carte de référence du 12/10 à 19:38 donne 96 mm. La page l'affiche à gauche,
+avec une jauge : « Plateau : 96 mm (maximum 100) — consigne enregistrée par
+le robot (…), pas une hauteur mesurée », « au maximum » quand c'est le cas,
+« hauteur inconnue : le robot ne l'a pas transmise » sans carte.
+
+Après un ordre de plateau, la carte est relue (requête pure déjà permise,
+après l'ordre, jamais pendant un mouvement) et la page dit : « consigne
+passée de 60 à 100 mm », ou « valeur relue inchangée : l'ordre n'a pas été
+pris en compte, ou cette lecture ne reflète pas la position du plateau ».
+On ne sait pas encore lequel des deux : à constater au premier essai réel.
+
+Aucune demande de lecture nouvelle n'a été ajoutée : le socle sait émettre
+la demande 51 (réglages en cours) mais dit lui-même ne pas en décoder la
+réponse, et aucune capture ne l'atteste.
+
 ## Carte décalée : mesure et recalage d'affichage
 
 Constat du propriétaire sur place (2026-10-12) : la position affichée est

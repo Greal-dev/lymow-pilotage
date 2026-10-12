@@ -235,6 +235,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .pas { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; margin: 0.2rem 0; }
 .pas label { display: inline-flex; align-items: center; gap: 0.3rem; margin: 0; white-space: nowrap; }
 #bord-zone { margin: 0; }
+.plateau { margin: 0.15rem 0; }
+.plateau meter { width: 4.5rem; vertical-align: middle; }
 .recalage { color: #ef6c00; }  /* carte recalée par l'opérateur : mention permanente */
 #recalage-mention { margin: 0; }
 #recalage-mention:empty { display: none; }

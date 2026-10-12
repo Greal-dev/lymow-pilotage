@@ -249,6 +249,31 @@ def decoder(octets: bytes, recue: float = 0.0) -> Carte:
     return Carte(octets, zones, interdites, passages, station, recue, tuple(manques))
 
 
+CHAMP_REGLAGES_TONTE, CHAMP_REGLAGES_EN_COURS = 11, 13
+SOURCE_EN_COURS, SOURCE_GLOBALE = "consigne en cours", "réglage global de tonte"
+
+
+def hauteur_de_coupe(carte: Carte) -> tuple[int, str] | None:
+    """Hauteur de coupe ENREGISTRÉE par le robot, lue dans la carte : (millimètres, source), ou rien.
+
+    C'est une consigne, jamais une hauteur mesurée du plateau : aucune trame du robot n'en porte (constat du
+    2026-10-12 : ni `baseOutput`, ni `rcCutHeight` dans les états reçus). Champ 13 (réglages de la tâche en
+    cours, d'après le socle) s'il est présent, sinon champ 11 (réglages globaux de tonte : hauteur en champ 1,
+    confirmée par le socle contre l'application)."""
+    champs = champs_stricts(carte.octets)
+    for numero, source in ((CHAMP_REGLAGES_EN_COURS, SOURCE_EN_COURS), (CHAMP_REGLAGES_TONTE, SOURCE_GLOBALE)):
+        brut = _premier(champs, numero, 2)
+        if not isinstance(brut, bytes) or not brut:
+            continue
+        try:
+            hauteur = _premier(champs_stricts(brut), 1, 0)
+        except CarteIllisible:
+            continue
+        if isinstance(hauteur, int) and not isinstance(hauteur, bool) and 0 < hauteur <= 500:
+            return hauteur, source
+    return None
+
+
 def origine(carte: Carte) -> tuple[float, float] | None:
     """Origine du repère (latitude, longitude) : champ 7 de la carte. Jamais affichée ni journalisée."""
     brut = _premier(champs_stricts(carte.octets), CHAMP_ORIGINE, 2)

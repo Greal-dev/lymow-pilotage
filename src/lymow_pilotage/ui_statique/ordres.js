@@ -195,6 +195,19 @@
     };
   }
 
+  /* Hauteur du plateau : une CONSIGNE enregistrée par le robot (lue dans la carte), jamais une mesure — le
+   * robot ne transmet aucune hauteur mesurée. Inconnue : dit tel quel. */
+  function textePlateau(plateau) {
+    var p = plateau || {};
+    var suite = p.suite ? " — " + p.suite : "";
+    if (typeof p.mm !== "number") {
+      return { texte: "Plateau : hauteur inconnue : le robot ne l'a pas transmise" + suite, jauge: null };
+    }
+    var valeur = p.au_maximum ? p.mm + " mm — au maximum" : p.mm + " mm (maximum " + p.maximum_mm + ")";
+    var nature = "consigne enregistrée par le robot (" + (p.nature || "réglage") + (p.date ? ", " + p.date : "") + "), pas une hauteur mesurée";
+    return { texte: "Plateau : " + valeur + " — " + nature + suite, jauge: { min: p.minimum_mm, max: p.maximum_mm, valeur: Math.min(p.mm, p.maximum_mm) } };
+  }
+
   function enErreur(ordres) {
     return Boolean(ordres && ordres.erreur && !ordres.erreur.resolue);
   }
@@ -283,6 +296,7 @@
     diagnosticErreur: diagnosticErreur,
     alerteBord: alerteBord,
     etatDuRecalage: etatDuRecalage,
+    textePlateau: textePlateau,
     texteDeLaMain: texteDeLaMain,
     annoncePrendreLaMain: annoncePrendreLaMain,
     suitePrendreLaMain: suitePrendreLaMain,

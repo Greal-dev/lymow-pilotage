@@ -139,6 +139,20 @@ def _nombre(valeur: Any, entier: bool = False) -> float | int | None:
     return valeur
 
 
+def suite_du_plateau(avant: tuple[int, str] | None, apres: tuple[int, str] | None) -> str:
+    """Après un ordre de plateau et la relecture de la carte : ce que la consigne enregistrée est devenue."""
+    if apres is None:
+        return "hauteur inconnue après l'ordre : le robot ne l'a pas transmise"
+    if avant is None:
+        return f"consigne relue après l'ordre : {apres[0]} mm"
+    if avant[0] != apres[0]:
+        return f"consigne passée de {avant[0]} à {apres[0]} mm"
+    return (
+        f"valeur relue inchangée ({apres[0]} mm) : l'ordre n'a pas été pris en compte, "
+        "ou cette lecture ne reflète pas la position du plateau"
+    )
+
+
 def ordres_depuis(corps: Any) -> list[Ordre]:
     """Données de la page non fiables : chaque champ est revérifié, puis `conduite` valide."""
     liste = corps.get("ordres") if isinstance(corps, dict) else None
@@ -232,6 +246,7 @@ class ServeurUI:
         self._recalage = recalage.Memoire(self.dossier)
         self._station = recalage.SuiviStation()
         self._liaison_lente = False  # pilotage direct : en attente d'une trame fraîche du robot
+        self._plateau_suite: str | None = None  # ce que la relecture a montré après le dernier ordre de plateau
         self._direct_en_cours = False
         # « Rendre la main à l'application » : liaison fermée, reconnexion automatique suspendue.
         self.suspendue = False
@@ -728,6 +743,7 @@ class ServeurUI:
             "diagnostic_texte": self._texte_du_diagnostic(),
             "arret_aux_bords": self.arret_aux_bords,
             "recalage": self._recalage.resume(),
+            "plateau": self._etat_du_plateau(),
             "carte_connue": self._carte_affichee()[0] is not None,  # la page la charge alors d'elle-même
             "direct": {
                 "arme": self.direct.arme, "reste_s": self.direct.reste_s,
@@ -976,11 +992,51 @@ class ServeurUI:
             self._objectif_signal = False
         return web.json_response({"accepte": True}, status=202)
 
+    def _hauteur_lue(self) -> tuple[int, str] | None:
+        carte, _meta = self._carte_affichee()
+        return None if carte is None else cartes.hauteur_de_coupe(carte)
+
+    def _etat_du_plateau(self) -> dict[str, Any]:
+        """Ce que l'outil sait de la hauteur du plateau : une CONSIGNE lue dans la carte, datée — ou rien."""
+        try:
+            carte, meta = self._carte_affichee()
+            lue = None if carte is None else cartes.hauteur_de_coupe(carte)
+        except Exception:  # noqa: BLE001 — un affichage ne fait jamais tomber l'état servi à la page
+            lue, meta = None, None
+        if lue is None:
+            return {"mm": None, "maximum_mm": securite.HAUTEUR_MAX_MM, "minimum_mm": securite.HAUTEUR_MIN_MM,
+                    "au_maximum": False, "nature": None, "date": None, "suite": self._plateau_suite}
+        date = reference.libelle(meta) if meta is not None else f"carte reçue à {self.carte_heure or '?'}"
+        return {
+            "mm": lue[0], "maximum_mm": securite.HAUTEUR_MAX_MM, "minimum_mm": securite.HAUTEUR_MIN_MM,
+            "au_maximum": lue[0] >= securite.HAUTEUR_MAX_MM, "nature": lue[1], "date": date, "suite": self._plateau_suite,
+        }
+
+    async def _emettre_puis_relire_le_plateau(self, ordres: list[Ordre], objectif_signal: bool) -> tuple[dict[str, Any], int]:
+        """Après un ordre de plateau : la carte est relue (requête pure déjà permise) et l'outil dit si la consigne
+        enregistrée a changé. La relecture vient APRÈS les ordres, jamais pendant un mouvement."""
+        avant = self._hauteur_lue()
+        bilan, code = await conduite.emettre_ordres(self.session, ordres, self.journal, objectif_signal)
+        try:
+            if self.suspendue or self.session is None or not self.session.lien.connecte:
+                raise RuntimeError("liaison indisponible")
+            await self._charger_la_carte()
+            apres = self._hauteur_lue()
+        except Exception:  # noqa: BLE001 — la relecture est un service, pas une condition de l'ordre
+            self._plateau_suite = "relecture impossible après l'ordre de plateau : hauteur non vérifiée"
+        else:
+            self._plateau_suite = suite_du_plateau(avant, apres)
+        self.journal.ecrire("plateau-relu", avant=avant and avant[0], apres=self._hauteur_lue() and self._hauteur_lue()[0], constat=self._plateau_suite)
+        bilan["plateau_relu"] = self._plateau_suite
+        return bilan, code
+
     def _lancer(self, ordres: list[Ordre], objectif_signal: bool = False) -> None:
         self._munir_du_garde_fou(ordres)
+        plateau = any(ordre.nom in mouvement.PLATEAUX for ordre in ordres)
         self._lancer_travail(
             " ; ".join(str(ordre) for ordre in ordres) + (" (vers le bon signal)" if objectif_signal else ""),
-            lambda: conduite.emettre_ordres(self.session, ordres, self.journal, objectif_signal),
+            (lambda: self._emettre_puis_relire_le_plateau(ordres, objectif_signal)) if plateau
+            else (lambda: conduite.emettre_ordres(self.session, ordres, self.journal, objectif_signal)),
         )
         if ordres == [Ordre("pause")]:  # la page attendra le statut « pause » frais avant de rendre les flèches
             instant = self.session.horloge()
