@@ -29,8 +29,9 @@ DIRECTIONS: dict[str, tuple[str, float]] = {
 }
 # Allure d'une avance ou d'un recul : « auto » laisse l'outil choisir (lente près d'un bord, SEC-13).
 ALLURES: dict[str, float | None] = {"auto": None, "lente": 0.10, "normale": 0.25}
-FILE_MAX = 5
-DUREE_ARMEMENT_S = 60.0
+FILE_MAX = 8  # appuis empilés pendant un pas (5 jusqu'au 2026-10-12)
+# Inactivité : cinq minutes sans action sur la page (60 s jusqu'au 2026-10-12 : la main se perdait trop vite).
+DUREE_ARMEMENT_S = 300.0
 # Deux flèches plus rapides que l'aller-retour avec le serveur : la seconde porte encore le jeton précédent.
 JETON_PRECEDENT_S = 2.0
 
@@ -102,7 +103,7 @@ class Armement:
 
     def verifier(self, jeton: object) -> None:
         if not self.arme:
-            raise RefusDirect("pilotage direct non armé (ou désarmé après 60 s sans action) : armez-le de nouveau")
+            raise RefusDirect("pilotage direct non armé (ou désarmé après 5 min sans action) : armez-le de nouveau")
         admis = [self._jeton or ""]
         if self._precedent is not None and self.horloge() <= self._precedent[1]:
             admis.append(self._precedent[0])

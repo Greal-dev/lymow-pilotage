@@ -163,6 +163,9 @@ def test_route_de_proposition_et_sequence_chargee_avec_son_objectif(tmp_path, mo
 
     from lymow_pilotage import releve, ui
 
+    # La demande de carte d'office (testée ailleurs) est neutralisée : ce test part d'un serveur sans carte,
+    # et ne doit pas dépendre de qui arrive le premier (échec intermittent constaté le 2026-10-12).
+    monkeypatch.setattr(ui.ServeurUI, "_demander_la_carte_d_office", lambda self: None)
     carnet = releve.Releve(tmp_path)
     carnet.noter(8.0, 1.0, 0.05, 20, 0.0)
     carnet.noter(8.0, 1.2, 0.04, 20, 100.0)

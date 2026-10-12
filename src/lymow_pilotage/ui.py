@@ -76,9 +76,6 @@ DELAI_PAUSE_S = 15.0
 SANS_TRAME_MAX_S = 45.0
 ATTENTE_DIAGNOSTIC_S = 20.0  # sans réponse du robot au diagnostic de localisation au-delà : c'est dit
 DELAI_ANNULATION_S = 15.0  # après « annuler la tâche », le statut « prêt » est attendu ce temps-là
-# Pas de suite sans déplacement constaté avant de désarmer le pilotage direct (essai réel du 2026-10-12 :
-# au premier constat, la main se perdait à chaque pas).
-IMMOBILES_MAX = 3
 # Veille de la liaison : une coupure est vue et réparée sans attendre un clic.
 PERIODE_VEILLE_S = 2.0
 LIAISON_SUSPENDUE = "Liaison suspendue : l'application Lymow a la main"
@@ -305,6 +302,7 @@ class ServeurUI:
                 web.get("/api/signal", self._signal_proposer),
                 web.post("/api/direct/armer", self._direct_armer),
                 web.post("/api/direct/desarmer", self._direct_desarmer),
+                web.post("/api/direct/activite", self._direct_activite),
                 web.post("/api/direct/fleche", self._direct_fleche),
                 web.post(ROUTE_ATTESTATION_POSER, self._attestation_poser),
                 web.post(ROUTE_ATTESTATION_RETIRER, self._attestation_retirer),
@@ -1337,6 +1335,12 @@ class ServeurUI:
         self._noter("PILOTAGE DIRECT ARMÉ : chaque flèche émet son étape sans prévisualisation")
         return web.json_response({"arme": True, "jeton": jeton, "valable_s": fleches.DUREE_ARMEMENT_S})
 
+    async def _direct_activite(self, _requete: web.Request) -> web.StreamResponse:
+        """Toute action sur la page renouvelle le délai d'inactivité du pilotage direct (sans changer de jeton)."""
+        if self.direct.arme:
+            self.direct.prolonger()
+        return web.json_response({"arme": self.direct.arme, "reste_s": self.direct.reste_s})
+
     async def _direct_desarmer(self, _requete: web.Request) -> web.StreamResponse:
         self._desarmer("à la demande de la page")
         if self._direct_en_cours and self.occupe:  # le pas en cours ne survit pas au désarmement
@@ -1437,7 +1441,7 @@ class ServeurUI:
             self.version += 1
 
     async def _derouler_file(self) -> tuple[dict[str, Any], int]:
-        """Émet la file, un pas après l'autre ; le premier refus, échec ou constat contraire l'arrête et désarme."""
+        """Émet la file, un pas après l'autre. Désarme seulement pour la sécurité (voir plus bas) ; sinon dit et continue."""
         etapes: list[dict[str, Any]] = []
         motif: str | None = "pilotage direct interrompu"
         code = 0
@@ -1453,7 +1457,19 @@ class ServeurUI:
                 self.direct.faites.append({"ordre": dataclasses.asdict(ordre), "rapport": assainir(rapport)})
                 del self.direct.faites[:-20]
                 self.version += 1
-                contraire = rapport.get("verification") in (mouvement.ANOMALIE, mouvement.AUCUN_ETAT)
+                # Règle (décision du propriétaire, 2026-10-12) : la main n'est retirée que pour la sécurité ou sur
+                # demande — statut non pilotable (SEC-01), arrêt non confirmé, liaison perdue ; jamais pour un
+                # patinage, un constat non vérifiable, un avertissement de carte ou un refus de validation.
+                echec = str(rapport.get("echec") or "")
+                if code == conduite.CODE_ARRET_NON_CONFIRME or bilan.get("arret_non_confirme"):
+                    motif = bilan.get("motif") or "arrêt non confirmé"
+                    break
+                if code != 0 and "SEC-01" in echec:
+                    motif = bilan.get("motif") or echec
+                    break
+                if code != 0 and not self.session.lien.connecte:
+                    motif = "liaison perdue pendant le pas"
+                    break
                 if code == 0 and rapport.get("verification") == mouvement.AUCUN_ETAT:
                     # Aucune trame fraîche après le pas : liaison lente. La main est gardée, les appuis restent en
                     # file ; le pas suivant ne part qu'à l'arrivée d'une trame. 45 s sans aucune : désarmé.
@@ -1463,31 +1479,15 @@ class ServeurUI:
                     motif = f"{SANS_TRAME_MAX_S:g} s sans aucune trame du robot : liaison perdue"
                     code = 1
                     break
-                # « Le robot n'a pas bougé » : dit en clair, la main est gardée ; désarmé au troisième de suite.
+                # « Le robot n'a pas bougé » : c'est justement quand il patine qu'on a besoin d'insister. Dit en
+                # clair, compté, jamais désarmé ; les appuis en file restent.
                 immobile = code == 0 and rapport.get("constat") == mouvement.IMMOBILE
                 self._immobiles = self._immobiles + 1 if immobile else 0
-                if immobile and self._immobiles < IMMOBILES_MAX:
-                    self.direct.file.clear()  # les pas en attente supposaient ce déplacement
-                    self.direct.prolonger()
-                    continue
-                if immobile:
-                    motif = (
-                        f"{IMMOBILES_MAX} pas de suite sans déplacement constaté "
-                        f"({rapport.get('cause_probable') or 'cause inconnue'})"
-                    )
-                    code = 1
-                    break
-                # Refus AVANT émission (rien n'est parti) : seuls SEC-01 (statut du robot) et la liaison désarment.
-                # Bornes (SEC-02), carte (SEC-13), localisation (SEC-12) : dits, la main est gardée.
-                if code != 0 and rapport.get("refus_avant_emission") and "SEC-01" not in str(rapport.get("echec")):
+                if code != 0 or (rapport.get("verification") == mouvement.ANOMALIE and not immobile):
+                    # Refus avant émission, pas interrompu (indice de choc), mauvais sens, excès : dits, la main est
+                    # gardée ; les appuis en file, qui supposaient ce pas, sont abandonnés.
                     self.direct.file.clear()
-                    self.direct.prolonger()
                     code = 0
-                    continue
-                if code != 0 or contraire:
-                    motif = bilan.get("motif") or rapport.get("echec") or rapport.get("constat") or "échec"
-                    code = code or 1
-                    break
                 self.direct.prolonger()
             else:
                 motif = None
