@@ -279,6 +279,15 @@
       <summary>Calibration</summary>
       <section aria-labelledby="titre-calibration">
         <h2 id="titre-calibration" class="masque">Calibration</h2>
+      <div id="plateau-essais" class="ordre">
+        <h3>Plateau : position de nettoyage (essai)</h3>
+        <p class="note">Ordres EXPÉRIMENTAUX, en mode réel seulement. L'application lève le plateau au-delà de sa course de coupe pour nettoyer les lames ; les sources disent ce geste réservé au Bluetooth. La forme émise ici est celle des phares du robot, avec le numéro de la levée : <strong>jamais essayée par le nuage sur ce robot</strong>. Rien ne dit que le robot peut rouler dans cette position. Enchaînez à la main : lever, une flèche de 0,25 m, redescendre — après avoir vu l'effet réel.</p>
+        <p class="actions">
+          <button type="button" data-plateau-essai="nettoyage">Plateau : position de nettoyage (essai)</button>
+          <button type="button" data-plateau-essai="redescendre">Plateau : redescendre (essai)</button>
+        </p>
+        <p id="plateau-essai-etat" class="note" role="status"></p>
+      </div>
       <form class="ordre" data-ordre="essai-arret-auto">
         <h3>Essai d'arrêt automatique</h3>
         <p class="note">Calibration, robot à vue : une seule consigne avant, puis silence, puis arrêt.

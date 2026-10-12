@@ -208,6 +208,15 @@
     return { texte: "Plateau : " + valeur + " — " + nature + suite, jauge: { min: p.minimum_mm, max: p.maximum_mm, valeur: Math.min(p.mm, p.maximum_mm) } };
   }
 
+  var CONFIRMATION_ESSAI_PLATEAU = "Ordre jamais essayé par le cloud sur ce robot. À faire robot à vue, mains éloignées du plateau.";
+
+  /* Essais de plateau : proposés en mode réel seulement, hors de tout ordre en cours. */
+  function essaiPlateauPossible(c) {
+    if (c.mode !== "réel") { return { possible: false, motif: "Essais de plateau : en mode réel seulement." }; }
+    if (c.occupe) { return { possible: false, motif: "Un ordre est en cours." }; }
+    return { possible: true, motif: "" };
+  }
+
   function enErreur(ordres) {
     return Boolean(ordres && ordres.erreur && !ordres.erreur.resolue);
   }
@@ -297,6 +306,8 @@
     alerteBord: alerteBord,
     etatDuRecalage: etatDuRecalage,
     textePlateau: textePlateau,
+    essaiPlateauPossible: essaiPlateauPossible,
+    CONFIRMATION_ESSAI_PLATEAU: CONFIRMATION_ESSAI_PLATEAU,
     texteDeLaMain: texteDeLaMain,
     annoncePrendreLaMain: annoncePrendreLaMain,
     suitePrendreLaMain: suitePrendreLaMain,

@@ -717,6 +717,36 @@ async def executer_plateau(session: Session, ordre: Ordre = Ordre("plateau-haut"
     } | rapport
 
 
+async def executer_signal_plateau(session: Session, nom: str) -> dict[str, Any]:
+    """ESSAI : levée de nettoyage du plateau, ou redescente (voir `protocole.trame_signal_plateau`).
+
+    SEC-01 strict : état frais, liste blanche, AUCUNE attestation (le plateau est un organe mobile). Après
+    l'ordre, l'état est relu et l'outil dit ce qu'il a pu observer — le plus souvent rien : il ne reçoit
+    aucune hauteur mesurée."""
+    trame = protocole.trame_signal_plateau(nom, session.cal)
+    avant = await _exiger_lames_arret(session)  # SEC-01, sans attestation
+    etat = session.etat
+    vu_avant = (etat.statut, tuple(etat.donnees.get("errorCodes") or ()), tuple(etat.donnees.get("warningCodes") or ()))
+    session.journal.ecrire(
+        "ordre-emis", strict=True, ordre=trame.nom, sujet=session.sujet, trame=trame.description(), essai=True,
+    )
+    instant = session.horloge()
+    await session.publier(trame, securite.DELAI_ARRET_S)
+    rapport = await constater(session, avant, instant, None)
+    vu_apres = (etat.statut, tuple(etat.donnees.get("errorCodes") or ()), tuple(etat.donnees.get("warningCodes") or ()))
+    if not rapport["etat_rafraichi"]:
+        observe = "aucun état relu après l'ordre : effet inconnu"
+    elif vu_apres == vu_avant:
+        observe = "aucun changement observable par l'outil (il ne reçoit aucune hauteur mesurée) : regardez le plateau"
+    else:
+        resume = etat.resume(session.horloge())
+        observe = (
+            f"changement observé — statut : {resume['statut_libelle']} ; erreurs : {', '.join(resume['erreurs']) or 'aucune'} ; "
+            f"avertissements : {', '.join(resume['avertissements']) or 'aucun'}"
+        )
+    return {"mode": "réel", "ordre": trame.nom, "essai": True, "observation": observe} | rapport
+
+
 async def executer_tache(session: Session, nom: str) -> dict[str, Any]:
     etat = session.etat
     codes = [TACHES[nom]]

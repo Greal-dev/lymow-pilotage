@@ -36,7 +36,7 @@ from .mouvement import ErreurSaisie, Ordre
 from .securite import RefusSecurite
 from . import protocole
 from .protocole import Categorie
-from .session import Session
+from .session import EchecOrdre, Session
 from .vendor.ha_lymow import const as socle
 
 HOTE = "127.0.0.1"  # jamais 0.0.0.0 : aucune option ne change cette valeur
@@ -290,6 +290,7 @@ class ServeurUI:
                 web.post("/api/stop", self._stop),
                 web.post("/api/pause", self._pause_raccourci),
                 web.post("/api/erreur/annuler", self._erreur_annuler),
+                web.post("/api/plateau/essai", self._plateau_essai),
                 web.post("/api/liaison/rendre", self._liaison_rendre),
                 web.post("/api/liaison/reprendre", self._liaison_reprendre),
                 web.post("/api/diagnostic-rtk", self._diagnostic_rtk),
@@ -1140,6 +1141,38 @@ class ServeurUI:
         self.direct.file.clear()
         self.previsualisation = None
         self._lancer([Ordre("pause")])
+        return web.json_response({"accepte": True}, status=202)
+
+    async def _plateau_essai(self, requete: web.Request) -> web.StreamResponse:
+        """ESSAI — « Plateau : position de nettoyage » / « redescendre » : mode réel seulement, sur confirmation
+        explicite, jamais en séquence. Ordre jamais essayé par le nuage sur ce robot."""
+        corps = await self._corps(requete)
+        nom = corps.get("ordre") if isinstance(corps, dict) else None
+        if nom not in protocole.SIGNAUX_PLATEAU or corps.get("confirmer") is not True or set(corps) != {"ordre", "confirmer"}:
+            raise ErreurSaisie("essai de plateau : « nettoyage » ou « redescendre », avec confirmation explicite")
+        if not self.reel:  # ni simulation, ni démonstration : il n'y a rien à simuler d'un ordre jamais observé
+            return _refus(403, "essai de plateau : en mode réel seulement")
+        self._refuser_si_main_rendue()
+        if self.session is None or not self.session.lien.connecte:
+            return _refus(503, f"robot injoignable : {self.etat_liaison}")
+        if self.occupe or self._stop_demande:
+            return _refus(409, "un ordre ou un STOP est en cours : attendez sa fin")
+        session = self.session
+
+        async def essai() -> tuple[dict[str, Any], int]:
+            self.journal.ecrire("session-reelle", strict=True, ordres=[protocole.LIBELLES_SIGNAUX_PLATEAU[nom]])
+            try:
+                rapport = await mouvement.executer_signal_plateau(session, nom)
+            except (securite.RefusSecurite, EchecOrdre, OSError) as erreur:
+                self.journal.ecrire("ordre-refuse", ordre=protocole.LIBELLES_SIGNAUX_PLATEAU[nom], echec=str(erreur))
+                motif = f"« {protocole.LIBELLES_SIGNAUX_PLATEAU[nom]} » a échoué : {erreur}"
+                return {"mode": "réel", "etapes": [], "interrompue": True, "motif": motif}, 1
+            self.journal.ecrire("ordre-constate", **rapport)
+            return {"mode": "réel", "etapes": [rapport], "interrompue": False, "verdict": rapport["observation"]}, 0
+
+        self.direct.file.clear()
+        self.previsualisation = None
+        self._lancer_travail(protocole.LIBELLES_SIGNAUX_PLATEAU[nom], essai)
         return web.json_response({"accepte": True}, status=202)
 
     async def _erreur_annuler(self, requete: web.Request) -> web.StreamResponse:

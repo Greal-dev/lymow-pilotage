@@ -441,6 +441,35 @@ Aucune demande de lecture nouvelle n'a été ajoutée : le socle sait émettre
 la demande 51 (réglages en cours) mais dit lui-même ne pas en décoder la
 réponse, et aucune capture ne l'atteste.
 
+### Levée de nettoyage du plateau (essai)
+
+L'application sait lever le plateau au-delà de sa course de coupe, pour
+nettoyer les lames. Ce que les sources en disent :
+
+- **attesté** : l'application connaît deux signaux, « levée en un geste »
+  (8) et « redescente » (9), dans la même énumération que les phares ; et
+  la forme du message des phares par le nuage a été capturée par le socle
+  (`10 31 6a 02 40 0a` : configuration du robot, signal 10) ;
+- **supposé** : que le robot accepte les signaux 8 et 9 par le nuage. Deux
+  autres sources les rangent parmi les signaux « Bluetooth seulement » ; le
+  socle ne les émet jamais ;
+- **absent** : tout essai réel par leurs auteurs, la hauteur atteinte, le
+  comportement du robot dans cette position (peut-il rouler ? erreurs de
+  capteur de soulèvement 7 et 8 ?), la façon dont il en sort.
+
+L'outil propose donc deux ordres **expérimentaux**, dans la section repliée
+« Calibration » : « Plateau : position de nettoyage (essai) » et « Plateau :
+redescendre (essai) ». Mode réel seulement ; statut du robot sur la liste
+blanche SEC-01, sans attestation possible ; confirmation au texte
+explicite ; journalisés ; suivis d'une relecture de l'état et d'un constat
+(le plus souvent « aucun changement observable par l'outil » : regardez le
+plateau). Seuls les numéros 8 et 9 peuvent sortir : la même énumération
+porte l'extinction du robot. Aucune séquence automatique « lever, avancer,
+rabaisser » : enchaînez à la main (lever, une flèche de 0,25 m,
+redescendre) après avoir constaté l'effet réel. Si rien ne se passe, c'est
+que le geste est bien réservé au Bluetooth : il faudrait alors capturer ce
+que l'application envoie quand on appuie sur sa levée de nettoyage.
+
 ## Carte décalée : mesure et recalage d'affichage
 
 Constat du propriétaire sur place (2026-10-12) : la position affichée est
