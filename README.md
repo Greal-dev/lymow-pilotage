@@ -32,6 +32,7 @@ Python 3.12) ; il se régénère avec
 |---|---|
 | `lymow connexion` | Compte Google : affiche l'adresse à ouvrir, puis lit l'adresse de rappel `myapp://callback/?code=…&state=…` sans écho. `--mot-de-passe` : compte à adresse et mot de passe. La connexion Google peut aussi se faire depuis la page de `lymow ui`. |
 | `lymow deconnexion` | Efface de ce poste l'accès au compte (les quatre entrées du coffre) ; rien n'est supprimé côté Lymow. |
+| `lymow rappel-installer` / `rappel-desinstaller` | Active ou retire la connexion Google en un clic (gestionnaire Windows du protocole `myapp`, registre de l'utilisateur). |
 | `lymow diagnostic` | Jeton présent, rafraîchissement, appareils, MQTT, réception d'un état, micrologiciel. Ne publie rien. |
 | `lymow etat` | État du robot. `--passif` : n'émet aucune requête. `--attente S` : attente maximale (75 s). |
 | `lymow tourner (<degrés> \| --duree S) [--vitesse V]` | Pivote ; positif = gauche. 180° au plus. |
@@ -108,6 +109,22 @@ navigateur et s'arrête sur Ctrl+C. `lancer-lymow.cmd` (double-clic) lance
   final. Ctrl+C pendant un mouvement arrête le robot, puis le serveur.
 - Sans compte enregistré, la page fonctionne en prévisualisation et affiche
   « non connecté » : aucune connexion au cloud tant qu'on ne se connecte pas.
+- **Connexion en un clic** (Windows). Quand le navigateur est déjà connecté à
+  Google, la redirection vers `myapp://callback/…` est instantanée et l'adresse
+  est impossible à copier à temps. Le bouton « Activer la connexion en un
+  clic » du panneau « Compte » (ou `lymow rappel-installer`) inscrit Lymow comme
+  gestionnaire du protocole `myapp` : une clé `HKCU\Software\Classes\myapp` dans
+  le registre de votre session, dont la commande est
+  `"<chemin de lymow.exe>" rappel "%1"`. Rien d'autre n'est modifié ; une clé
+  `myapp` qui appartiendrait à un autre programme n'est ni écrasée ni retirée.
+  Pour annuler : bouton « Désactiver », ou `lymow rappel-desinstaller`. Une fois
+  actif : « Se connecter avec Google », accepter quand Windows propose d'ouvrir
+  Lymow, et la page se met à jour seule. `lymow rappel <adresse>` n'accepte
+  qu'un seul argument, de forme stricte, et aucune option (l'argument vient
+  d'un navigateur) ; il remet l'adresse à l'interface en cours par une route
+  locale fermée aux sites web, qui ne l'accepte que si une tentative est active
+  et que son `state` correspond. L'adresse n'est ni affichée ni journalisée.
+  Le collage manuel ci-dessous reste disponible en repli.
 - **Connexion depuis la page** (panneau « Compte », compte Google uniquement) :
   « Se connecter avec Google » ouvre la page de connexion dans un nouvel
   onglet ; la marche à suivre s'affiche (F12, onglet Réseau, « Conserver le

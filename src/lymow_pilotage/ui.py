@@ -20,12 +20,13 @@ import webbrowser
 from contextlib import AsyncExitStack
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 from typing import Any
 
 import aiohttp
 from aiohttp import web
 
-from . import auth, compte, conduite, liaison, mouvement, retouche, securite
+from . import auth, compte, conduite, liaison, mouvement, rappel, retouche, securite
 from . import carte as cartes
 from .config import Calibration
 from .journal import Journal, assainir, declarer_secret, masquer
@@ -51,6 +52,7 @@ NOMS_ORDRES = (*mouvement.ETAPES_SEQUENCE, mouvement.ESSAI, *mouvement.TACHES)
 NON_CONNECTE = "non connecté — utilisez le panneau « Compte » de cette page"
 ROUTE_REOUVERTURE = "/api/instance/rouvrir"
 DELAI_REOUVERTURE_S = 3.0  # au plus une réouverture de page toutes les trois secondes
+DELAI_RAPPEL_S = 1.0  # au plus une remise d'adresse de rappel par seconde
 MODES = ("simulation", "réel")
 
 
@@ -140,6 +142,9 @@ class ServeurUI:
         self.fournir_video = self._video
         self.ouvrir_navigateur = webbrowser.open
         self._derniere_reouverture: float | None = None
+        self._dernier_rappel: float | None = None
+        self.registre: Any = None  # None : registre Windows réel ; les tests y mettent un double
+        self.un_clic: dict[str, Any] = {"pris_en_charge": False, "actif": False, "etranger": None}
         self.video_ouverte = False
         # Connexion au compte : vérificateur PKCE et `state` ne quittent jamais la mémoire du serveur.
         self.tentative: tuple[auth.DemandeOAuth, float] | None = None
@@ -170,6 +175,8 @@ class ServeurUI:
                 web.post("/api/video/arreter", self._video_arreter),
                 web.get("/favicon.ico", self._sans_contenu),
                 web.post(ROUTE_REOUVERTURE, self._rouvrir),
+                web.post(rappel.ROUTE, self._rappel),
+                web.post("/api/compte/un-clic", self._compte_un_clic),
                 web.get("/api/carte", self._carte),
                 web.post("/api/carte/actualiser", self._carte_actualiser),
                 web.post("/api/carte/previsualiser", self._carte_previsualiser),
@@ -185,6 +192,7 @@ class ServeurUI:
         site = web.TCPSite(self._lanceur, HOTE, self.port)
         await site.start()
         self.port = self.adresses_ecoute()[0][1]
+        self.un_clic = rappel.etat(self.registre)
         await self._connecter()
         self._noter(f"interface démarrée en mode {'RÉEL' if self.reel else 'simulation'}")
 
@@ -298,14 +306,14 @@ class ServeurUI:
             return _refus(403, "hôte refusé")
         if requete.method not in ("GET", "POST"):
             return _refus(405, "méthode refusée")
-        if requete.path == ROUTE_REOUVERTURE:
-            # Réservée à un second « lymow ui » sur ce poste : un navigateur joint toujours
-            # Origin ou Referer à un POST, donc aucun site web ne peut la déclencher.
+        if requete.path in (ROUTE_REOUVERTURE, rappel.ROUTE):
+            # Réservées à un second processus lymow de ce poste : un navigateur joint toujours
+            # Origin ou Referer à un POST, donc aucun site web ne peut les déclencher.
             if requete.method != "POST":
                 return _refus(405, "méthode refusée")
             if "Origin" in requete.headers or "Referer" in requete.headers:
                 return _refus(403, "origine refusée")
-            return await self._rouvrir(requete)
+            return await (self._rouvrir(requete) if requete.path == ROUTE_REOUVERTURE else self._rappel(requete))
         origines = (f"http://{HOTE}:{self.port}", f"http://localhost:{self.port}")
         if requete.method == "POST" and requete.headers.get("Origin") not in origines:
             return _refus(403, "origine refusée")
@@ -604,6 +612,7 @@ class ServeurUI:
             "appareil": ident.appareil if ident else None,
             "tentative": self.tentative is not None and self.horloge() <= self.tentative[1],
             "choix": self.choix["appareils"] if self.choix else None,
+            "un_clic": self.un_clic,
         }
 
     def _refuser_si_occupe(self) -> None:
@@ -631,6 +640,10 @@ class ServeurUI:
         self._refuser_si_occupe()
         corps = await self._corps(requete)
         adresse = corps.get("adresse") if isinstance(corps, dict) else None
+        return await self._terminer_connexion(adresse)
+
+    async def _terminer_connexion(self, adresse: Any) -> web.Response:
+        """Fin de connexion, que l'adresse ait été collée dans la page ou remise par `lymow rappel`."""
         if isinstance(adresse, str):
             declarer_secret(adresse.strip())  # avant tout : aucun refus ne doit la faire fuiter
         tentative, self.tentative = self.tentative, None  # usage unique, même en cas de refus
@@ -658,6 +671,52 @@ class ServeurUI:
             self._noter("connexion : plusieurs appareils, choix demandé")
             return web.json_response({"appareils": appareils})
         return await self._compte_enregistrer(jeton, demande.region, appareils[0]["appareil"])
+
+    async def _rappel(self, requete: web.Request) -> web.StreamResponse:
+        """Adresse de rappel remise par `lymow rappel` (gestionnaire du protocole myapp).
+
+        Acceptée seulement si une tentative est active et que son `state` correspond ;
+        un `state` étranger ne consomme pas la tentative. La réponse ne dit que « ok » ou non.
+        """
+        reponse = {"interface": "lymow", "ok": False}
+        maintenant = self.horloge()
+        if self._dernier_rappel is not None and maintenant - self._dernier_rappel < DELAI_RAPPEL_S:
+            return web.json_response(reponse, status=429)
+        self._dernier_rappel = maintenant
+        try:
+            corps = await requete.json()
+        except (ValueError, RecursionError):
+            corps = None
+        adresse = corps.get("adresse") if isinstance(corps, dict) else None
+        if not isinstance(adresse, str) or not rappel.ADRESSE.fullmatch(adresse):
+            return web.json_response(reponse, status=400)
+        declarer_secret(adresse)
+        tentative = self.tentative
+        if tentative is None or maintenant > tentative[1] or self.occupe or self._stop_demande:
+            return web.json_response(reponse, status=409)
+        etat_recu = parse_qs(urlparse(adresse).query).get("state", [""])[0]
+        if not self._egaux(etat_recu, tentative[0].etat):  # comparaison en temps constant
+            self._noter("connexion en un clic : adresse refusée")
+            return web.json_response(reponse, status=403)
+        resultat = await self._terminer_connexion(adresse)
+        reponse["ok"] = resultat.status == 200
+        return web.json_response(reponse, status=200 if reponse["ok"] else 400)
+
+    async def _compte_un_clic(self, requete: web.Request) -> web.StreamResponse:
+        """Active ou retire le gestionnaire `myapp` : mêmes fonctions que `lymow rappel-installer`."""
+        corps = await self._corps(requete)
+        activer = corps.get("activer") if isinstance(corps, dict) else None
+        if not isinstance(activer, bool):
+            raise ErreurSaisie("« activer » attendu : vrai ou faux")
+        try:
+            message = rappel.installer(self.registre) if activer else rappel.desinstaller(self.registre)
+        except rappel.EchecRappel as erreur:
+            return _refus(409, str(erreur))
+        finally:
+            self.un_clic = rappel.etat(self.registre)
+        self.journal.ecrire("un-clic", actif=self.un_clic["actif"])
+        self._noter(message)
+        return web.json_response({"un_clic": self.un_clic, "message": message})
 
     async def _compte_choisir(self, requete: web.Request) -> web.StreamResponse:
         self._refuser_si_occupe()
@@ -777,10 +836,12 @@ async def servir(
     except OSError:  # port déjà pris (WinError 10048) : une interface tourne peut-être déjà
         await serveur.arreter()
         return await rejoindre(port, reel)
+    rappel.noter_port(dossier, serveur.port, True)
     try:
         print(f"Interface en mode {'RÉEL' if reel else 'simulation'} sur {serveur.adresse} — Ctrl+C pour arrêter.")
         serveur.ouvrir_page()  # en cas d'échec : adresse affichée, et la fenêtre reste ouverte
         await serveur.fin.wait()
     finally:
+        rappel.noter_port(dossier, serveur.port, False)
         await serveur.arreter()
     return "interface arrêtée"

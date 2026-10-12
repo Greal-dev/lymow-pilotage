@@ -19,7 +19,7 @@ from typing import Any
 
 import aiohttp
 
-from . import auth, carte, compte, conduite, config, liaison, mouvement, retouche, securite
+from . import auth, carte, compte, conduite, config, journal, liaison, mouvement, rappel, retouche, securite
 from .conduite import CODE_ARRET_NON_CONFIRME, CODE_REFUS
 from .journal import Journal, masquer
 from .mouvement import ErreurSaisie, Ordre
@@ -164,6 +164,8 @@ def construire_analyseur() -> argparse.ArgumentParser:
             "--confirmer", default=None, metavar="EMPREINTE",
             help="exigé avec --reel : l'empreinte affichée par la même commande en simulation",
         )
+    ajouter("rappel-installer", "activer la connexion Google en un clic (gestionnaire Windows du protocole myapp)")
+    ajouter("rappel-desinstaller", "retirer la connexion en un clic (ne retire que la clé de cet outil)")
     interface = ajouter(
         "ui", "interface web locale (127.0.0.1 seulement) ; simulation sans --reel, quoi que demande la page ; "
         "la connexion au compte Google peut s'y faire"
@@ -364,7 +366,45 @@ async def _commande_restaurer(args: argparse.Namespace, ctx: Contexte) -> tuple[
     )
 
 
+async def _commande_un_clic(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
+    message = rappel.installer() if args.commande == "rappel-installer" else rappel.desinstaller()
+    ctx.journal.ecrire("un-clic", commande=args.commande)
+    return {"connexion_en_un_clic": message}, 0
+
+
+def _recevoir_rappel(arguments: list[str]) -> int:
+    """`lymow rappel <adresse>` : appelé par Windows avec une adresse venue du navigateur.
+
+    Aucune option n'existe ici (ni --reel ni rien) : un seul argument, de forme stricte.
+    L'adresse n'est ni affichée ni journalisée, même en cas d'erreur.
+    """
+    try:
+        adresse = rappel.valider(arguments)
+        journal.declarer_secret(adresse)
+        fabrique = asyncio.SelectorEventLoop if sys.platform == "win32" else None
+        remise = asyncio.run(rappel.transmettre(adresse, rappel.ports_connus(config.dossier_donnees())), loop_factory=fabrique)
+    except ErreurSaisie:
+        print("Adresse de rappel refusée : rien n'a été transmis.", file=sys.stderr)
+        _retenir_la_fenetre()
+        return CODE_REFUS
+    except Exception as erreur:  # noqa: BLE001 — jamais le texte d'origine : il pourrait citer l'adresse
+        print(f"Transmission impossible ({type(erreur).__name__}).", file=sys.stderr)
+        _retenir_la_fenetre()
+        return 1
+    if remise:
+        print("Connexion transmise à l'interface Lymow : cette fenêtre peut se fermer.")
+        return 0
+    print(
+        "Aucune interface Lymow n'attend cette connexion. Lancez « lymow ui », cliquez sur "
+        "« Se connecter avec Google », puis recommencez.",
+        file=sys.stderr,
+    )
+    _retenir_la_fenetre()
+    return 1
+
+
 _COMMANDES = {
+    "rappel-installer": _commande_un_clic, "rappel-desinstaller": _commande_un_clic,
     "carte": _commande_carte, "ajuster-zone": _commande_ajuster, "restaurer-zone": _commande_restaurer,
     "connexion": _commande_connexion, "deconnexion": _commande_deconnexion,
     "diagnostic": _commande_diagnostic, "etat": _commande_etat,
@@ -412,7 +452,10 @@ def main(argv: list[str] | None = None) -> int:
     for flux in (sys.stdout, sys.stderr):
         if hasattr(flux, "reconfigure"):
             flux.reconfigure(errors="replace")
-    args = construire_analyseur().parse_args(argv)
+    arguments = sys.argv[1:] if argv is None else list(argv)
+    if arguments[:1] == ["rappel"]:  # avant tout analyseur : cette commande n'accepte aucune option
+        return _recevoir_rappel(arguments[1:])
+    args = construire_analyseur().parse_args(arguments)
     # aiomqtt exige une boucle à sélecteur ; la boucle par défaut de Windows n'en est pas une.
     fabrique = asyncio.SelectorEventLoop if sys.platform == "win32" else None
     try:
@@ -429,7 +472,7 @@ def main(argv: list[str] | None = None) -> int:
             return CODE_ARRET_NON_CONFIRME
         if args.commande == "ui":
             _retenir_la_fenetre()
-        refus = (RefusSecurite, ErreurSaisie, config.ErreurConfiguration, carte.CarteIllisible)
+        refus = (RefusSecurite, ErreurSaisie, config.ErreurConfiguration, carte.CarteIllisible, rappel.EchecRappel)
         return CODE_REFUS if isinstance(erreur, refus) else 1
     if code == CODE_ARRET_NON_CONFIRME:
         print(_ALERTE_ARRET, file=sys.stderr, flush=True)  # en tête, avant tout compte rendu

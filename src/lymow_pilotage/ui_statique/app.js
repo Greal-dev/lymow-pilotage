@@ -11,6 +11,7 @@
   var dernierResultat = "";
   var video = { pc: null, ws: null };
   var videoOuverte = false;
+  var unClicActif = false;
   var CLES_ETAT = [
     "en_ligne", "statut_libelle", "batterie_pct", "erreurs", "avertissements", "rtk", "rtk_satellites",
     "signal_4g", "signal_wifi", "wifi_rssi_dbm", "position_est_m", "position_nord_m", "cap_deg",
@@ -166,7 +167,15 @@
       : "Non connecté : aucun compte enregistré sur ce poste.";
     $("compte-deconnecter").hidden = !compte.connecte;
     $("compte-connecter").textContent = compte.connecte ? "Changer de compte Google" : "Se connecter avec Google";
-    if (!compte.tentative) { $("compte-marche").hidden = true; }
+    if (!compte.tentative) { $("compte-marche").hidden = true; $("un-clic-attente").hidden = true; }
+    var unClic = compte.un_clic || {};
+    unClicActif = Boolean(unClic.actif);
+    $("un-clic-etat").textContent = !unClic.pris_en_charge
+      ? "connexion en un clic : non prise en charge sur ce système"
+      : "connexion en un clic : " + (unClic.actif ? "active" : "inactive")
+        + (unClic.etranger ? " (un autre programme occupe déjà le protocole myapp)" : "");
+    $("un-clic-activer").hidden = !unClic.pris_en_charge || unClic.actif || Boolean(unClic.etranger);
+    $("un-clic-desactiver").hidden = !unClic.actif;
     var choix = $("compte-choix");
     choix.hidden = !compte.choix;
     var liste = $("compte-appareils");
@@ -212,6 +221,7 @@
     $("compte-lien").href = reponse.url;
     $("compte-adresse").value = "";
     $("compte-marche").hidden = false;
+    $("un-clic-attente").hidden = !unClicActif;
     // Navigation dans un nouvel onglet, sans lien de retour vers cette page.
     window.open(reponse.url, "_blank", "noopener,noreferrer");
     messageCompte("Si aucun onglet ne s'est ouvert, utilisez le lien ci-dessous. Tentative valable 10 minutes.");
@@ -232,6 +242,22 @@
       adresse = "";
       $("compte-marche").hidden = true;
       messageCompte(erreur.message + " Recommencez avec « Se connecter avec Google ».");
+    }
+  }
+
+  var EXPLICATION_UN_CLIC = "Activer la connexion en un clic ?\n\n"
+    + "Lymow écrit une clé dans le registre de votre session Windows "
+    + "(HKCU\\Software\\Classes\\myapp) pour que l'adresse de retour de Google soit remise "
+    + "directement à lymow.exe. Rien d'autre n'est modifié. Pour annuler : bouton « Désactiver », "
+    + "ou la commande « lymow rappel-desinstaller ».";
+
+  async function reglerUnClic(activer) {
+    if (activer && !window.confirm(EXPLICATION_UN_CLIC)) { return; }
+    try {
+      var reponse = await appeler("/api/compte/un-clic", { activer: activer });
+      messageCompte(reponse.message);
+    } catch (erreur) {
+      messageCompte(erreur.message);
     }
   }
 
@@ -495,6 +521,8 @@
   $("compte-connecter").addEventListener("click", commencerConnexion);
   $("compte-formulaire").addEventListener("submit", validerConnexion);
   $("compte-deconnecter").addEventListener("click", deconnecter);
+  $("un-clic-activer").addEventListener("click", function () { reglerUnClic(true); });
+  $("un-clic-desactiver").addEventListener("click", function () { reglerUnClic(false); });
   $("video-arreter").addEventListener("click", function () { arreterVideo(); });
 
   window.addEventListener("pagehide", function () {
