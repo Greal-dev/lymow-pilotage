@@ -97,6 +97,12 @@ AJUSTEMENT_MAX_M = 0.50
 TOLERANCE_CONTOUR_M = 0.001  # un flottant simple précision à 100 m se lit à 0,01 mm près
 RACCORD_DEFAUT_M = 0.5
 RACCORD_MAX_M = 5.0
+# SEC-10 : dérive cumulée d'un sommet par rapport à la référence locale de sa zone.
+CUMUL_MAX_M = 1.00
+# SEC-10 : une zone interdite garde au moins cette marge avec le nouveau contour.
+DEGAGEMENT_INTERDITE_M = 0.05
+# SEC-11 : deux relectures après l'écriture, à 1 s puis 5 s.
+ATTENTES_VERDICT_S = (1.0, 4.0)
 SOMMETS_MAX = 2000
 
 

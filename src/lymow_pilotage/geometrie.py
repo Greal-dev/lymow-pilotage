@@ -131,6 +131,14 @@ def touche(contour: list[Point], trace: list[Point]) -> bool:
     )
 
 
+def distance_contours(a: list[Point], b: list[Point]) -> float:
+    """Plus petite distance entre deux contours fermés qui ne se coupent pas."""
+    return min(
+        [distance_au_segment(p, c, d) for p in a for c, d in _aretes(b)]
+        + [distance_au_segment(p, c, d) for p in b for c, d in _aretes(a)]
+    )
+
+
 def portion(contour: list[Point], de: int, a: int, cote: str) -> list[int]:
     """Indices des sommets de `de` à `a`, par le côté court ou long de la boucle, ou tous."""
     n = len(contour)

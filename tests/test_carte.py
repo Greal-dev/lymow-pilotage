@@ -51,14 +51,22 @@ def _passage(identifiant, zone1, zone2, points, station=False) -> bytes:
     return brut + pb._field_bytes(5, _polygone(points)) + pb._field_i32(6, 1 if station else 0)
 
 
-def contenu(pelouse=PELOUSE, nom="Pelouse", massif=MASSIF, passage=((9.5, 3.0), (14.5, 3.0)), station=(1.0, 1.0)) -> bytes:
+def contenu(
+    pelouse=PELOUSE, nom="Pelouse", massif=MASSIF, passage=((9.5, 3.0), (14.5, 3.0)), station=(1.0, 1.0),
+    origine=True, signalee_incomplete=False,
+) -> bytes:
     """Contenu brut d'une carte (PbMap) : deux zones, une zone interdite, deux passages, une station."""
     brut = pb._field_bytes(1, _zone("zoneA1", nom, pelouse)) + pb._field_bytes(1, _zone("zoneB1", "Verger", VERGER))
     if massif:
         brut += pb._field_bytes(2, _zone("nogoA1", "Massif", massif, parent="zoneA1"))
     brut += pb._field_bytes(3, _passage("passAB", "zoneA1", "zoneB1", passage))
     brut += pb._field_bytes(3, _passage("passSt", "zoneA1", "", [(1.0, 1.0), (2.0, 2.0)], station=True))
-    brut += pb._field_bytes(4, pb._field_f32(1, station[0]) + pb._field_f32(2, station[1]) + pb._field_f32(3, 0.0))
+    if station:
+        brut += pb._field_bytes(4, pb._field_f32(1, station[0]) + pb._field_f32(2, station[1]) + pb._field_f32(3, 0.0))
+    if signalee_incomplete:
+        brut += pb._field_i32(5, 1)  # isIncomplete
+    if origine:
+        brut += pb._field_bytes(7, pb._field_f32(1, 46.5) + pb._field_f32(2, -0.5))  # origine du repère
     return brut + pb._field_bytes(11, b"\x08\x32")  # réglages globaux de tonte
 
 
@@ -403,20 +411,72 @@ def test_sec09_sauvegarde_impossible_aucune_ecriture(session, lien, tmp_path, ca
     assert lien.ecritures == []
 
 
-def test_sec09_carte_de_plus_de_60_s_redemandee_carte_fraiche_reutilisee(session, lien, tmp_path, carte, horloge):
+def test_sec09_deux_lectures_fraiches_avant_toute_ecriture_meme_avec_une_carte_en_memoire(session, lien, tmp_path, carte):
     lien.carte = contenu()
-    session.recevoir_etat({"mapRaw": contenu()})
-    horloge.t += 61.0
+    session.recevoir_etat({"mapRaw": contenu()})  # une carte toute fraîche en mémoire ne dispense de rien
     lancer(retouche.emettre(session, _operation(carte), tmp_path))
     avant_ecriture = lien.trames[: lien.trames.index(lien.ecritures[0])]
-    assert avant_ecriture.count(DEMANDE_CARTE) == 1  # périmée : redemandée
+    assert avant_ecriture.count(DEMANDE_CARTE) == 2
 
-    lien.publies.clear()
-    lien.ecritures.clear()
-    horloge.t += 5.0  # la carte relue après l'écriture précédente a moins de 60 s
-    lancer(retouche.emettre(session, _operation(carte), tmp_path))
-    avant_ecriture = lien.trames[: lien.trames.index(lien.ecritures[0])]
-    assert avant_ecriture.count(DEMANDE_CARTE) == 0
+
+def test_sec09_deux_lectures_differentes_refus(session, lien, tmp_path, carte):
+    lien.carte = contenu()
+    demandes = []
+
+    def carte_instable(lien_, octets):
+        if octets == DEMANDE_CARTE:
+            demandes.append(octets)
+            if len(demandes) == 2:  # la seconde lecture ne rend plus le même passage
+                lien_.carte = contenu(passage=((9.0, 3.0), (14.5, 3.0)))
+
+    lien.sur_publication = carte_instable
+    with pytest.raises(RefusSecurite, match=r"deux lectures consécutives de la carte diffèrent .*\(SEC-09\)"):
+        lancer(retouche.emettre(session, _operation(carte), tmp_path))
+    assert lien.ecritures == [] and not (tmp_path / "sauvegardes-carte").exists()
+
+
+@pytest.mark.parametrize(
+    ("partielle", "manque"),
+    [
+        ({"signalee_incomplete": True}, "le robot la signale incomplète"),
+        ({"station": None}, "station de charge absente"),
+        ({"origine": False}, "origine absente"),
+    ],
+)
+def test_sec09_carte_partielle_affichee_mais_jamais_base_d_une_ecriture(session, lien, tmp_path, carte, partielle, manque):
+    incomplete = cartes.decoder(contenu(**partielle))
+    assert not incomplete.complete and manque in incomplete.manques
+    lisible = cartes.vers_json(incomplete)
+    assert lisible["complete"] is False and manque in lisible["manques"] and len(lisible["zones"]) == 2  # affichable
+    with pytest.raises(RefusSecurite, match=r"carte incomplète .*\(SEC-09\)"):
+        retouche.preparer_ajustement(incomplete, "zoneA1", 0, 2, 20, "court", 0.5)
+    lien.carte = contenu(**partielle)  # le robot ne rend qu'une carte partielle au moment d'écrire
+    with pytest.raises(RefusSecurite, match="carte incomplète"):
+        lancer(retouche.emettre(session, _operation(carte), tmp_path))
+    assert lien.ecritures == []
+
+
+def test_carte_complete_reconnue(carte):
+    assert carte.complete and carte.manques == () and cartes.vers_json(carte)["complete"] is True
+
+
+@pytest.mark.parametrize("coupe", [1, 7, 40, 41, 120, 200])
+def test_decodage_strict_charge_tronquee_refusee(coupe):
+    with pytest.raises(cartes.CarteIllisible):
+        cartes.decoder(contenu()[:-coupe] if coupe < 100 else contenu()[:coupe])
+
+
+def test_decodage_strict_longueur_point_et_type_de_fil():
+    zone_sans_y = pb._field_bytes(1, pb._field_bytes(1, pb._field_str(3, "z") + pb._field_bytes(5, pb._field_bytes(1, pb._field_f32(1, 1.0)))))
+    for brut, motif in (
+        (b"\x0a\x05\x01", "tranche plus courte"),  # longueur annoncée 5, 1 octet présent
+        (b"\x0b\x00", "type de fil inconnu"),  # type 3 (groupe)
+        (b"\x0d\x00\x00", "valeur fixe tronquée"),
+        (b"\x0a\x80", "charge tronquée"),
+        (zone_sans_y, "point sans x ou sans y"),
+    ):
+        with pytest.raises(cartes.CarteIllisible, match=motif):
+            cartes.decoder(brut)
 
 
 def test_sec09_sans_carte_ou_carte_changee_depuis_la_previsualisation_refus(session, lien, tmp_path, carte):
@@ -429,10 +489,10 @@ def test_sec09_sans_carte_ou_carte_changee_depuis_la_previsualisation_refus(sess
     assert lien.ecritures == []
 
 
-def test_sec10_reverifie_sur_la_carte_fraiche_avant_d_ecrire(session, lien, tmp_path, carte):
+def test_sec09_carte_changee_ailleurs_depuis_la_previsualisation_refus(session, lien, tmp_path, carte):
     operation = _operation(carte, cm=-20)
     lien.carte = contenu(massif=[(4.0, 0.1), (6.0, 0.1), (6.0, 1.0), (4.0, 1.0)])  # le massif a été déplacé entre-temps
-    with pytest.raises(RefusSecurite, match="SEC-10"):
+    with pytest.raises(RefusSecurite, match="SEC-09"):
         lancer(retouche.emettre(session, operation, tmp_path))
     assert lien.ecritures == []
 
@@ -449,7 +509,7 @@ def test_sec11_verdict_applique(session, lien, tmp_path, carte, messages):
 def test_sec11_verdict_ignore_par_le_robot(session, lien, tmp_path, carte):
     lien.carte = contenu()
     bilan, code = lancer(retouche.emettre(session, _operation(carte), tmp_path))
-    assert (bilan["verdict"], code) == ("ignoré par le robot", 1) and len(lien.ecritures) == 1
+    assert (bilan["verdict"], code) == (retouche.NON_CONFIRME, 1) and len(lien.ecritures) == 1
 
 
 @pytest.mark.parametrize(
@@ -470,7 +530,7 @@ def test_sec11_difference_inattendue_message_en_tete_sauvegarde_et_restauration(
     assert bilan["verdict"] == "DIFFÉRENCE INATTENDUE" and code == 1 and difference in bilan["differences"]
     assert messages[0].startswith("DIFFÉRENCE INATTENDUE") and bilan["sauvegarde"] in messages[0]
     assert messages[1] == f"Pour revenir en arrière : {bilan['restauration']}"
-    assert bilan["restauration"] == f'lymow restaurer-zone "{bilan["sauvegarde"]}" --zone zoneA1 --reel'
+    assert bilan["restauration"] == f'lymow restaurer-zone "{bilan["sauvegarde"]}" --zone zoneA1'
     verdict = next(ligne for ligne in lignes_journal(tmp_path) if ligne["evenement"] == "carte-verdict")
     assert verdict["verdict"] == "DIFFÉRENCE INATTENDUE" and difference in verdict["differences"]
 
@@ -503,7 +563,7 @@ def test_restauration_renvoie_l_ancien_contour_par_le_meme_encodeur(session, lie
     operation = _operation(carte)
     lien.carte, lien.carte_apres = contenu(), _contenu_applique(operation)
     bilan, _code = lancer(retouche.emettre(session, operation, tmp_path))
-    sauvegarde = retouche.charger_sauvegarde(Path(bilan["sauvegarde"]).with_suffix(".json"))  # .pb ou .json voisin
+    sauvegarde = retouche.charger_sauvegarde(Path(bilan["sauvegarde"]).with_suffix(".json"), "robot-test")
     actuelle = cartes.decoder(lien.carte)
     retour = retouche.preparer_restauration(actuelle, sauvegarde, None, bilan["sauvegarde"])
     assert retour.ecart_m is None and retour.apres == PELOUSE and retour.resume["sommets_deplaces"] == 1
@@ -512,6 +572,8 @@ def test_restauration_renvoie_l_ancien_contour_par_le_meme_encodeur(session, lie
     assert (bilan2["verdict"], code) == ("appliqué", 0)
     assert lien.ecritures[-1] == protocole.trame_contour_zone("zoneA1", PELOUSE, Calibration()).octets
     assert len(list((tmp_path / "sauvegardes-carte").glob("*.pb"))) == 2  # SEC-09 : la restauration sauvegarde aussi
+    with pytest.raises(ErreurSaisie, match="identifiant de zone exact"):
+        retouche.preparer_restauration(actuelle, sauvegarde, "Pelouse", "s.pb")  # jamais de repli par nom
 
 
 def test_restauration_memes_bornes_et_zone_a_preciser(carte, tmp_path):
@@ -521,9 +583,9 @@ def test_restauration_memes_bornes_et_zone_a_preciser(carte, tmp_path):
     with pytest.raises(ErreurSaisie, match="--zone"):
         retouche.preparer_restauration(carte, carte, None, "s.pb")  # aucune zone ne diffère
     with pytest.raises(RefusSecurite, match="aucun sommet déplacé"):
-        retouche.preparer_restauration(carte, carte, "Pelouse", "s.pb")
+        retouche.preparer_restauration(carte, carte, "zoneA1", "s.pb")
     with pytest.raises(ErreurSaisie, match="illisible"):
-        retouche.charger_sauvegarde(tmp_path / "absente.pb")
+        retouche.charger_sauvegarde(tmp_path / "absente.pb", "robot-test")
 
 
 # --- ligne de commande ------------------------------------------------------
@@ -571,17 +633,211 @@ def test_commande_ajuster_zone_simulation_resume_et_apercu_sans_ecriture(capsys,
     assert "carte-simulee" in [ligne["evenement"] for ligne in lignes_journal(tmp_path)]
 
 
-def test_commande_ajuster_zone_reelle_et_restauration(capsys, tmp_path, liaison_factice, lien, carte):
+AJUSTER = ("ajuster-zone", "zoneA1", "--de", "0", "--a", "2", "--cm", "5")
+
+
+def test_commande_ajuster_zone_reelle_exige_l_empreinte_de_la_simulation(capsys, tmp_path, liaison_factice, lien, carte):
     operation = retouche.preparer_ajustement(carte, "Pelouse", 0, 2, 5, "court", None)
     lien.carte, lien.carte_apres = contenu(), _contenu_applique(operation)
-    code, sortie, _err = commande(capsys, tmp_path, "ajuster-zone", "zoneA1", "--de", "0", "--a", "2", "--cm", "5", "--reel")
+    code, simulee, _err = commande(capsys, tmp_path, *AJUSTER)
+    empreinte = simulee["empreinte"]
+    assert code == 0 and len(empreinte) == 12 and empreinte == operation.empreinte and empreinte in simulee["note"]
+    for confirmation in ((), ("--confirmer", "000000000000"), ("--confirmer", empreinte[:-1]), ("--confirmer", "")):
+        code, _sortie, err = commande(capsys, tmp_path, *AJUSTER, "--reel", *confirmation)
+        assert code == 2 and "--confirmer absent ou différent" in err and lien.ecritures == []
+    # Même empreinte, autres paramètres : refus (l'empreinte lie carte, zone, paramètres et contour).
+    code, _sortie, err = commande(capsys, tmp_path, "ajuster-zone", "zoneA1", "--de", "0", "--a", "2", "--cm", "6", "--reel", "--confirmer", empreinte)
+    assert code == 2 and lien.ecritures == []
+    code, sortie, _err = commande(capsys, tmp_path, *AJUSTER, "--reel", "--confirmer", empreinte)
     assert code == 0 and sortie["verdict"] == "appliqué" and len(lien.ecritures) == 1
-    assert liaison_factice == [frozenset(Categorie)]
-    code, simulee, _err = commande(capsys, tmp_path, "restaurer-zone", sortie["sauvegarde"])
+    assert liaison_factice[-1] == frozenset(Categorie)
+
+    # Restauration : identifiant exact, simulation d'abord, puis empreinte.
+    restaurer = ("restaurer-zone", sortie["sauvegarde"], "--zone", "zoneA1")
+    code, _sortie, err = commande(capsys, tmp_path, "restaurer-zone", sortie["sauvegarde"], "--zone", "Pelouse")
+    assert code == 2 and "identifiant de zone exact" in err
+    code, simulee, _err = commande(capsys, tmp_path, *restaurer)
     assert code == 0 and simulee["mode"] == "simulation" and len(lien.ecritures) == 1
+    code, _sortie, err = commande(capsys, tmp_path, *restaurer, "--reel")
+    assert code == 2 and len(lien.ecritures) == 1
     lien.carte_apres = contenu()
-    code, restauree, _err = commande(capsys, tmp_path, "restaurer-zone", sortie["sauvegarde"], "--zone", "Pelouse", "--reel")
+    code, restauree, _err = commande(capsys, tmp_path, *restaurer, "--reel", "--confirmer", simulee["empreinte"])
     assert code == 0 and restauree["verdict"] == "appliqué" and len(lien.ecritures) == 2
+
+
+def test_empreinte_change_avec_la_carte_la_zone_le_contour_et_la_reference(carte):
+    base = retouche.preparer_ajustement(carte, "zoneA1", 0, 2, 5, "court", 0.5)
+    autres = [
+        retouche.preparer_ajustement(carte, "zoneA1", 0, 2, 6, "court", 0.5),
+        retouche.preparer_ajustement(carte, "zoneA1", 0, 2, 5, "court", 0.4),
+        retouche.preparer_ajustement(carte, "zoneA1", 0, 2, 5, "court", 0.5, nouvelle_reference=True),
+        retouche.preparer_ajustement(cartes.decoder(contenu(station=(1.5, 1.0))), "zoneA1", 0, 2, 5, "court", 0.5),
+    ]
+    assert len({base.empreinte, *(autre.empreinte for autre in autres)}) == 5
+    assert base.empreinte == retouche.preparer_ajustement(carte, "Pelouse", 0, 2, 5, "court", 0.5).empreinte
+
+
+def test_publication_non_acquittee_relecture_verdict_et_commande_de_restauration(session, lien, tmp_path, carte, messages):
+    operation = _operation(carte)
+    lien.carte = contenu()
+
+    def expire(lien_, octets):
+        if octets.startswith(ENTETE_ECRITURE_CARTE):
+            lien_.carte = _contenu_applique(operation)  # le robot l'a reçue, l'acquittement s'est perdu
+            raise TimeoutError
+
+    lien.sur_publication = expire
+    bilan, code = lancer(retouche.emettre(session, operation, tmp_path))
+    assert bilan["verdict"] == "appliqué" and bilan["publication"].startswith("non acquittée") and code == 0
+    assert "restaurer-zone" in messages[-1] and bilan["sauvegarde"] in messages[-2]
+
+
+def test_publication_perdue_verdict_non_confirme(session, lien, tmp_path, carte, messages):
+    lien.carte = contenu()
+
+    def expire(_lien, octets):
+        if octets.startswith(ENTETE_ECRITURE_CARTE):
+            raise TimeoutError
+
+    lien.sur_publication = expire
+    bilan, code = lancer(retouche.emettre(session, _operation(carte), tmp_path))
+    assert bilan["verdict"] == retouche.NON_CONFIRME and "ne relancez pas" in bilan["verdict"] and code == 1
+    assert messages[0].startswith("non confirmé")
+
+
+def test_sec11_deux_relectures_le_contour_peut_arriver_a_la_seconde(session, lien, tmp_path, carte):
+    operation = _operation(carte)
+    lien.carte = contenu()
+    relectures = []
+
+    def tardif(lien_, octets):
+        if octets == DEMANDE_CARTE and lien_.ecritures:
+            relectures.append(octets)
+            if len(relectures) == 2:
+                lien_.carte = _contenu_applique(operation)
+
+    lien.sur_publication = tardif
+    bilan, code = lancer(retouche.emettre(session, operation, tmp_path))
+    assert (bilan["verdict"], code, len(relectures)) == ("appliqué", 0, 2)
+
+
+def test_sec08_course_de_statut_reverifie_juste_avant_la_publication(session, lien, tmp_path, carte):
+    lien.carte = contenu()
+    demandes = []
+
+    def depart_en_tonte(lien_, octets):
+        if octets == DEMANDE_CARTE:
+            demandes.append(octets)
+            if len(demandes) == 2:  # une tonte planifiée démarre pendant la lecture de la carte
+                lien_.robot = fragment(statut=2)
+
+    lien.sur_publication = depart_en_tonte
+    with pytest.raises(RefusSecurite, match="SEC-08"):
+        lancer(retouche.emettre(session, _operation(carte), tmp_path))
+    assert lien.ecritures == []
+    assert len(list((tmp_path / "sauvegardes-carte").glob("*.pb"))) == 1  # la sauvegarde, elle, a bien été faite
+
+
+def test_stop_pendant_une_retouche_dit_non_verifie_et_donne_la_restauration(session, lien, tmp_path, carte, messages):
+    lien.carte = contenu()
+
+    async def scenario():
+        tache = asyncio.ensure_future(retouche.emettre(session, _operation(carte), tmp_path))
+
+        def interrompre(_lien, octets):
+            if octets.startswith(ENTETE_ECRITURE_CARTE):
+                tache.cancel()  # STOP de la page, ou Ctrl+C
+
+        lien.sur_publication = interrompre
+        with pytest.raises(asyncio.CancelledError):
+            await tache
+
+    lancer(scenario())
+    assert len(lien.ecritures) == 1
+    assert "interrompue : non vérifié" in messages[0] and "restaurer-zone" in messages[1]
+    verdict = next(ligne for ligne in lignes_journal(tmp_path) if ligne["evenement"] == "carte-verdict")
+    assert verdict["verdict"] == "non vérifié : interrompu"
+
+
+def test_sec10_cumul_borne_a_un_metre_de_la_plus_ancienne_sauvegarde(session, lien, tmp_path, carte):
+    actuelle, operation = carte, None
+    lien.carte = contenu()
+    for _tour in range(2):  # deux élargissements de 50 cm : dérive de 1 m, encore admise
+        operation = retouche.preparer_ajustement(actuelle, "zoneA1", 0, 2, 50, "court", 0.5)
+        retouche.controler_cumul(tmp_path, "robot-test", operation)
+        lien.carte_apres = _contenu_applique(operation)
+        bilan, code = lancer(retouche.emettre(session, operation, tmp_path))
+        assert code == 0
+        actuelle = cartes.decoder(lien.carte)
+    troisieme = retouche.preparer_ajustement(actuelle, "zoneA1", 0, 2, 10, "court", 0.5)
+    with pytest.raises(RefusSecurite, match=r"dérive cumulée de 110 cm .*--nouvelle-reference"):
+        retouche.controler_cumul(tmp_path, "robot-test", troisieme)
+    with pytest.raises(RefusSecurite, match="dérive cumulée"):
+        lancer(retouche.emettre(session, troisieme, tmp_path))
+    assert len(lien.ecritures) == 2
+    retouche.controler_cumul(tmp_path, "autre-robot", troisieme)  # la référence est propre à chaque appareil
+
+    # --nouvelle-reference : la carte actuelle du robot devient la référence, puis la retouche passe.
+    relance = retouche.preparer_ajustement(actuelle, "zoneA1", 0, 2, 10, "court", 0.5, nouvelle_reference=True)
+    lien.carte_apres = _contenu_applique(relance)
+    bilan, code = lancer(retouche.emettre(session, relance, tmp_path))
+    assert code == 0 and len(lien.ecritures) == 3
+    suite = retouche.preparer_ajustement(cartes.decoder(lien.carte), "zoneA1", 0, 2, 50, "court", 0.5)
+    retouche.controler_cumul(tmp_path, "robot-test", suite)  # 60 cm de la nouvelle référence : admis
+    references = [json.loads(f.read_text(encoding="utf-8"))["reference"] for f in (tmp_path / "sauvegardes-carte").glob("*.json")]
+    assert references.count(True) == 1
+
+
+def test_sauvegarde_etrangere_ou_incoherente_refusee(session, lien, tmp_path, carte):
+    lien.carte = contenu()
+    bilan, _code = lancer(retouche.emettre(session, _operation(carte), tmp_path))
+    brut = Path(bilan["sauvegarde"])
+    lisible = brut.with_suffix(".json")
+    assert retouche.charger_sauvegarde(brut, "robot-test").complete
+    with pytest.raises(RefusSecurite, match="autre appareil"):
+        retouche.charger_sauvegarde(brut, "robot-du-voisin")
+    with pytest.raises(RefusSecurite, match="démonstration"):
+        retouche.charger_sauvegarde(brut, "robot-test", demonstration=True)
+    meta = json.loads(lisible.read_text(encoding="utf-8"))
+    for alteration, attendu in (
+        ({"date": "hier"}, ErreurSaisie), ({"zones": []}, RefusSecurite), ({"zones": "x"}, ErreurSaisie),
+        ({"appareil": None}, RefusSecurite),
+    ):
+        lisible.write_text(json.dumps(meta | alteration), encoding="utf-8")
+        with pytest.raises(attendu):
+            retouche.charger_sauvegarde(brut, "robot-test")
+    lisible.write_text(json.dumps(meta), encoding="utf-8")
+    brut.write_bytes(brut.read_bytes()[:-3])  # .pb tronqué
+    with pytest.raises(ErreurSaisie, match="illisible"):
+        retouche.charger_sauvegarde(brut, "robot-test")
+    lisible.unlink()
+    with pytest.raises(ErreurSaisie):
+        retouche.charger_sauvegarde(brut, "robot-test")  # un .pb seul ne suffit pas
+
+
+@pytest.mark.parametrize("identifiant", ["..\\x", "../x", "a/b", "c:d", "x y", "é", "", "x" * 65, "con.txt"])
+def test_identifiant_venu_du_nuage_jamais_dans_un_nom_de_fichier(session, lien, tmp_path, identifiant):
+    hostile = pb._field_bytes(1, _zone(identifiant, "Pelouse", PELOUSE)) + contenu()[len(pb._field_bytes(1, _zone("zoneA1", "Pelouse", PELOUSE))):]
+    piegee = cartes.decoder(hostile)
+    assert piegee.zones[0].identifiant == identifiant  # la carte reste affichable
+    with pytest.raises(RefusSecurite, match="jeu de caractères"):
+        retouche.sauvegarder(piegee, tmp_path, piegee.zones[0], __import__("datetime").datetime.now(), "robot-test")
+    assert not (tmp_path / "sauvegardes-carte").exists() and list(tmp_path.iterdir()) == []
+    if identifiant:
+        operation = retouche.preparer_ajustement(piegee, piegee.zones[0].nom, 0, 2, 5, "court", 0.5)
+        with pytest.raises(RefusSecurite):
+            retouche.ecrire_apercu(operation, tmp_path, __import__("datetime").datetime.now())
+        lien.carte = hostile
+        with pytest.raises((RefusSecurite, ValueError)):
+            lancer(retouche.emettre(session, operation, tmp_path))
+        assert lien.ecritures == [] and list(tmp_path.glob("**/*.pb")) == []
+
+
+def test_sec10_degagement_minimal_de_cinq_centimetres_autour_d_une_zone_interdite():
+    proche = cartes.decoder(contenu(massif=[(4.0, 0.24), (6.0, 0.24), (6.0, 1.0), (4.0, 1.0)]))
+    with pytest.raises(RefusSecurite, match=r"serait à .* cm du contour \(dégagement minimal : 5 cm\)"):
+        retouche.preparer_ajustement(proche, "zoneA1", 0, 2, -20, "court", 0.5)  # resterait dedans, à 4 cm du bord
+    retouche.preparer_ajustement(proche, "zoneA1", 0, 2, -15, "court", 0.5)  # 9 cm de marge : admis
 
 
 @pytest.mark.parametrize(
@@ -603,7 +859,10 @@ def test_commandes_de_carte_refusees_sans_ecriture(capsys, tmp_path, liaison_fac
 def test_commande_ajuster_zone_difference_inattendue_code_non_nul_et_message_en_tete(capsys, tmp_path, liaison_factice, lien, carte):
     operation = retouche.preparer_ajustement(carte, "Pelouse", 0, 2, 5, "court", None)
     lien.carte, lien.carte_apres = contenu(), _contenu_applique(operation, massif=None)
-    code = cli.main(["ajuster-zone", "Pelouse", "--de", "0", "--a", "2", "--cm", "5", "--reel", "--donnees", str(tmp_path)])
+    code = cli.main([
+        "ajuster-zone", "Pelouse", "--de", "0", "--a", "2", "--cm", "5", "--reel", "--confirmer", operation.empreinte,
+        "--donnees", str(tmp_path),
+    ])
     assert code == 1 and "DIFFÉRENCE INATTENDUE" in capsys.readouterr().out
 
 

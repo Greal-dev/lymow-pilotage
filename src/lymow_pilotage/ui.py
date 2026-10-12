@@ -576,6 +576,7 @@ class ServeurUI:
             operation = retouche.preparer_ajustement(
                 carte, corps["zone"], int(de), int(a), cm, corps["cote"], _nombre(corps.get("raccord"))
             )
+            retouche.controler_cumul(self.dossier, self.session.appareil, operation)
         except RefusSecurite as refus:
             self._noter(f"retouche refusée : {refus}")
             return web.json_response({"refus": str(refus), "identifiant": None})

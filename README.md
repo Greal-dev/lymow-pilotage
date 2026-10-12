@@ -296,12 +296,19 @@ de X cm le long de ce bord ».
   nombre de sommets déplacés, avertissements. « Émettre » ensuite, comme pour
   un ordre (prévisualisation à usage unique, 60 s, confirmation).
 - Commande : `lymow ajuster-zone <nom|id> --de I --a J --cm X [--cote
-  court|long|tout] [--raccord M]`. Sans `--reel` : lit la carte, affiche le
-  résumé et écrit un aperçu SVG dans `apercus-carte/`. Les indices de sommet
-  sont ceux de `lymow carte --json` (à partir de 0).
-- Retour arrière : `lymow restaurer-zone <sauvegarde.pb> [--zone nom]` renvoie
-  l'ancien contour d'UNE zone par le même chemin et sous les mêmes règles
-  (donc 50 cm au plus par restauration : une sauvegarde par opération).
+  court|long|tout] [--raccord M] [--nouvelle-reference]`. Sans `--reel` : lit
+  la carte, affiche le résumé, une **empreinte** de 12 caractères, et écrit un
+  aperçu SVG dans `apercus-carte/`. Pour émettre, relancer la même commande
+  avec `--reel --confirmer <empreinte>` : l'empreinte dépend de la carte lue,
+  de la zone, des paramètres et du nouveau contour ; absente ou différente,
+  c'est un refus. Les indices de sommet sont ceux de `lymow carte --json` (à
+  partir de 0).
+- Retour arrière : `lymow restaurer-zone <sauvegarde.pb> [--zone identifiant]`
+  renvoie l'ancien contour d'UNE zone par le même chemin et sous les mêmes
+  règles (simulation, empreinte, `--reel --confirmer`). La zone se désigne par
+  son identifiant exact, jamais par son nom ; la sauvegarde doit venir du même
+  appareil et son fichier `.json` doit correspondre au `.pb` ; 50 cm au plus
+  par restauration (une sauvegarde par opération).
 
 Ce que fait le calcul : il déplace les sommets existants de la portion le long
 de la normale extérieure, sans en ajouter ni en retirer ; sur une portion
@@ -320,23 +327,40 @@ Règles, codées en dur :
 - **SEC-08** Une carte ne s'écrit qu'en mode réel, après prévisualisation,
   robot en ligne avec un état frais et un statut au repos ou en charge (0, 1,
   5, 12 — refus en tonte, pause, erreur, télécommande, retour), et sans aucun
-  autre ordre en cours.
-- **SEC-09** Avant toute écriture, la carte complète telle que reçue est
-  sauvegardée dans `sauvegardes-carte/` (octets bruts `.pb` et JSON lisible),
-  puis relue ; si la carte en mémoire a plus de 60 s elle est redemandée ; si
-  elle a changé depuis la prévisualisation, ou si la sauvegarde échoue : refus.
+  autre ordre en cours. Le statut est revérifié une seconde fois juste avant
+  la publication, après la lecture de la carte et la sauvegarde.
+- **SEC-09** Une carte partielle (signalée incomplète par le robot, sans
+  station ou sans origine) s'affiche avec la mention « carte incomplète » mais
+  ne sert jamais de base à une écriture. Avant toute écriture, la carte est
+  lue deux fois de suite : les deux lectures doivent être complètes,
+  identiques (zones, zones interdites, passages, station) et égales à la carte
+  de la prévisualisation. Elle est alors sauvegardée telle que reçue dans
+  `sauvegardes-carte/` (octets bruts `.pb` et JSON lisible), puis relue sur le
+  disque ; si la sauvegarde échoue : refus.
 - **SEC-10** Bornes de la retouche : |X| ≤ 50 cm ; contour résultant simple,
   sans sommets confondus, de même sens et de même nombre de sommets ; surface
   qui varie dans le sens de X ; aucun sommet déplacé de plus de |X| ; toute
-  zone interdite rattachée reste strictement à l'intérieur ; chaque passage et
-  la station qui touchaient la zone la touchent encore. Un seul manquement :
-  refus, avec le motif exact.
-- **SEC-11** Après l'écriture, la carte est redemandée et comparée : contour
-  relu contre contour envoyé, et nom, réglages, zones interdites, passages,
-  station et autres zones inchangés. Verdict : « appliqué », « ignoré par le
-  robot » ou « DIFFÉRENCE INATTENDUE » (message en tête, chemin de la
-  sauvegarde et commande de restauration) ; « non vérifié » si la carte n'a pas
-  pu être relue.
+  zone interdite rattachée reste strictement à l'intérieur, à 5 cm au moins du
+  contour ; chaque passage et la station qui touchaient la zone la touchent
+  encore. Cumul : aucun sommet ne s'éloigne de plus de 1 m de la référence
+  locale de sa zone (la plus ancienne sauvegarde de cet appareil) ; au-delà,
+  refus, sauf `--nouvelle-reference`, qui prend la carte actuelle du robot
+  comme nouvelle référence. Un seul manquement : refus, avec le motif exact.
+- **SEC-11** Après l'écriture, la carte est relue deux fois (environ 1 s puis
+  5 s) et comparée : contour relu contre contour envoyé, et nom, réglages,
+  zones interdites, passages, station et autres zones inchangés. Verdict :
+  « appliqué » ; « non confirmé (le robot n'a pas encore renvoyé le nouveau
+  contour — ne relancez pas, relisez la carte) » ; « DIFFÉRENCE INATTENDUE » ;
+  « non vérifié » si la carte n'a pas pu être relue ou si l'opération a été
+  interrompue (STOP, Ctrl+C). Hors « appliqué », le chemin de la sauvegarde et
+  la commande de restauration sont affichés en tête. Une publication non
+  acquittée ne conclut rien : la carte est relue et le verdict donné.
+
+Les identifiants de zone venus du robot ne sont utilisés dans un nom de fichier
+qu'après contrôle (lettres, chiffres, tiret, soulignement) ; sinon l'opération
+est refusée. Le décodage de la carte est strict : charge tronquée, longueur
+annoncée non tenue, type inconnu ou point sans coordonnée rendent la carte
+illisible plutôt que partiellement lue.
 
 Seule écriture de carte de l'outil : la retouche du contour d'une zone
 (userCtrl 9 + zone et polygone). L'envoi de carte entière, que le robot ignore

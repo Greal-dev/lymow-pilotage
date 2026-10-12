@@ -1,14 +1,19 @@
 """Retouche du contour d'une zone de tonte : calcul, bornes, sauvegarde, écriture, vérification.
 
-Rôle : porter SEC-08 (quand écrire), SEC-09 (sauvegarde avant écriture), SEC-10
-(bornes de la retouche) et SEC-11 (relecture après écriture). Une zone par
-opération, par le seul encodeur `protocole.trame_contour_zone`. Jamais d'envoi
-de carte entière. La géométrie pure vit dans `geometrie`, le décodage dans `carte`.
+Rôle : porter SEC-08 (quand écrire), SEC-09 (carte complète, lue deux fois,
+sauvegardée avant écriture), SEC-10 (bornes de la retouche, dérive cumulée) et
+SEC-11 (relectures après écriture). Une zone par opération, par le seul encodeur
+`protocole.trame_contour_zone`. Jamais d'envoi de carte entière. La géométrie
+pure vit dans `geometrie`, le décodage dans `carte`.
 """
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
+import re
+import struct
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -23,13 +28,18 @@ from .securite import RefusSecurite
 from .session import EchecOrdre, Session
 
 DOSSIER_SAUVEGARDES = "sauvegardes-carte"
+DOSSIER_DEMONSTRATION = "demonstration"  # sous-dossier : jamais mêlé aux sauvegardes d'un vrai robot
 DOSSIER_APERCUS = "apercus-carte"
 APPLIQUE = "appliqué"
-IGNORE = "ignoré par le robot"
+NON_CONFIRME = (
+    "non confirmé (le robot n'a pas encore renvoyé le nouveau contour — ne relancez pas, relisez la carte)"
+)
 DIFFERENCE = "DIFFÉRENCE INATTENDUE"
-NON_VERIFIE = "non vérifié : la carte n'a pas pu être relue"
+NON_VERIFIE = "non vérifié"
 _NOMS_CHAMPS = {2: "zones interdites", 3: "passages", 4: "station de charge", 7: "origine", 8: "réglages de tâche",
                 11: "réglages de tonte", 12: "réglages de passage", 13: "réglages en cours"}
+# Identifiants venus du nuage : jeu de caractères fermé AVANT tout usage dans un nom de fichier.
+_IDENTIFIANT = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
 @dataclass(frozen=True)
@@ -41,14 +51,37 @@ class Retouche:
     ecart_m: float | None  # None : restauration d'un contour sauvegardé
     description: str
     resume: dict[str, Any]
+    carte: str = ""  # empreinte de la carte sur laquelle la retouche a été calculée
+    nouvelle_reference: bool = False
+
+    @property
+    def empreinte(self) -> str:
+        """Courte, à recopier dans `--confirmer` : carte lue, zone, paramètres et nouveau contour."""
+        condense = hashlib.sha256(f"{self.carte}|{self.zone}|{self.description}|{self.nouvelle_reference}|".encode())
+        for x, y in self.apres:
+            condense.update(struct.pack("<ff", x, y))
+        return condense.hexdigest()[:12]
 
 
 def _refus(motif: str) -> RefusSecurite:
     return RefusSecurite(f"retouche refusée : {motif} (SEC-10)")
 
 
+def identifiant_sur(identifiant: str) -> str:
+    if not _IDENTIFIANT.fullmatch(identifiant):
+        raise RefusSecurite("identifiant de zone ou d'appareil hors du jeu de caractères admis : opération refusée")
+    return identifiant
+
+
+def exiger_complete(carte: Carte) -> None:
+    """SEC-09 : une carte partielle s'affiche, mais ne sert jamais de base à une écriture."""
+    if not carte.complete:
+        raise RefusSecurite(f"carte incomplète ({' ; '.join(carte.manques)}) : aucune retouche possible (SEC-09)")
+
+
 def controler(carte: Carte, zone: Zone, apres: list[Point], ecart_m: float | None) -> dict[str, Any]:
     """SEC-10 : bornes dures. Un seul manquement lève, avec le motif exact. Rend les mesures."""
+    exiger_complete(carte)
     avant = zone.contour
     borne = securite.AJUSTEMENT_MAX_M
     if ecart_m is not None:
@@ -78,10 +111,16 @@ def controler(carte: Carte, zone: Zone, apres: list[Point], ecart_m: float | Non
         raise _refus("la surface ne varie pas dans le sens de l'écart demandé")
     for interdite in carte.interdites:
         rattachee = interdite.parent == zone.identifiant
-        if (rattachee or geometrie.strictement_dans(interdite.contour, avant)) and not geometrie.strictement_dans(
-            interdite.contour, apres
-        ):
+        if not (rattachee or geometrie.strictement_dans(interdite.contour, avant)):
+            continue
+        if not geometrie.strictement_dans(interdite.contour, apres):
             raise _refus(f"la zone interdite « {interdite.libelle} » ne resterait pas strictement à l'intérieur")
+        marge = geometrie.distance_contours(interdite.contour, apres)
+        if marge < securite.DEGAGEMENT_INTERDITE_M:
+            raise _refus(
+                f"la zone interdite « {interdite.libelle} » serait à {marge * 100:.1f} cm du contour "
+                f"(dégagement minimal : {securite.DEGAGEMENT_INTERDITE_M * 100:g} cm)"
+            )
     for passage in carte.passages:
         lie = zone.identifiant in (passage.zone1, passage.zone2) or geometrie.touche(avant, passage.trace)
         if lie and passage.trace and not geometrie.touche(apres, passage.trace):
@@ -99,9 +138,11 @@ def controler(carte: Carte, zone: Zone, apres: list[Point], ecart_m: float | Non
 
 
 def preparer_ajustement(
-    carte: Carte, cle: str, de: int, a: int, cm: float, cote: str = "court", raccord_m: float | None = None
+    carte: Carte, cle: str, de: int, a: int, cm: float, cote: str = "court", raccord_m: float | None = None,
+    nouvelle_reference: bool = False,
 ) -> Retouche:
     """Élargit (cm > 0) ou rogne (cm < 0) une bande le long d'une portion du contour d'UNE zone."""
+    exiger_complete(carte)
     zone = carte.zone(cle)
     raccord = securite.RACCORD_DEFAUT_M if raccord_m is None else securite._nombre_fini(raccord_m, "raccord")
     if not 0 <= raccord <= securite.RACCORD_MAX_M:
@@ -124,41 +165,27 @@ def preparer_ajustement(
         "portion": {"de": de, "a": a, "cote": cote, "sommets": len(indices)}, "raccord_m": raccord,
     } | mesures | {"avertissements": avertissements}
     description = f"ajuster-zone {zone.identifiant} --de {de} --a {a} --cm {cm:g} --cote {cote} --raccord {raccord:g}"
-    return Retouche(zone.identifiant, zone.libelle, list(zone.contour), apres, ecart, description, resume)
-
-
-def charger_sauvegarde(chemin: Path) -> Carte:
-    """Fichier `.pb` d'une sauvegarde (ou son `.json` voisin) → carte telle qu'elle était."""
-    brut = chemin.with_suffix(".pb")
-    try:
-        return cartes.decoder(brut.read_bytes())
-    except OSError as erreur:
-        raise ErreurSaisie(f"sauvegarde illisible ({type(erreur).__name__}) : {brut.name}") from None
-
-
-def preparer_restauration(carte: Carte, sauvegarde: Carte, cle: str | None, origine: str) -> Retouche:
-    """Remet l'ancien contour d'UNE zone, par le même encodeur et sous les mêmes bornes."""
-    if cle is None:
-        actuels = {z.identifiant: z.contour for z in carte.zones}
-        differentes = [z for z in sauvegarde.zones if z.identifiant in actuels and z.contour != actuels[z.identifiant]]
-        if len(differentes) != 1:
-            raise ErreurSaisie("précisez la zone à restaurer avec --zone (aucune ou plusieurs zones diffèrent)")
-        ancienne = differentes[0]
-    else:
-        ancienne = sauvegarde.zone(cle)
-    zone = carte.zone(ancienne.identifiant)
-    apres = geometrie.en_f32(ancienne.contour)
-    mesures = controler(carte, zone, apres, None)
-    resume = {"zone": zone.libelle, "identifiant": zone.identifiant, "restauration": origine} | mesures
     return Retouche(
-        zone.identifiant, zone.libelle, list(zone.contour), apres, None,
-        f"restaurer-zone {origine} --zone {zone.identifiant}", resume,
+        zone.identifiant, zone.libelle, list(zone.contour), apres, ecart, description, resume,
+        carte.empreinte(), nouvelle_reference,
     )
 
 
-def sauvegarder(carte: Carte, dossier: Path, zone: Zone, instant: datetime) -> Path:
+# --- sauvegardes locales (SEC-09) et référence cumulée (SEC-10) --------------------
+
+
+def _repertoire(dossier: Path, demonstration: bool) -> Path:
+    base = dossier / DOSSIER_SAUVEGARDES
+    return base / DOSSIER_DEMONSTRATION if demonstration else base
+
+
+def sauvegarder(
+    carte: Carte, dossier: Path, zone: Zone, instant: datetime, appareil: str,
+    *, reference: bool = False, demonstration: bool = False,
+) -> Path:
     """SEC-09 : carte complète telle que reçue, octets bruts et JSON lisible ; lève si l'écriture échoue."""
-    repertoire = dossier / DOSSIER_SAUVEGARDES
+    identifiant_sur(zone.identifiant)
+    repertoire = _repertoire(dossier, demonstration)
     repertoire.mkdir(parents=True, exist_ok=True)
     base = f"{instant:%Y-%m-%d_%H%M%S}_{zone.identifiant}"
     chemin, rang = repertoire / f"{base}.pb", 1
@@ -166,15 +193,100 @@ def sauvegarder(carte: Carte, dossier: Path, zone: Zone, instant: datetime) -> P
         rang += 1
         chemin = repertoire / f"{base}_{rang}.pb"
     chemin.write_bytes(carte.octets)
-    lisible = {"date": instant.isoformat(timespec="seconds"), "zone_retouchee": zone.identifiant} | cartes.vers_json(carte)
+    lisible = {
+        "date": instant.isoformat(timespec="microseconds"), "appareil": appareil, "zone_retouchee": zone.identifiant,
+        "reference": reference, "demonstration": demonstration,
+    } | cartes.vers_json(carte)
     chemin.with_suffix(".json").write_text(json.dumps(lisible, ensure_ascii=False, indent=1), encoding="utf-8")
     if chemin.read_bytes() != carte.octets:
         raise OSError("sauvegarde relue différente de la carte reçue")
     return chemin
 
 
+def charger_sauvegarde(chemin: Path, appareil: str, *, demonstration: bool = False) -> Carte:
+    """Sauvegarde validée : même appareil, structure cohérente, horodatage lisible, même nature (réelle ou démo)."""
+    brut, lisible = chemin.with_suffix(".pb"), chemin.with_suffix(".json")
+    try:
+        meta = json.loads(lisible.read_text(encoding="utf-8"))
+        carte = cartes.decoder(brut.read_bytes())
+        datetime.fromisoformat(meta["date"])
+        zones = [z["identifiant"] for z in meta["zones"]]
+    except (OSError, ValueError, KeyError, TypeError) as erreur:
+        raise ErreurSaisie(f"sauvegarde illisible ou incomplète ({type(erreur).__name__}) : {brut.name}") from None
+    if meta.get("appareil") != appareil:
+        raise RefusSecurite("cette sauvegarde vient d'un autre appareil : restauration refusée")
+    if bool(meta.get("demonstration")) != demonstration:
+        raise RefusSecurite("sauvegarde de démonstration et robot réel ne se mélangent pas : restauration refusée")
+    if zones != [z.identifiant for z in carte.zones] or not carte.complete:
+        raise RefusSecurite("le fichier .pb et sa description .json ne correspondent pas : restauration refusée")
+    return carte
+
+
+def reference_zone(dossier: Path, appareil: str, identifiant: str, *, demonstration: bool = False) -> list[Point] | None:
+    """Contour de référence de la zone : dernière référence déclarée, sinon la plus ancienne sauvegarde."""
+    candidats: list[tuple[bool, str, Path]] = []
+    for lisible in _repertoire(dossier, demonstration).glob("*.json"):
+        try:
+            meta = json.loads(lisible.read_text(encoding="utf-8"))
+            if meta.get("appareil") == appareil and bool(meta.get("demonstration")) == demonstration:
+                candidats.append((bool(meta.get("reference")), str(meta["date"]), lisible))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    references = sorted(c for c in candidats if c[0])
+    ordre = [references[-1]] if references else []
+    ordre += sorted(candidats, key=lambda c: c[1])
+    for _reference, _date, lisible in ordre:
+        try:
+            zone = cartes.decoder(lisible.with_suffix(".pb").read_bytes()).zone_exacte(identifiant)
+        except (OSError, cartes.CarteIllisible):
+            continue
+        if zone is not None:
+            return zone.contour
+    return None
+
+
+def controler_cumul(dossier: Path, appareil: str, retouche: Retouche, *, demonstration: bool = False) -> None:
+    """SEC-10 : aucun sommet ne s'éloigne de plus de 1 m de la référence locale de sa zone."""
+    if retouche.nouvelle_reference:
+        return  # la carte actuelle du robot devient la référence, à l'émission
+    reference = reference_zone(dossier, appareil, retouche.zone, demonstration=demonstration)
+    if reference is None:
+        return  # première retouche : la sauvegarde qui la précède fera référence
+    conseil = "pour repartir de la carte actuelle du robot, ajoutez --nouvelle-reference"
+    if len(reference) != len(retouche.apres):
+        raise _refus(f"le contour n'a plus le même nombre de sommets que la référence locale ; {conseil}")
+    derive = max(geometrie.longueur(a, b) for a, b in zip(reference, retouche.apres))
+    if derive > securite.CUMUL_MAX_M + securite.TOLERANCE_CONTOUR_M:
+        raise _refus(
+            f"dérive cumulée de {derive * 100:.0f} cm par rapport à la référence locale "
+            f"(maximum {securite.CUMUL_MAX_M * 100:g} cm) ; {conseil}"
+        )
+
+
+def preparer_restauration(carte: Carte, sauvegarde: Carte, identifiant: str | None, origine: str) -> Retouche:
+    """Remet l'ancien contour d'UNE zone, désignée par son identifiant exact, sous les mêmes bornes."""
+    exiger_complete(carte)
+    if identifiant is None:
+        actuels = {z.identifiant: z.contour for z in carte.zones}
+        differentes = [z for z in sauvegarde.zones if z.identifiant in actuels and z.contour != actuels[z.identifiant]]
+        if len(differentes) != 1:
+            raise ErreurSaisie("précisez la zone à restaurer avec --zone <identifiant> (aucune ou plusieurs zones diffèrent)")
+        identifiant = differentes[0].identifiant
+    ancienne, zone = sauvegarde.zone_exacte(identifiant), carte.zone_exacte(identifiant)
+    if ancienne is None or zone is None:  # jamais de repli par nom pour une restauration
+        raise ErreurSaisie(f"identifiant de zone exact attendu : « {identifiant} » est absent de la sauvegarde ou de la carte")
+    apres = geometrie.en_f32(ancienne.contour)
+    mesures = controler(carte, zone, apres, None)
+    resume = {"zone": zone.libelle, "identifiant": zone.identifiant, "restauration": origine} | mesures
+    return Retouche(
+        zone.identifiant, zone.libelle, list(zone.contour), apres, None,
+        f"restaurer-zone {origine} --zone {zone.identifiant}", resume, carte.empreinte(),
+    )
+
+
 def ecrire_apercu(retouche: Retouche, dossier: Path, instant: datetime) -> Path:
     """Aperçu de simulation : ancien contour (gris) et nouveau (rouge), nord en haut."""
+    identifiant_sur(retouche.zone)
     points = retouche.avant + retouche.apres
     xs, ys = [p[0] for p in points], [-p[1] for p in points]
     marge = 1.0
@@ -193,6 +305,9 @@ def ecrire_apercu(retouche: Retouche, dossier: Path, instant: datetime) -> Path:
         encoding="utf-8",
     )
     return chemin
+
+
+# --- écriture réelle ---------------------------------------------------------------
 
 
 async def _exiger_repos(session: Session) -> None:
@@ -239,43 +354,85 @@ def comparer(avant: Carte, apres: Carte, retouche: Retouche) -> tuple[str, list[
             differences.append(f"changement inattendu : {_NOMS_CHAMPS.get(numero, f'champ {numero}')}")
     if differences:
         return DIFFERENCE, differences
-    return (APPLIQUE if applique else IGNORE), []
+    return (APPLIQUE if applique else NON_CONFIRME), []
 
 
-async def emettre(session: Session, retouche: Retouche, dossier: Path) -> tuple[dict[str, Any], int]:
-    """Écriture réelle d'une retouche. L'appelant garantit qu'aucun autre ordre n'est en cours (SEC-08)."""
-    await _exiger_repos(session)  # SEC-08
-    # SEC-09 : carte de moins de 60 s, sinon redemandée ; sans carte ni sauvegarde, pas d'écriture.
-    carte = cartes.en_memoire(session)
-    if carte is None or session.horloge() - carte.recue > securite.AGE_MAX_CARTE_S:
-        carte = await cartes.demander(session, securite.ATTENTE_CARTE_S)
-    zone = carte.zone(retouche.zone)
-    if geometrie.en_f32(zone.contour) != geometrie.en_f32(retouche.avant):
+async def _lire_deux_fois(session: Session, retouche: Retouche) -> Carte:
+    """SEC-09 : deux lectures consécutives, complètes, identiques, et égales à la carte prévisualisée."""
+    premiere = await cartes.demander(session, securite.ATTENTE_CARTE_S)
+    seconde = await cartes.demander(session, securite.ATTENTE_CARTE_S)
+    exiger_complete(premiere)
+    exiger_complete(seconde)
+    if premiere.socle() != seconde.socle():
+        raise RefusSecurite("deux lectures consécutives de la carte diffèrent : écriture refusée (SEC-09)")
+    if seconde.empreinte() != retouche.carte:
         raise RefusSecurite("la carte a changé depuis la prévisualisation : prévisualisez de nouveau (SEC-09)")
+    return seconde
+
+
+async def _verdict(session: Session, carte: Carte, retouche: Retouche) -> tuple[str, list[str]]:
+    """SEC-11 : deux relectures (≈ 1 s puis ≈ 5 s) ; « appliqué » dès que le contour envoyé revient."""
+    verdict, differences = NON_VERIFIE, ["la carte n'a pas pu être relue"]
+    for attente in securite.ATTENTES_VERDICT_S:
+        await session.dormir(attente)
+        try:
+            relue = await cartes.demander(session, securite.ATTENTE_CARTE_S)
+        except EchecOrdre:
+            continue
+        verdict, differences = comparer(carte, relue, retouche)
+        if verdict != NON_CONFIRME:
+            break
+    return verdict, differences
+
+
+async def emettre(
+    session: Session, retouche: Retouche, dossier: Path, *, demonstration: bool = False
+) -> tuple[dict[str, Any], int]:
+    """Écriture réelle d'une retouche. L'appelant garantit qu'aucun autre ordre n'est en cours (SEC-08)."""
+    appareil = session.appareil
+    await _exiger_repos(session)  # SEC-08
+    carte = await _lire_deux_fois(session, retouche)  # SEC-09
+    zone = carte.zone_exacte(retouche.zone)
+    if zone is None:
+        raise RefusSecurite("la zone a disparu de la carte : écriture refusée (SEC-09)")
     controler(carte, zone, retouche.apres, retouche.ecart_m)  # SEC-10, de nouveau, sur la carte fraîche
     try:
-        sauvegarde = sauvegarder(carte, dossier, zone, datetime.now())
+        if retouche.nouvelle_reference:  # la carte actuelle du robot devient la référence locale
+            sauvegarder(carte, dossier, zone, datetime.now(), appareil, reference=True, demonstration=demonstration)
+        controler_cumul(dossier, appareil, retouche, demonstration=demonstration)  # SEC-10 cumulatif
+        sauvegarde = sauvegarder(carte, dossier, zone, datetime.now(), appareil, demonstration=demonstration)
+    except RefusSecurite:
+        raise
     except Exception as erreur:  # noqa: BLE001 — sans sauvegarde relue, aucune écriture
         raise RefusSecurite(
             f"sauvegarde de la carte impossible ({type(erreur).__name__}) : écriture refusée (SEC-09)"
         ) from None
+    await _exiger_repos(session)  # SEC-08 : revérifié au dernier moment, le statut a pu changer
     trame = protocole.trame_contour_zone(zone.identifiant, retouche.apres, session.cal)
-    restauration = f'lymow restaurer-zone "{sauvegarde}" --zone {zone.identifiant} --reel'
+    restauration = f'lymow restaurer-zone "{sauvegarde}" --zone {zone.identifiant}'
     session.journal.ecrire(  # SEC-06 : sans trace possible, pas d'écriture
         "carte-ecriture", strict=True, ordre=retouche.description, zone=zone.identifiant,
         resume=retouche.resume, sauvegarde=str(sauvegarde), trame=trame.champs,
     )
-    await session.publier(trame, securite.DELAI_ARRET_S)
-    # SEC-11 : relecture et comparaison.
+    publication = "acquittée"
     try:
-        await session.dormir(1.0)
-        verdict, differences = comparer(carte, await cartes.demander(session, securite.ATTENTE_CARTE_S), retouche)
-    except EchecOrdre:
-        verdict, differences = NON_VERIFIE, []
-    session.journal.ecrire("carte-verdict", zone=zone.identifiant, verdict=verdict, differences=differences)
-    if verdict in (DIFFERENCE, NON_VERIFIE):
+        try:
+            await session.publier(trame, securite.DELAI_ARRET_S)
+        except EchecOrdre as erreur:  # peut-être reçue quand même : on relit avant de conclure
+            publication = f"non acquittée ({erreur})"
+        verdict, differences = await _verdict(session, carte, retouche)
+    except asyncio.CancelledError:
+        # STOP ou Ctrl+C en pleine retouche : on ne sait pas ce que le robot a retenu.
+        session.journal.ecrire("carte-verdict", zone=zone.identifiant, verdict=f"{NON_VERIFIE} : interrompu")
+        session.signaler(f"Retouche de « {zone.libelle} » interrompue : {NON_VERIFIE}. Relisez la carte.")
+        session.signaler(f"Sauvegarde : {sauvegarde} — pour revenir en arrière : {restauration}")
+        raise
+    session.journal.ecrire(
+        "carte-verdict", zone=zone.identifiant, verdict=verdict, differences=differences, publication=publication
+    )
+    if verdict != APPLIQUE or publication != "acquittée":
         session.signaler(f"{verdict} après l'écriture de la zone « {zone.libelle} ». Sauvegarde : {sauvegarde}")
         session.signaler(f"Pour revenir en arrière : {restauration}")
     bilan = {"mode": "réel", "ordre": retouche.description, "verdict": verdict, "differences": differences,
-             "sauvegarde": str(sauvegarde), "restauration": restauration} | retouche.resume
+             "publication": publication, "sauvegarde": str(sauvegarde), "restauration": restauration} | retouche.resume
     return bilan, 0 if verdict == APPLIQUE else 1

@@ -50,6 +50,7 @@ LIBELLES = {
     "deplacement_max_cm": "déplacement maximal (cm)", "surface_avant_m2": "surface avant (m²)",
     "surface_apres_m2": "surface après (m²)", "variation_m2": "variation de surface (m²)",
     "surface_m2": "surface (m²)", "zones_interdites": "zones interdites", "passage_de_station": "passage de station",
+    "complete": "carte complète", "manques": "ce qui manque", "empreinte": "empreinte à confirmer",
     "cote": "côté", "apercu": "aperçu", "differences": "différences", "horodatage": "horodatage",
 }
 
