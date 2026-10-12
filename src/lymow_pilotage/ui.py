@@ -10,6 +10,7 @@ Le mouvement vit ici, côté serveur : la page peut disparaître, l'arrêt part.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import hmac
 import json
@@ -27,7 +28,7 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
-from . import auth, capture, compte, conduite, demo, geometrie, liaison, mouvement, rappel, retouche, securite
+from . import auth, capture, compte, conduite, demo, fleches, geometrie, liaison, mouvement, rappel, retouche, securite
 from . import carte as cartes
 from .config import Calibration
 from .journal import Journal, assainir, declarer_secret, masquer
@@ -50,6 +51,8 @@ FICHIERS = {
     "style.css": "text/css",
     "carte.js": "text/javascript",
     "ordres.js": "text/javascript",
+    "fleches.js": "text/javascript",
+    "pave.js": "text/javascript",
 }
 NOMS_ORDRES = (*mouvement.ETAPES_SEQUENCE, mouvement.ESSAI, *mouvement.TACHES)
 NON_CONNECTE = "non connecté — utilisez le panneau « Compte » de cette page"
@@ -191,6 +194,9 @@ class ServeurUI:
         self.un_clic: dict[str, Any] = {"pris_en_charge": False, "actif": False, "perime": False, "etranger": None}
         self._battement: asyncio.Task[None] | None = None  # démonstration : état périodique du robot fictif
         self._veille: asyncio.Task[None] | None = None
+        # Pilotage direct par flèches : désarmé par défaut, armé explicitement, 60 s sans action au plus.
+        self.direct = fleches.Armement(lambda: self.horloge())
+        self._direct_en_cours = False
         self._ecoute: capture.Enregistreur | None = None  # trames brutes pendant un ordre réel
         self._fin_ecoute: asyncio.TimerHandle | None = None
         self.video_ouverte = False
@@ -219,6 +225,9 @@ class ServeurUI:
                 web.post("/api/previsualiser", self._previsualiser),
                 web.post("/api/emettre", self._emettre),
                 web.post("/api/stop", self._stop),
+                web.post("/api/direct/armer", self._direct_armer),
+                web.post("/api/direct/desarmer", self._direct_desarmer),
+                web.post("/api/direct/fleche", self._direct_fleche),
                 web.post("/api/video/demarrer", self._video_demarrer),
                 web.post("/api/video/arreter", self._video_arreter),
                 web.get("/favicon.ico", self._sans_contenu),
@@ -279,6 +288,7 @@ class ServeurUI:
             return
         self.ferme = True
         self._stop_demande = True
+        self.direct.desarmer()
         await self._interrompre()
         self._fermer_ecoute()
         if self._veille is not None:
@@ -535,6 +545,10 @@ class ServeurUI:
             "appareil": demo.APPAREIL if self.demonstration else self.ident.appareil if self.ident else None,
             "occupe": self.occupe,
             "ordres": self._etat_des_ordres(),
+            "direct": {
+                "arme": self.direct.arme, "reste_s": self.direct.reste_s,
+                "file": [dataclasses.asdict(ordre) for ordre in self.direct.file], "faites": self.direct.faites[-12:],
+            },
             "compte": self._compte(),
             "etat": etat,
             "resultat": self.resultat,
@@ -543,6 +557,11 @@ class ServeurUI:
         if complet:
             image |= {
                 "bornes": _bornes(), "libelles": conduite.LIBELLES,
+                "fleches": {
+                    "distances_m": list(fleches.DISTANCES_M), "angles_deg": list(fleches.ANGLES_DEG),
+                    "distance_defaut_m": fleches.DISTANCE_DEFAUT_M, "angle_defaut_deg": fleches.ANGLE_DEFAUT_DEG,
+                    "file_max": fleches.FILE_MAX, "armement_s": fleches.DUREE_ARMEMENT_S,
+                },
                 "regions": list(auth.REGIONS), "region_defaut": auth.REGION_DEFAUT,
             }
         return image
@@ -695,12 +714,14 @@ class ServeurUI:
         """STOP : sans prévisualisation, prioritaire sur tout ordre en cours."""
         async with self._verrou_stop:
             if not self.emet:
+                self._desarmer("STOP")
                 bilan, _code = conduite.simuler_ordres([Ordre("stop")], self.cal, self.journal)
                 self._noter("STOP (simulation)")
                 return web.json_response({"bilan": bilan})
             if self.session is None:
                 return _refus(503, f"robot injoignable : {self.etat_liaison}")
             self._noter("STOP demandé")
+            self._desarmer("STOP")  # la file du pilotage direct est vidée avant tout
             self.previsualisation = None
             self._stop_demande = True
             try:
@@ -709,6 +730,111 @@ class ServeurUI:
             finally:
                 self._stop_demande = False
             return web.json_response({"accepte": True}, status=202)
+
+    # --- pilotage direct par flèches ------------------------------------------
+    # Seul chemin sans prévisualisation. Il n'accepte que les quatre ordres bornés de `fleches`,
+    # armement préalable, et chaque ordre passe par `conduite.emettre_ordres` comme tout autre :
+    # SEC-01 (statut, état frais), SEC-02 (plafonds), SEC-03 (arrêt garanti), un mouvement à la fois.
+
+    def _desarmer(self, motif: str) -> None:
+        if self.direct.arme or self.direct.file:
+            self.direct.desarmer()
+            self.journal.ecrire("direct-desarme", motif=motif)
+            self._noter(f"pilotage direct désarmé : {motif}")
+
+    async def _direct_armer(self, requete: web.Request) -> web.StreamResponse:
+        corps = await self._corps(requete)
+        if not isinstance(corps, dict) or corps.get("confirmer") is not True:
+            raise ErreurSaisie("confirmation explicite attendue pour armer le pilotage direct")
+        if self.occupe or self._stop_demande:
+            return _refus(409, "un ordre est en cours : armez le pilotage direct ensuite")
+        if self.emet and (self.session is None or not self.session.lien.connecte):
+            return _refus(503, f"robot injoignable : {self.etat_liaison}")
+        jeton = self.direct.armer()
+        self.journal.ecrire("direct-arme", mode=self.mode)
+        self._noter("PILOTAGE DIRECT ARMÉ : chaque flèche émet son étape sans prévisualisation")
+        return web.json_response({"arme": True, "jeton": jeton, "valable_s": fleches.DUREE_ARMEMENT_S})
+
+    async def _direct_desarmer(self, _requete: web.Request) -> web.StreamResponse:
+        self._desarmer("à la demande de la page")
+        return web.json_response({"arme": False})
+
+    async def _direct_fleche(self, requete: web.Request) -> web.StreamResponse:
+        corps = await self._corps(requete)
+        corps = corps if isinstance(corps, dict) else {}
+        try:
+            self.direct.verifier(corps.get("jeton"))
+        except fleches.RefusDirect as refus:
+            self._desarmer(str(refus))
+            return _refus(409, str(refus))
+        try:
+            if set(corps) - {"jeton", "direction", "pas"}:
+                raise ErreurSaisie("champ inattendu : le pilotage direct n'accepte qu'une flèche et son pas")
+            ordre = fleches.ordre(corps.get("direction"), corps.get("pas"))
+        except ErreurSaisie as erreur:
+            self._desarmer(f"demande refusée ({erreur})")
+            return _refus(400, str(erreur))
+        if not self.emet:  # SEC-05 : simulation — même parcours, rien n'est émis
+            bilan, _code = conduite.simuler_ordres([ordre], self.cal, self.journal, self._appareil_fictif())
+            self.direct.faites.append({
+                "ordre": dataclasses.asdict(ordre), "rapport": {"ordre": str(ordre), "simulee": True},
+            })
+            self.version += 1
+            return web.json_response({"accepte": True, "simulation": True, "jeton": self.direct.renouveler(), "bilan": bilan})
+        if self.session is None or not self.session.lien.connecte:
+            self._desarmer("robot injoignable")
+            return _refus(503, f"robot injoignable : {self.etat_liaison}")
+        if self._stop_demande or (self.occupe and not self._direct_en_cours):
+            self._desarmer("un autre ordre ou un STOP est en cours")
+            return _refus(409, "un autre ordre ou un STOP est en cours : pilotage direct désarmé")
+        if self.occupe and len(self.direct.file) >= fleches.FILE_MAX:
+            self.direct.prolonger()  # appui ignoré, jeton inchangé : la page reste armée
+            return _refus(429, f"file d'attente pleine ({fleches.FILE_MAX}) : appui ignoré")
+        jeton = self.direct.renouveler()
+        if self.occupe:  # un pas est en mouvement : celui-ci attend son tour, cinq au plus
+            self.direct.file.append(ordre)
+        else:
+            self.direct.file.append(ordre)
+            self._direct_en_cours = True
+            try:
+                self._lancer_travail("pilotage direct", self._derouler_file)
+            except BaseException:
+                self._direct_en_cours = False
+                raise
+        self.version += 1
+        return web.json_response(
+            {"accepte": True, "jeton": jeton, "file": [str(o) for o in self.direct.file]}, status=202
+        )
+
+    async def _derouler_file(self) -> tuple[dict[str, Any], int]:
+        """Émet la file, un pas après l'autre ; le premier refus, échec ou constat contraire l'arrête et désarme."""
+        etapes: list[dict[str, Any]] = []
+        motif: str | None = "pilotage direct interrompu"
+        code = 0
+        try:
+            while self.direct.file:
+                ordre = self.direct.file.pop(0)
+                self.version += 1
+                bilan, code = await conduite.emettre_ordres(self.session, [ordre], self.journal)
+                rapport = bilan["etapes"][0] if bilan["etapes"] else {"ordre": str(ordre), "echec": bilan.get("motif")}
+                etapes.append(rapport)
+                self.direct.faites.append({"ordre": dataclasses.asdict(ordre), "rapport": assainir(rapport)})
+                del self.direct.faites[:-20]
+                self.version += 1
+                contraire = rapport.get("verification") in (mouvement.ANOMALIE, mouvement.AUCUN_ETAT)
+                if code != 0 or contraire:
+                    motif = bilan.get("motif") or rapport.get("echec") or rapport.get("constat") or "échec"
+                    code = code or 1
+                    break
+                self.direct.prolonger()
+            else:
+                motif = None
+        finally:
+            self._direct_en_cours = False
+            if motif is not None:  # refus, échec, constat contraire, ou annulation (STOP, fermeture)
+                self._desarmer(motif)
+        bilan = {"mode": "réel", "etapes": etapes, "interrompue": motif is not None}
+        return bilan | ({"motif": f"pilotage direct arrêté : {motif}"} if motif else {}), code
 
     # --- carte : lecture, puis retouche par le même chemin que la commande -----
 
