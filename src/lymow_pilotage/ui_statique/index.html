@@ -11,6 +11,7 @@
   <div id="bandeau-reel" class="bandeau-reel" hidden>MODE RÉEL — chaque ordre émis fait bouger le robot. Ne fermez pas la fenêtre du terminal pendant un mouvement.</div>
   <div id="bandeau-demo" class="bandeau-demo" hidden>DÉMONSTRATION — robot fictif : rien ne part vers un vrai robot</div>
 
+  <div id="bandeau-direct" class="bandeau-direct" role="alert" hidden>PILOTAGE DIRECT ARMÉ — chaque flèche émet immédiatement, sans prévisualisation. STOP : Échap ou Espace.</div>
   <div id="bandeau-arret" class="bandeau-reel" hidden>Interface arrêtée — relancez le raccourci.</div>
 
   <header class="entete">
@@ -71,6 +72,7 @@
       <button id="actualiser" type="button">Actualiser</button>
     </section>
 
+    <div class="pilotage large-bloc">
     <section aria-labelledby="titre-video">
       <h2 id="titre-video">Vidéo</h2>
       <p class="note">« Démarrer la vidéo » contacte le cloud Lymow et active la caméra du robot,
@@ -82,6 +84,40 @@
         <span id="video-etat" class="note">arrêtée</span>
       </p>
     </section>
+
+    <section id="bloc-fleches" tabindex="0" aria-labelledby="titre-fleches">
+      <h2 id="titre-fleches">Pilotage par flèches</h2>
+      <p class="note">Pour écrire vite une suite d'étapes (se dégager, rejoindre une zone couverte), pas pour piloter à vue.
+        Chaque flèche AJOUTE une étape à la séquence ; Entrée la prévisualise, puis « Émettre ».
+        <strong>STOP : Échap ou Espace, à tout moment.</strong></p>
+      <div class="pave" role="group" aria-label="Flèches : avancer, reculer, tourner">
+        <button type="button" class="fleche haut" data-fleche="haut" aria-label="Avancer">↑</button>
+        <button type="button" class="fleche gauche" data-fleche="gauche" aria-label="Tourner à gauche">←</button>
+        <button type="button" class="fleche droite" data-fleche="droite" aria-label="Tourner à droite">→</button>
+        <button type="button" class="fleche bas" data-fleche="bas" aria-label="Reculer">↓</button>
+      </div>
+      <p class="actions">
+        <button id="pave-clavier" type="button">Activer le clavier</button>
+        <span id="pave-focus" class="note" role="status"></span>
+      </p>
+      <label>Pas de ↑ et ↓ <select id="pave-distance"></select></label>
+      <label>Pas de ← et → <select id="pave-angle"></select></label>
+      <p class="actions">
+        <button id="pave-previsualiser" type="button" disabled>Prévisualiser la séquence (Entrée)</button>
+        <button id="pave-annuler" type="button" disabled>Annuler la dernière (Retour arrière)</button>
+        <button id="pave-vider" type="button" disabled>Vider</button>
+        <button id="pave-plateau" type="button">Plateau au plus haut</button>
+      </p>
+      <p id="pave-boutons-note" class="note" role="status"></p>
+      <svg id="pave-miniature" class="miniature" role="img" aria-label="Tracé schématique du trajet cumulé"></svg>
+      <p id="pave-total" class="note"></p>
+      <ol id="pave-retours" class="retours" aria-label="Retour des dernières étapes"></ol>
+      <p id="pave-file" class="note" role="status"></p>
+      <p id="pave-signal" class="avertissement" role="alert"></p>
+      <label class="case"><input id="direct-interrupteur" type="checkbox"> Pilotage direct : chaque flèche émet tout de suite, sans prévisualisation</label>
+      <p id="direct-etat" class="note" role="status"></p>
+    </section>
+    </div>
 
     <section id="bloc-carte" class="large-bloc" aria-labelledby="titre-carte">
       <h2 id="titre-carte">Carte</h2>
@@ -232,7 +268,9 @@
 
   <script src="/statique/signalisation.js"></script>
   <script src="/statique/ordres.js"></script>
+  <script src="/statique/fleches.js"></script>
   <script src="/statique/app.js"></script>
+  <script src="/statique/pave.js"></script>
   <script src="/statique/carte.js"></script>
 </body>
 </html>
