@@ -70,6 +70,7 @@ section, .ordre {
   padding: 0.35rem;
   letter-spacing: 0.04em;
 }
+.version { margin-left: 0.6rem; opacity: 0.7; font-size: 0.8rem; }
 .bandeau-demo {
   position: sticky;
   top: 0;

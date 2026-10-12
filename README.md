@@ -83,6 +83,15 @@ s'appliquent pas.
 navigateur et s'arrête sur Ctrl+C. `lancer-lymow.cmd` (double-clic) lance
 `lymow ui` en simulation.
 
+- Version. Au lancement, l'interface calcule une empreinte de son code et
+  charge sa page en mémoire : la page servie reste cohérente avec le serveur,
+  même si les fichiers sont mis à jour pendant qu'il tourne. L'empreinte et
+  l'heure de démarrage figurent en tête de page. Relancer `lymow ui` après une
+  mise à jour arrête proprement l'ancienne instance du même mode et démarre la
+  nouvelle (« Ancienne version remplacée ») — sauf si un ordre y est en cours
+  (« une ancienne version est en cours d'utilisation, fermez sa fenêtre »).
+  Une instance d'avant cette fonction doit être fermée à la main. Serveur
+  arrêté : la page affiche « Interface arrêtée — relancez le raccourci ».
 - Une seule instance par port. Relancer `lymow ui` (ou le raccourci) alors
   qu'une interface du même mode tourne déjà ne démarre rien : l'instance en
   place rouvre elle-même la page dans le navigateur, avec un nouveau jeton à
