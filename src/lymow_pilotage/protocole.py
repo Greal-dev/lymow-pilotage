@@ -200,10 +200,24 @@ def trame_demande_configuration(cal: Calibration) -> Trame:
     return Trame("demande de configuration", Categorie.REQUETE_PURE, octets, champs)
 
 
-def trame_demande_carte(cal: Calibration) -> Trame:
-    """Demande de la carte entière (userCtrl 19, index 0) : une lecture, rien n'est modifié."""
-    octets = pb.encode_query_map(0, cal.version_protocole)
-    champs = {"version": cal.version_protocole, "userCtrl": socle.USER_CTRL_QUERY_MAP, "demande": "carte entière"}
+# Constat du 2026-10-12 (première lecture réelle, capture hors dépôt) : le robot répond à la
+# demande de carte par UN message dont le contenu est coupé net à 81 920 octets (0x14000),
+# au milieu d'un champ. Une grande carte tient donc en plusieurs tranches de cette taille.
+TAILLE_TRANCHE_CARTE = 81920
+# Hypothèse NON vérifiée en réel : la tranche suivante se demande par l'index de la requête
+# (`queryIndex`, 0 = première). Borne : huit tranches, soit 640 ko de carte.
+TRANCHES_CARTE_MAX = 8
+
+
+def trame_demande_carte(cal: Calibration, index: int = 0) -> Trame:
+    """Demande d'une tranche de la carte (userCtrl 19) : une lecture, rien n'est modifié."""
+    if not 0 <= index < TRANCHES_CARTE_MAX:
+        raise ValueError("index de tranche hors bornes")
+    octets = pb.encode_query_map(index, cal.version_protocole)
+    champs = {
+        "version": cal.version_protocole, "userCtrl": socle.USER_CTRL_QUERY_MAP,
+        "demande": "carte entière" if index == 0 else f"carte, tranche {index + 1}",
+    }
     return Trame("demande de carte", Categorie.REQUETE_PURE, octets, champs)
 
 
@@ -234,7 +248,8 @@ def est_requete_pure(octets: bytes) -> bool:
     """Liste blanche structurelle des messages émissibles en lecture seule.
 
     Trois formes exactes, rien d'autre :
-    - demande de carte : {version(2), userCtrl(5)=19, champ 23={1: 0, 4: 1}} ;
+    - demande de carte : {version(2), userCtrl(5)=19, champ 23={1: index de tranche, 4: 1}},
+      index de 0 à TRANCHES_CARTE_MAX - 1 (lecture d'une grande carte, constat du 2026-10-12) ;
     - présence : {appConnect(7)=2, uuid(27)} ;
     - demande de configuration : {version(2), baseInput(9)={champ 10 = 1}}.
     """
@@ -249,8 +264,10 @@ def est_requete_pure(octets: bytes) -> bool:
                 pb._first(champs, CHAMP_VERSION) in VERSIONS
                 and pb._first(champs, CHAMP_USER_CTRL) == socle.USER_CTRL_QUERY_MAP
                 and isinstance(demande, bytes)
-                and pb._decode_fields(demande) == [(1, 0, 0), (4, 0, 1)]
-                and octets == pb.encode_query_map(0, pb._first(champs, CHAMP_VERSION))
+                and any(
+                    octets == pb.encode_query_map(index, pb._first(champs, CHAMP_VERSION))
+                    for index in range(TRANCHES_CARTE_MAX)
+                )
             )
         if numeros == [CHAMP_VERSION, CHAMP_BASE_INPUT]:
             interne = pb._first(champs, CHAMP_BASE_INPUT)

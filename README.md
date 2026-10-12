@@ -45,7 +45,7 @@ Python 3.12) ; il se régénère avec
 | `lymow sequence "plateau 90; tourner 45 --vitesse 0.2; reculer --duree 2 --vitesse 0.1"` | Enchaîne ; rien ne part si une étape est refusable ; s'arrête au premier refus, échec ou constat non confirmé. Étapes : `tourner`, `avancer`, `reculer`, `plateau`, `plateau-haut`, `stop`. `--reel` et `essai-arret-auto` y sont interdits. |
 | `lymow reprendre` / `base` / `annuler` | Reprise de tâche (4), retour base tâche conservée (33), annulation sur place (28). |
 | `lymow ui [--reel \| --demo] [--port N]` | Interface web locale avec retour vidéo (voir « Interface web locale ») ; `--demo` : robot et jardin fictifs, sans compte ni réseau. |
-| `lymow carte` | Carte du robot : zones, zones interdites, passages, station (lecture seule ; contours complets avec `--json`). |
+| `lymow carte` | Carte du robot : zones, zones interdites, passages, station (lecture seule ; contours complets avec `--json`). Une grande carte arrive coupée à 81 920 octets (constat du 2026-10-12) : les tranches suivantes sont demandées une à une (hypothèse à confirmer en réel), et une carte restée tronquée est refusée avec son motif. |
 | `lymow ajuster-zone <nom\|id> --de I --a J --cm X [--cote court\|long\|tout] [--raccord M]` | Élargit ou rogne une bande le long d'un bord d'une zone (voir « Carte et ajustement de zone »). |
 | `lymow restaurer-zone <sauvegarde.pb> [--zone nom]` | Remet le contour d'une zone depuis une sauvegarde. |
 | `lymow essai-arret-auto [--vitesse V] [--observation S]` | Calibration, robot à vue : une seule consigne avant, puis silence, puis arrêt (voir « Calibration »). |

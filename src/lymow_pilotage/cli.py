@@ -19,12 +19,13 @@ from typing import Any
 
 import aiohttp
 
-from . import auth, capture, carte, compte, conduite, config, journal, liaison, mouvement, protocole, rappel, retouche, securite
+from . import auth, capture, carte, compte, conduite, config, journal, liaison, mouvement, rappel, retouche, securite
 from .conduite import CODE_ARRET_NON_CONFIRME, CODE_REFUS
 from .journal import Journal, masquer
 from .mouvement import ErreurSaisie, Ordre
 from .protocole import Categorie
 from .securite import RefusSecurite
+from .session import EchecOrdre
 from .vendor.ha_lymow.api import LymowApiClient
 
 _ORDRES_SIMPLES = ("plateau-haut", "stop", "reprendre", "base", "annuler")
@@ -259,14 +260,18 @@ async def _commande_capture(args: argparse.Namespace, ctx: Contexte) -> tuple[An
     async with liaison.ouvrir_session(ctx.journal, ctx.cal, _LECTURE, brut=ecoute.recevoir) as session:
         await session.solliciter()
         if args.carte:
-            trame = protocole.trame_demande_carte(session.cal)
-            await session.publier(trame, 3.0)
-            session.journaliser("requete-emise", sujet=session.sujet, trame=trame.description())
+            try:  # toutes les tranches sont demandées ; un refus n'interrompt pas l'écoute
+                lue = await carte.demander(session, securite.ATTENTE_CARTE_S)
+                verdict = "lue, complète" if lue.complete else "lue, incomplète : " + " ; ".join(lue.manques)
+            except (EchecOrdre, carte.CarteIllisible) as erreur:
+                verdict = str(erreur)
         fin = session.horloge() + args.secondes
         while session.horloge() < fin and session.lien.connecte:
             await session.dormir(min(1.0, fin - session.horloge()))
         coupee = not session.lien.connecte
     bilan = ecoute.resume() | {"secondes": args.secondes, "carte_demandee": args.carte}
+    if args.carte:
+        bilan["carte"] = verdict
     if coupee:
         bilan["note"] = "liaison perdue avant la fin de l'écoute"
     ctx.journal.ecrire("capture", messages=bilan["messages"], octets=bilan["octets"])

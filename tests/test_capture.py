@@ -118,7 +118,7 @@ def test_capture_sans_reel_possible_et_sans_message_code_1(capsys, tmp_path, lia
 def test_vidage_structurel_generique_sans_interpretation():
     lignes = capture.vider(ENTIER)
     assert lignes[0] == "2 varint = 49" and lignes[1] == f"23 LEN {len(ENTIER) - 6}"
-    assert any("3 LEN ×40 · longueurs 10 à 10 · total 400 (seul le premier est détaillé)" in ligne for ligne in lignes)
+    assert any("3 LEN ×40 · longueurs 10 à 10 · total 400 (seul le premier est détaillé" in ligne for ligne in lignes)
     assert "        2 fixe32" in lignes and "    5 varint = 1" in lignes
     assert not any(mot in " ".join(lignes).lower() for mot in ("zone", "carte", "map", "polygon"))
 

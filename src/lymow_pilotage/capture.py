@@ -89,8 +89,17 @@ def decouper(octets: bytes) -> tuple[list[Champ], str | None]:
 
 
 def _est_message(octets: bytes) -> bool:
+    """Sous-message plausible. Un grand contenu dont seul le DERNIER champ est coupé en est un aussi :
+    c'est la forme d'une tranche de carte (2026-10-12), qu'il faut ouvrir pour voir la coupure."""
     champs, arret = decouper(octets)
-    return bool(champs) and arret is None and all(champ.annonce is None for champ in champs)
+    if not champs or arret is not None or any(champ.annonce is not None for champ in champs[:-1]):
+        return False
+    return champs[-1].annonce is None or len(octets) >= 64
+
+
+def est_coupe(octets: bytes) -> bool:
+    """Une coupure à n'importe quelle profondeur (le premier niveau seul ne suffit pas)."""
+    return any("TRONQUÉ" in ligne or ligne.lstrip().startswith("!!") for ligne in vider(octets))
 
 
 def _ligne(champ: Champ) -> str:
@@ -113,9 +122,10 @@ def vider(octets: bytes, profondeur: int = 0) -> list[str]:
             longueurs = [champ.longueur for champ in serie]
             lignes.append(
                 f"{marge}{numero} {TYPES[type_fil]} ×{len(serie)} · longueurs {min(longueurs)} à {max(longueurs)}"
-                f" · total {sum(longueurs)} (seul le premier est détaillé)"
+                f" · total {sum(longueurs)} (seul le premier est détaillé, et le dernier s'il est coupé)"
             )
-            serie = serie[:1]
+            # La coupure d'une tranche tombe sur le dernier de la série : il reste visible.
+            serie = serie[:1] + ([serie[-1]] if serie[-1].annonce is not None else [])
         for champ in serie:
             lignes.append(marge + _ligne(champ))
             descendre = champ.annonce is not None or _est_message(champ.contenu)
@@ -178,7 +188,7 @@ class Enregistreur:
         try:
             if protobuf is not None:
                 champs, arret = decouper(protobuf)
-                tronque = arret is not None or any(champ.annonce is not None for champ in champs)
+                tronque = arret is not None or est_coupe(protobuf)
                 self.tronques += tronque
                 self.premier_niveau.update(champ.numero for champ in champs)
                 resume |= {
