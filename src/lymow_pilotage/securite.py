@@ -79,6 +79,27 @@ STATUTS_LAMES_ARRET = frozenset(
 )
 
 
+# SEC-08 : une carte ne s'écrit que robot au repos ou en charge — ni tonte, ni pause,
+# ni erreur, ni télécommande, ni retour.
+STATUTS_ECRITURE_CARTE = frozenset(
+    {
+        socle.WORK_STATUS_NONE,
+        socle.WORK_STATUS_WAITING,
+        socle.WORK_STATUS_CHARGING,
+        socle.WORK_STATUS_CHARGING_FULL,
+    }
+)
+# SEC-09 : au-delà, la carte en mémoire est redemandée avant toute écriture.
+AGE_MAX_CARTE_S = 60.0
+ATTENTE_CARTE_S = 20.0
+# SEC-10 : bornes dures d'une retouche de contour.
+AJUSTEMENT_MAX_M = 0.50
+TOLERANCE_CONTOUR_M = 0.001  # un flottant simple précision à 100 m se lit à 0,01 mm près
+RACCORD_DEFAUT_M = 0.5
+RACCORD_MAX_M = 5.0
+SOMMETS_MAX = 2000
+
+
 class RefusSecurite(Exception):
     """Ordre refusé avant toute émission par un invariant de sécurité."""
 
@@ -250,6 +271,20 @@ def verifier_presence_et_statut(statut: int | None, en_ligne: bool | None) -> No
     if statut not in STATUTS_LAMES_ARRET:
         raise RefusSecurite(
             f"statut de travail {statut} hors de la liste « lames à l'arrêt » : mouvement refusé (SEC-01)"
+        )
+
+
+def verifier_repos_pour_carte(statut: int | None, age_s: float | None, en_ligne: bool | None) -> None:
+    """SEC-08 : écriture de carte seulement robot en ligne, état frais, au repos ou en charge."""
+    if statut is None or age_s is None:
+        raise RefusSecurite("aucun état reçu du robot depuis la sollicitation : écriture de carte refusée (SEC-08)")
+    if not 0 <= age_s <= AGE_MAX_ETAT_S:
+        raise RefusSecurite(f"état périmé ({age_s:.0f} s) : écriture de carte refusée (SEC-08)")
+    if en_ligne is not True:
+        raise RefusSecurite("robot hors ligne ou présence non confirmée : écriture de carte refusée (SEC-08)")
+    if statut not in STATUTS_ECRITURE_CARTE:
+        raise RefusSecurite(
+            f"statut de travail {statut} : une carte ne s'écrit que robot au repos ou en charge (SEC-08)"
         )
 
 

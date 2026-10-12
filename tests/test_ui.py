@@ -125,7 +125,7 @@ def test_aucune_option_ne_change_l_hote_ni_n_ouvre_un_port_reserve(tmp_path, arg
 def test_commande_ui_simulation_par_defaut_reel_explicite(tmp_path, monkeypatch, capsys):
     appels = []
 
-    async def servir(_cal, _journal, *, reel, port):
+    async def servir(_cal, _journal, *, reel, port, **_reste):
         appels.append((reel, port))
 
     monkeypatch.setattr(ui, "servir", servir)
@@ -1308,7 +1308,7 @@ def test_erreur_de_demarrage_fenetre_retenue_seulement_en_console_interactive(tm
 
     invites = []
 
-    async def servir(_cal, _journal, *, reel, port):
+    async def servir(_cal, _journal, *, reel, port, **_reste):
         raise ui.EchecDemarrage("le port 8377 est occupé par un autre programme")
 
     monkeypatch.setattr(ui, "servir", servir)

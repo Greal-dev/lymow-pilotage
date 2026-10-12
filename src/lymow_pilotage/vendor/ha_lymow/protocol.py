@@ -17,7 +17,13 @@ Modifications par rapport à l'original :
 - ``encode_userctrl`` (générique, tout code) non recopié : les seuls codes
   émissibles passent par la liste fermée de ``lymow_pilotage.protocole`` ;
 - ``unwrap_envelope`` : le message d'erreur ne cite plus les clés reçues ;
-- encodeurs de carte, de zones, de réglages, de Wi-Fi, de code PIN et trame de
+- carte : seuls sont recopiés la demande de carte (``encode_query_map``), l'extraction
+  du contenu brut (``extract_raw_map_content``), le codage des points et des polygones
+  et la retouche du contour d'UNE zone (``encode_set_zone_polygon``, seule écriture de
+  carte que le socle dit vérifiée en réel), avec la version de protocole en paramètre ;
+  ``decode_map_response`` n'est pas recopié (le projet garde les octets bruts) ;
+- envoi de carte entière (``encode_sync_map*``), création, suppression, fusion,
+  découpe et renommage de zones, passages, réglages, Wi-Fi, code PIN et trame de
   pilotage Bluetooth : non recopiés.
 """
 
@@ -327,3 +333,80 @@ def encode_query_robot_config(version: int = PB_VERSION) -> bytes:
     pb = _field_i32(2, version)
     pb += _field_bytes(9, _field_i32(10, 1))  # PbInput.f9={f10=1} = getRobotConfig
     return pb
+
+
+# ---------------------------------------------------------------------------
+# Carte : lecture (QUERY_MAP) et retouche du contour d une zone (MODIFY_ZONE_INFO)
+# ---------------------------------------------------------------------------
+
+
+def _decode_map_point(data: bytes) -> dict[str, float]:
+    """Decode an x/y point sub-message where f1=x and f2=y are i32 floats."""
+    f = _decode_fields(data)
+    x_raw = _first(f, 1)
+    y_raw = _first(f, 2)
+    return {
+        "x": _decode_f32(x_raw) if x_raw is not None else 0.0,
+        "y": _decode_f32(y_raw) if y_raw is not None else 0.0,
+    }
+
+
+def _decode_map_polygon(data: bytes) -> list[dict[str, float]]:
+    """Decode a polygon sub-message containing repeated f1 point sub-messages."""
+    f = _decode_fields(data)
+    return [_decode_map_point(p) for p in _all(f, 1) if isinstance(p, bytes)]
+
+
+def extract_raw_map_content(pb_bytes: bytes) -> bytes | None:
+    """Extract raw PbMap content bytes from a map-response PbOutput blob.
+
+    Navigation path: PbOutput.f23 → f2 → f3 = raw PbMap content.
+    Returns None if the map response is not present in the message.
+    """
+    top = _decode_fields(pb_bytes)
+    outer_raw = _first(top, 23)
+    if not isinstance(outer_raw, bytes):
+        return None
+    wrapper_raw = _first(_decode_fields(outer_raw), 2)
+    if not isinstance(wrapper_raw, bytes):
+        return None
+    content_raw = _first(_decode_fields(wrapper_raw), 3)
+    return content_raw if isinstance(content_raw, bytes) else None
+
+
+def encode_query_map(queryIndex: int = 0, version: int = PB_VERSION) -> bytes:
+    """Encode a query-map command (userCtrl=19)."""
+    sub = _field_i32(1, queryIndex) + _field_i32(4, 1)
+    pb = _field_i32(2, version)
+    pb += _field_i32(5, 19)  # USER_CTRL_QUERY_MAP
+    pb += _field_bytes(23, sub)
+    return pb
+
+
+def _encode_map_point(pt: dict) -> bytes:
+    """Encode an x/y point sub-message (f1=x, f2=y, both wire-type-5 float32)."""
+    return _field_f32(1, pt.get("x", 0.0)) + _field_f32(2, pt.get("y", 0.0))
+
+
+def _encode_map_polygon(points: list) -> bytes:
+    """Encode a polygon as repeated f1 point sub-messages."""
+    out = b""
+    for pt in points:
+        out += _field_bytes(1, _encode_map_point(pt))
+    return out
+
+
+def encode_set_zone_polygon(hash_id: str, polygon: list, version: int = PB_VERSION) -> bytes:
+    """Encode a go-zone boundary edit over WiFi (USER_CTRL_MODIFY_ZONE_INFO).
+
+    Same envelope as rename (PbInput.field12 → PbMap.goZones → PbZone.basicInfo),
+    but basicInfo carries the new polygon (f5) instead of the name. The robot
+    applies the pushed polygon — verified live. (NOT sync_map, which the robot
+    ignores.) ``polygon`` is a list of {"x","y"} ENU points.
+    """
+    from .const import USER_CTRL_MODIFY_ZONE_INFO
+
+    basic_info = _field_str(3, hash_id) + _field_bytes(5, _encode_map_polygon(polygon))
+    zone = _field_bytes(1, basic_info)
+    pb_map = _field_bytes(1, zone)  # PbMap.goZones
+    return _field_i32(2, version) + _field_i32(5, USER_CTRL_MODIFY_ZONE_INFO) + _field_bytes(12, pb_map)

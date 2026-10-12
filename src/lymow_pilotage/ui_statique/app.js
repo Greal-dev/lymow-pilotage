@@ -105,6 +105,7 @@
     $("liaison").textContent = image.liaison + (image.occupe ? " — ordre en cours" : "");
     $("appareil").textContent = image.appareil || "";
     afficherCompte(image.compte);
+    if (window.LymowCarte) { window.LymowCarte.robot(image.etat); }
     var bloc = $("bloc-etat");
     var liste = $("etat-liste");
     vider(liste);
@@ -303,9 +304,16 @@
       signalerErreur(erreur);
       return;
     }
-    $("previsualisation-titre").textContent = reponse.ordres;
+    proposer(reponse.ordres, reponse.bilan, reponse.identifiant, estTache);
+  }
+
+  /* Affiche une prévisualisation et arme « Émettre » si le serveur a fourni un identifiant. */
+  function proposer(titre, detail, identifiant, estTache) {
+    oublierPrevisualisation("");
+    var reponse = { ordres: titre, identifiant: identifiant };
+    $("previsualisation-titre").textContent = titre;
     vider($("previsualisation-detail"));
-    rendre(reponse.bilan, $("previsualisation-detail"));
+    rendre(detail, $("previsualisation-detail"));
     if (!reponse.identifiant) {
       $("emettre-note").textContent = modeReel
         ? "Refusée : rien à émettre."
@@ -521,4 +529,6 @@
     })
     .catch(function () { $("liaison").textContent = "serveur local injoignable"; });
   afficherSequence();
+  // Outils partagés avec le panneau « Carte » (carte.js), sans variable globale de plus.
+  window.LymowPage = { appeler: appeler, element: element, vider: vider, proposer: proposer, signalerErreur: signalerErreur };
 })();

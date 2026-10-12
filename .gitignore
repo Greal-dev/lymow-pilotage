@@ -1,6 +1,8 @@
 .venv/
 sources/
 journaux/
+sauvegardes-carte/
+apercus-carte/
 __pycache__/
 *.pyc
 .pytest_cache/

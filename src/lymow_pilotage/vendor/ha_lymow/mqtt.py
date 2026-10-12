@@ -14,7 +14,8 @@ Modifications par rapport à l'original :
 - perte de connexion détectée : ``is_connected`` repasse à faux quand la boucle
   d'écoute s'interrompt ;
 - journaux : type de l'erreur seulement, jamais son texte ;
-- décodage des cartes et des chemins retiré de la réception ;
+- décodage des cartes et des chemins retiré de la réception : le contenu brut d'une
+  réponse de carte est transmis tel quel sous la clé ``mapRaw`` ;
 - ``reconnect`` retiré ; ``connect`` accepte ``subscribe=False`` (reconnexion
   de secours pour publier un arrêt sans attendre les abonnements) ;
 - les deux fonctions de rappel reçoivent en plus l'indicateur ``retain`` du
@@ -37,7 +38,7 @@ from urllib.parse import quote
 
 import aiomqtt
 
-from .protocol import decode_pboutput, unwrap_envelope
+from .protocol import decode_pboutput, extract_raw_map_content, unwrap_envelope
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -238,7 +239,12 @@ class LymowMqttClient:
         retained = bool(getattr(message, "retain", False))
         try:
             if topic.endswith("/pboutput"):
-                self._on_state(thing_name, decode_pboutput(unwrap_envelope(payload)), retained)
+                pb_bytes = unwrap_envelope(payload)
+                state = decode_pboutput(pb_bytes)
+                map_raw = extract_raw_map_content(pb_bytes)
+                if map_raw is not None:
+                    state["mapRaw"] = map_raw
+                self._on_state(thing_name, state, retained)
             elif topic.endswith("/notify-app"):
                 self._handle_notify(thing_name, payload, retained)
         except Exception as err:  # noqa: BLE001 — charge non fiable : ne jamais tuer l'écoute

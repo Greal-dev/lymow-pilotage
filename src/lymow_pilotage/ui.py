@@ -25,10 +25,12 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
-from . import auth, compte, conduite, liaison, mouvement, securite
+from . import auth, compte, conduite, liaison, mouvement, retouche, securite
+from . import carte as cartes
 from .config import Calibration
 from .journal import Journal, assainir, declarer_secret, masquer
 from .mouvement import ErreurSaisie, Ordre
+from .securite import RefusSecurite
 from .protocole import Categorie
 
 HOTE = "127.0.0.1"  # jamais 0.0.0.0 : aucune option ne change cette valeur
@@ -43,6 +45,7 @@ FICHIERS = {
     "app.js": "text/javascript",
     "signalisation.js": "text/javascript",
     "style.css": "text/css",
+    "carte.js": "text/javascript",
 }
 NOMS_ORDRES = (*mouvement.ETAPES_SEQUENCE, mouvement.ESSAI, *mouvement.TACHES)
 NON_CONNECTE = "non connecté — utilisez le panneau « Compte » de cette page"
@@ -111,8 +114,12 @@ def ordres_depuis(corps: Any) -> list[Ordre]:
 
 
 class ServeurUI:
-    def __init__(self, cal: Calibration, journal: Journal, *, reel: bool, port: int = PORT_DEFAUT) -> None:
+    def __init__(
+        self, cal: Calibration, journal: Journal, *, reel: bool, port: int = PORT_DEFAUT, dossier: Path | None = None
+    ) -> None:
         self.cal, self.journal, self.reel, self.port = cal, journal, reel, port
+        self.dossier = dossier if dossier is not None else journal._dossier.parent  # sauvegardes de carte
+        self.carte_heure: str | None = None
         # Deux secrets de 256 bits, neufs à chaque lancement : le jeton d'adresse sert UNE fois,
         # puis seul le témoin (valeur distincte, jamais dans une adresse) authentifie la page.
         self.jeton: str | None = secrets.token_urlsafe(32)
@@ -124,7 +131,7 @@ class ServeurUI:
         self.ident: liaison.Identifiants | None = None
         self.etat_liaison = NON_CONNECTE
         self.tache: asyncio.Task[None] | None = None
-        self.previsualisation: tuple[str, list[Ordre], float] | None = None
+        self.previsualisation: tuple[str, Any, float] | None = None  # ordres, ou retouche de carte
         self.resultat: dict[str, Any] | None = None
         self.fil: list[dict[str, str]] = []
         self.version = 0
@@ -163,6 +170,9 @@ class ServeurUI:
                 web.post("/api/video/arreter", self._video_arreter),
                 web.get("/favicon.ico", self._sans_contenu),
                 web.post(ROUTE_REOUVERTURE, self._rouvrir),
+                web.get("/api/carte", self._carte),
+                web.post("/api/carte/actualiser", self._carte_actualiser),
+                web.post("/api/carte/previsualiser", self._carte_previsualiser),
                 web.post("/api/compte/commencer", self._compte_commencer),
                 web.post("/api/compte/valider", self._compte_valider),
                 web.post("/api/compte/choisir", self._compte_choisir),
@@ -460,24 +470,38 @@ class ServeurUI:
             return _refus(503, f"robot injoignable : {self.etat_liaison}")
         if self.occupe or self._stop_demande:
             return _refus(409, "un ordre ou un STOP est déjà en cours : seul STOP est accepté")
-        self._lancer(attendue[1])
+        if isinstance(attendue[1], retouche.Retouche):
+            operation = attendue[1]  # SEC-08 : aucun autre ordre en cours, vérifié juste au-dessus
+            self._lancer_travail(
+                operation.description, lambda: retouche.emettre(self.session, operation, self.dossier)
+            )
+        else:
+            self._lancer(attendue[1])
         return web.json_response({"accepte": True}, status=202)
 
     def _lancer(self, ordres: list[Ordre]) -> None:
+        self._lancer_travail(
+            " ; ".join(str(ordre) for ordre in ordres),
+            lambda: conduite.emettre_ordres(self.session, ordres, self.journal),
+        )
+
+    def _lancer_travail(self, texte: str, travail: Any) -> None:
         # Jamais deux tâches : l'appelant a vérifié, ceci interdit toute tâche orpheline.
         if self.occupe:
             raise web.HTTPConflict(reason="un ordre est déjà en cours")
-        self._noter("émission : " + " ; ".join(str(ordre) for ordre in ordres))
-        self.tache = asyncio.create_task(self._conduire(ordres))
+        self._noter(f"émission : {texte}")
+        self.tache = asyncio.create_task(self._conduire(travail))
 
-    async def _conduire(self, ordres: list[Ordre]) -> None:
+    async def _conduire(self, travail: Any) -> None:
         """Le mouvement vit ici : aucune requête de la page n'est nécessaire pour qu'il s'arrête."""
         try:
-            bilan, code = await conduite.emettre_ordres(self.session, ordres, self.journal)
+            bilan, code = await travail()
             self.resultat = assainir(bilan | {"code_sortie": code})  # filtré comme le journal
             if code == conduite.CODE_ARRET_NON_CONFIRME:
                 self._signaler("ARRÊT NON CONFIRMÉ : arrêtez le robot par son bouton STOP ou par l'application.")
-            self._noter("ordre terminé" if code == 0 else f"ordre non abouti : {bilan.get('motif', 'voir le résultat')}")
+            suite = bilan.get("motif") or bilan.get("verdict") or "voir le résultat"
+            self._noter(f"ordre terminé : {bilan['verdict']}" if code == 0 and "verdict" in bilan else
+                        "ordre terminé" if code == 0 else f"ordre non abouti : {suite}")
         except asyncio.CancelledError:
             self.resultat = {"echec": "ordre interrompu ; l'arrêt a été émis", "code_sortie": 130}
             self._noter("ordre interrompu : arrêt émis")
@@ -507,6 +531,66 @@ class ServeurUI:
             finally:
                 self._stop_demande = False
             return web.json_response({"accepte": True}, status=202)
+
+    # --- carte : lecture, puis retouche par le même chemin que la commande -----
+
+    def _carte_json(self) -> dict[str, Any]:
+        carte = cartes.en_memoire(self.session) if self.session is not None else None
+        if carte is None:
+            return {"carte": None}
+        return {
+            "carte": cartes.vers_json(carte), "heure": self.carte_heure,
+            "age_s": round(self.session.horloge() - carte.recue, 1),
+        }
+
+    async def _carte(self, _requete: web.Request) -> web.StreamResponse:
+        return web.json_response(self._carte_json())
+
+    async def _carte_actualiser(self, _requete: web.Request) -> web.StreamResponse:
+        """Demande de carte : une requête pure, permise en simulation dès qu'un compte est connecté."""
+        self._refuser_si_occupe()
+        if self.session is None or not self.session.lien.connecte:
+            return _refus(503, f"robot injoignable : {self.etat_liaison}")
+        try:
+            await cartes.demander(self.session, securite.ATTENTE_CARTE_S)
+        except Exception as erreur:  # noqa: BLE001
+            return _refus(504, masquer(str(erreur)) or type(erreur).__name__)
+        self.carte_heure = datetime.now().strftime("%H:%M:%S")
+        self._noter("carte reçue")
+        return web.json_response(self._carte_json())
+
+    async def _carte_previsualiser(self, requete: web.Request) -> web.StreamResponse:
+        corps = await self._corps(requete)
+        if not isinstance(corps, dict) or not isinstance(corps.get("zone"), str):
+            raise ErreurSaisie("zone attendue")
+        if corps.get("cote") not in ("court", "long", "tout"):
+            raise ErreurSaisie("côté attendu : court, long ou tout")
+        de, a, cm = _nombre(corps.get("de"), entier=True), _nombre(corps.get("a"), entier=True), _nombre(corps.get("cm"))
+        if de is None or a is None or cm is None:
+            raise ErreurSaisie("sommets de début et de fin, et largeur en cm, attendus")
+        carte = cartes.en_memoire(self.session) if self.session is not None else None
+        if carte is None:
+            return _refus(409, "aucune carte en mémoire : actualisez d'abord la carte")
+        self.previsualisation = None  # une nouvelle prévisualisation annule toujours la précédente
+        try:
+            operation = retouche.preparer_ajustement(
+                carte, corps["zone"], int(de), int(a), cm, corps["cote"], _nombre(corps.get("raccord"))
+            )
+        except RefusSecurite as refus:
+            self._noter(f"retouche refusée : {refus}")
+            return web.json_response({"refus": str(refus), "identifiant": None})
+        except cartes.CarteIllisible as erreur:
+            raise ErreurSaisie(str(erreur)) from None
+        identifiant = None
+        if self.reel:  # SEC-08 : pas d'identifiant d'émission en simulation
+            identifiant = secrets.token_urlsafe(16)
+            self.previsualisation = (identifiant, operation, self.horloge() + DUREE_PREVISUALISATION_S)
+        self.journal.ecrire("carte-simulee", ordre=operation.description, resume=operation.resume)
+        self._noter(f"prévisualisation : {operation.description}")
+        return web.json_response({
+            "resume": operation.resume, "ordres": operation.description, "identifiant": identifiant,
+            "avant": [list(p) for p in operation.avant], "apres": [list(p) for p in operation.apres],
+        })
 
     # --- compte : mêmes fonctions que `lymow connexion`, Google seulement ------
 
@@ -681,8 +765,10 @@ async def rejoindre(port: int, reel: bool) -> str:
     )
 
 
-async def servir(cal: Calibration, journal: Journal, *, reel: bool, port: int, navigateur: bool = True) -> str:
-    serveur = ServeurUI(cal, journal, reel=reel, port=port)
+async def servir(
+    cal: Calibration, journal: Journal, *, reel: bool, port: int, navigateur: bool = True, dossier: Path | None = None
+) -> str:
+    serveur = ServeurUI(cal, journal, reel=reel, port=port, dossier=dossier)
     if not navigateur:
         serveur.ouvrir_navigateur = lambda _adresse: False
     try:
