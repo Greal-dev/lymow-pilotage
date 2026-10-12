@@ -74,6 +74,7 @@ DELAI_PAUSE_S = 15.0
 # Veille de la liaison : une coupure est vue et réparée sans attendre un clic.
 PERIODE_VEILLE_S = 2.0
 LIAISON_SUSPENDUE = "Liaison suspendue : l'application Lymow a la main"
+MAIN_RENDUE = "la main est rendue à l'application Lymow : cliquez d'abord sur « Prendre la main »"
 LIAISON_COUPEE = (
     "liaison coupée par le service — peut-être reprise par une autre application "
     "(l'application officielle ?) : reconnexion automatique"
@@ -218,6 +219,9 @@ class ServeurUI:
         # « Rendre la main à l'application » : liaison fermée, reconnexion automatique suspendue.
         self.suspendue = False
         self._releve = releve.Releve(self.dossier)
+        self._lecteur = releve.Lecteur(self.dossier)
+        # Diagnostic de localisation : demandé par l'opérateur (case de la page), jamais émis d'office.
+        self.diagnostic_rtk = False
         # SEC-01b : attestation « lames à l'arrêt » de l'opérateur ; en mémoire, jamais active au lancement.
         self.attestation = securite.Attestation(lambda: self.horloge(), self._tracer_attestation)
         self._ecoute: capture.Enregistreur | None = None  # trames brutes pendant un ordre réel
@@ -231,6 +235,10 @@ class ServeurUI:
         self._verrou_stop = asyncio.Lock()
         # Un seul rafraîchissement de jeton à la fois : Cognito fait tourner le jeton stocké.
         self._verrou_acces = asyncio.Lock()
+        self._verrou_carte = asyncio.Lock()  # une seule demande de carte à la fois
+        self._carte_demandee = False  # demande d'office : une fois, à la première liaison
+        self._carte_initiale: asyncio.Task[None] | None = None
+        self._decodee: tuple[Any, cartes.Carte | None] = (None, None)  # carte en mémoire, décodée une fois
         self._pile = AsyncExitStack()
         self._lanceur: web.AppRunner | None = None
 
@@ -251,6 +259,7 @@ class ServeurUI:
                 web.post("/api/pause", self._pause_raccourci),
                 web.post("/api/liaison/rendre", self._liaison_rendre),
                 web.post("/api/liaison/reprendre", self._liaison_reprendre),
+                web.post("/api/diagnostic-rtk", self._diagnostic_rtk),
                 web.get("/api/releve", self._releve_lire),
                 web.get("/api/signal", self._signal_proposer),
                 web.post("/api/direct/armer", self._direct_armer),
@@ -323,7 +332,7 @@ class ServeurUI:
         await self._interrompre()
         self.attestation.retirer("arrêt du serveur")  # SEC-01b ; après l'arrêt du mouvement, jamais avant
         self._fermer_ecoute()
-        for tache in (self._veille, getattr(self, "_sonde", None)):
+        for tache in (self._veille, getattr(self, "_sonde", None), self._carte_initiale):
             if tache is not None:
                 tache.cancel()
                 await asyncio.gather(tache, return_exceptions=True)
@@ -345,6 +354,11 @@ class ServeurUI:
             await self._connecter_sans_verrou()
 
     async def _connecter_sans_verrou(self) -> None:
+        # Point de passage unique de toute ouverture de liaison : main rendue, rien ne s'ouvre (veille, compte,
+        # actualisation…). Seuls STOP et « Prendre la main » lèvent d'abord la suspension.
+        if self.suspendue:
+            self.etat_liaison = LIAISON_SUSPENDUE
+            return
         if self.demonstration:  # ni coffre, ni compte, ni nuage : un robot fictif en mémoire
             robot = demo.RobotFictif()
             self.session = Session(robot, demo.APPAREIL, self.journal, self.cal, frozenset(Categorie))
@@ -356,6 +370,7 @@ class ServeurUI:
                 self._battement.cancel()
             self._battement = asyncio.create_task(robot.battre())  # l'état ne se grise pas tout seul
             await self.session.solliciter()
+            self._demander_la_carte_d_office()
             return
         # Identifiants relus dans le coffre à chaque connexion : le jeton stocké a pu tourner.
         try:
@@ -381,6 +396,7 @@ class ServeurUI:
         self.session.sur_etat = self._relever  # relevé local de la précision, par position
         self.etat_liaison = "connecté"
         await self.session.solliciter()
+        self._demander_la_carte_d_office()
 
     async def _veiller(self) -> None:
         """Liaison perdue hors de tout ordre : le dire en clair et se reconnecter, sans page figée.
@@ -395,7 +411,7 @@ class ServeurUI:
             self._noter(LIAISON_COUPEE)
             try:
                 async with self._verrou_acces:
-                    if not self.occupe and self.session is session:
+                    if not self.occupe and self.session is session and not self.suspendue:
                         await self._rouvrir_liaison()
                         if self.session is not None:
                             self._noter("liaison rétablie")
@@ -404,25 +420,51 @@ class ServeurUI:
             if self.session is None and self.ident is not None:
                 # Reconnexion manquée : on réessaie, sans marteler le service.
                 await asyncio.sleep(4 * PERIODE_VEILLE_S)
+                if self.suspendue:
+                    continue
                 async with self._verrou_acces:
-                    if self.session is None and not self.ferme:
+                    if self.session is None and not self.ferme and not self.suspendue:  # retesté après l'attente
                         await self._connecter_sans_verrou()
 
+    def _sonde_permise(self, session: Any) -> bool:
+        """Diagnostic RTK : coché par l'opérateur, liaison active, jamais main rendue, jamais pendant un ordre."""
+        return (
+            self.diagnostic_rtk and session is not None and self.session is session and bool(session.lien.connecte)
+            and not (self.suspendue or self.demonstration or self.ferme or self.occupe or self._stop_demande)
+        )
+
     async def _sonder_rtk(self) -> None:
-        """Demandes de diagnostic RTK (requêtes pures), à la cadence du socle : interface ouverte et liaison
-        active seulement — jamais main rendue, jamais pendant un ordre (rien ne s'ajoute au mouvement)."""
+        """Demandes de diagnostic RTK (requêtes pures), à la cadence du socle — seulement si l'opérateur a coché
+        « Diagnostic de localisation ». La permission est retestée avant CHAQUE publication."""
         while True:
             await asyncio.sleep(protocole.PERIODE_DIAGNOSTIC_RTK_S)
             session = self.session
-            if self.suspendue or self.demonstration or self.ferme or self.occupe or session is None or not session.lien.connecte:
+            if not self._sonde_permise(session):
                 continue
-            self._poser_origine(session)
             try:
-                await session.publier(protocole.trame_presence(session._identifiant), 3.0)
-                for niveau in (1, 2):
-                    await session.publier(protocole.trame_diagnostic_rtk(session.cal, niveau), 3.0)
+                self._poser_origine(session)
+                trames = [protocole.trame_presence(session._identifiant)]
+                trames += [protocole.trame_diagnostic_rtk(session.cal, niveau) for niveau in (1, 2)]
+                for trame in trames:
+                    if not self._sonde_permise(session):
+                        break
+                    await session.publier(trame, 3.0)
             except Exception:  # noqa: BLE001 — une demande perdue se refera au tour suivant
                 continue
+
+    async def _diagnostic_rtk(self, requete: web.Request) -> web.StreamResponse:
+        corps = await self._corps(requete)
+        actif = corps.get("actif") if isinstance(corps, dict) else None
+        if not isinstance(actif, bool) or set(corps) != {"actif"}:
+            raise ErreurSaisie("« actif » attendu : vrai ou faux")
+        if actif:
+            self._refuser_en_demonstration()
+            self._refuser_si_main_rendue()
+        if actif != self.diagnostic_rtk:
+            self.diagnostic_rtk = actif
+            self.journal.ecrire("diagnostic-rtk", actif=actif, mode=self.mode)
+            self._noter("diagnostic de localisation : " + ("le robot est interrogé toutes les 5 s" if actif else "arrêté"))
+        return web.json_response({"actif": self.diagnostic_rtk})
 
     def _poser_origine(self, session: Any) -> None:
         """L'origine de la carte connue (mémoire ou référence) permet de comparer position brute et pose."""
@@ -432,16 +474,24 @@ class ServeurUI:
         if session.etat.origine is None and carte is not None:
             session.etat.origine = cartes.origine(carte)
 
+    def _bord_sans_echec(self, session: Any) -> dict[str, Any]:
+        try:
+            return self._bord_de_zone(session)
+        except Exception:  # noqa: BLE001 — un affichage ne fait jamais tomber l'état servi à la page
+            return {"devant_m": None, "derriere_m": None, "texte": "distance au bord inconnue"}
+
     def _bord_de_zone(self, session: Any) -> dict[str, Any]:
         """Distance au bord de zone dans l'axe du robot, devant et derrière ; « inconnue » dite clairement."""
         self._poser_origine(session)
         pose, carte = session.etat.pose, session.carte_reference
-        cle = (None if carte is None else carte.octets, pose)
+        age = None if session.etat.recu_pose is None else session.horloge() - session.etat.recu_pose
+        fraiche = age is not None and age <= garde_carte.AGE_POSE_MAX_S
+        cle = (None if carte is None else carte.octets, pose, fraiche)
         if self._bord[0] != cle:
             point = None if pose is None else (pose.est_m, pose.nord_m)
             cap = None if pose is None else pose.cap_deg
-            devant, derriere = (garde_carte.bord_devant(carte, point, cap, sens) for sens in (1.0, -1.0))
-            inconnue = garde_carte.juger_pas(carte, point, cap, 1.0, session.etat.precision_m).motif if devant is None else None
+            devant, derriere = (garde_carte.bord_devant(carte, point, cap, sens) if fraiche else None for sens in (1.0, -1.0))
+            inconnue = garde_carte.juger_pas(carte, point, cap, 1.0, session.etat.precision_m, age).motif if devant is None else None
             texte = inconnue or f"bord de zone devant : {garde_carte.metres(devant)} ; derrière : {garde_carte.metres(derriere)}"
             self._bord = (cle, {"devant_m": devant, "derriere_m": derriere, "texte": texte})
         return self._bord[1]
@@ -619,6 +669,8 @@ class ServeurUI:
             "appareil": demo.APPAREIL if self.demonstration else self.ident.appareil if self.ident else None,
             "occupe": self.occupe,
             "ordres": self._etat_des_ordres(),
+            "diagnostic_rtk": self.diagnostic_rtk,
+            "carte_connue": self._carte_affichee()[0] is not None,  # la page la charge alors d'elle-même
             "direct": {
                 "arme": self.direct.arme, "reste_s": self.direct.reste_s,
                 "file": [dataclasses.asdict(ordre) for ordre in self.direct.file], "faites": self.direct.faites[-12:],
@@ -650,6 +702,8 @@ class ServeurUI:
     def _etat_des_ordres(self) -> dict[str, Any]:
         """Statut du robot en clair, et ce qui empêcherait un mouvement, dit AVANT la prévisualisation."""
         session = self.session
+        if self.suspendue:  # état voulu par l'opérateur : ni refus, ni alarme
+            return {"statut": None, "mouvement_refuse": None, "suspendue": True, "texte": LIAISON_SUSPENDUE}
         if session is None or not session.lien.connecte:
             return {"statut": None, "mouvement_refuse": f"robot injoignable ({self.etat_liaison})"}
         etat = session.etat
@@ -670,7 +724,7 @@ class ServeurUI:
             # Après un dégagement, la reprise reste proposée clairement (les lames peuvent redémarrer).
             "reprise_possible": etat.statut == socle.WORK_STATUS_PAUSE,
             "telecommande": etat.statut == socle.WORK_STATUS_REMOTE_CONTROL,
-            "bord": self._bord_de_zone(session),  # SEC-13
+            "bord": self._bord_sans_echec(session),  # SEC-13
             # SEC-12 : dit AVANT de reprendre ou de renvoyer à la base ; rien si la position est fiable.
             "avertissement_position": securite.avertissement_position(etat.precision_m, etat.ecart_pour_la_garde),
             # Signal revenu mais position calculée douteuse : le recalage assisté est proposé.
@@ -785,17 +839,29 @@ class ServeurUI:
         if self.emet and code == 0:
             identifiant = secrets.token_urlsafe(16)
             self.previsualisation = (identifiant, ordres, self.horloge() + DUREE_PREVISUALISATION_S)
+        annonces: list[str] = []
+        if self.session is not None and code == 0:  # SEC-13 : le raccourcissement est dit AVANT d'émettre
+            self._munir_du_garde_fou(ordres)
+            etat = self.session.etat
+            age = None if etat.recu_pose is None else self.session.horloge() - etat.recu_pose
+            annonces = garde_carte.annoncer(
+                self.session.carte_reference, None if etat.pose is None else (etat.pose.est_m, etat.pose.nord_m),
+                None if etat.pose is None else etat.pose.cap_deg, etat.precision_m, age,
+                [(o.nom, o.valeur) for o in ordres if not o.force],
+            ) if any(o.nom in ("avancer", "reculer") and not o.force for o in ordres) else []
         texte = " ; ".join(str(ordre) for ordre in ordres)
         self._noter(f"prévisualisation : {texte}" + ("" if code == 0 else f" — refusée : {bilan.get('motif')}"))
         # `etapes` : ce que CE serveur émettra, étape par étape — la page l'affiche tel quel, numéroté.
         return web.json_response({
             "bilan": bilan, "identifiant": identifiant, "ordres": texte, "etapes": [str(ordre) for ordre in ordres],
+            "garde_carte": annonces,
         })
 
     async def _emettre(self, requete: web.Request) -> web.StreamResponse:
         # SEC-05 : serveur lancé sans --reel, aucun ordre réel, quoi que demande la page.
         if not self.emet:
             return _refus(403, "serveur lancé en simulation : aucun ordre réel n'est accepté (SEC-05)")
+        self._refuser_si_main_rendue()
         corps = await self._corps(requete)
         propose = corps.get("identifiant") if isinstance(corps, dict) else None
         attendue, self.previsualisation = self.previsualisation, None  # usage unique, même en cas de refus
@@ -823,7 +889,7 @@ class ServeurUI:
         return web.json_response({"accepte": True}, status=202)
 
     def _lancer(self, ordres: list[Ordre], objectif_signal: bool = False) -> None:
-        self._poser_origine(self.session)
+        self._munir_du_garde_fou(ordres)
         self._lancer_travail(
             " ; ".join(str(ordre) for ordre in ordres) + (" (vers le bon signal)" if objectif_signal else ""),
             lambda: conduite.emettre_ordres(self.session, ordres, self.journal, objectif_signal),
@@ -834,13 +900,26 @@ class ServeurUI:
             attendu = socle.WORK_STATUS_PAUSE_DOCKING if retour else socle.WORK_STATUS_PAUSE
             self._pause = (instant, instant + DELAI_PAUSE_S, attendu)
 
+    def _munir_du_garde_fou(self, ordres: list[Ordre]) -> None:
+        """SEC-13 : la carte n'est lue (disque, décodage) que pour une avance ou un recul — jamais pour STOP,
+        pause ou rotation ; et un échec ici ne retient aucun ordre (pas de garde-fou, c'est dit au bilan)."""
+        if not any(ordre.nom in ("avancer", "reculer") for ordre in ordres):
+            return
+        try:
+            self._poser_origine(self.session)
+        except Exception:  # noqa: BLE001
+            self.session.carte_reference = None
+
     def _lancer_travail(self, texte: str, travail: Any) -> None:
         # Jamais deux tâches : l'appelant a vérifié, ceci interdit toute tâche orpheline.
         if self.occupe:
             raise web.HTTPConflict(reason="un ordre est déjà en cours")
         self._noter(f"émission : {texte}")
         self._pause = None
-        self._ouvrir_ecoute()
+        try:
+            self._ouvrir_ecoute()
+        except Exception:  # noqa: BLE001 — l'enregistrement de diagnostic ne retient jamais un ordre, STOP compris
+            self._ecoute = None
         self.tache = asyncio.create_task(self._conduire(travail))
 
     async def _conduire(self, travail: Any) -> None:
@@ -876,6 +955,8 @@ class ServeurUI:
                 bilan, _code = conduite.simuler_ordres([Ordre("stop")], self.cal, self.journal)
                 self._noter("STOP (simulation)")
                 return web.json_response({"bilan": bilan})
+            # Hors main rendue, STOP ne prend JAMAIS `_verrou_acces` (vidéo, compte, veille) : rien ne le retarde.
+            # Main rendue, ce verrou n'est tenu par personne d'autre : compte et vidéo sont alors refusés.
             if self.suspendue:  # STOP reste disponible main rendue : il rétablit la liaison pour émettre
                 async with self._verrou_acces:
                     self.suspendue = False
@@ -900,6 +981,7 @@ class ServeurUI:
         corps = await self._corps(requete)
         if not isinstance(corps, dict) or corps.get("confirmer") is not True or set(corps) != {"confirmer"}:
             raise ErreurSaisie("confirmation explicite attendue pour mettre en pause")
+        self._refuser_si_main_rendue()
         if not self.emet:  # SEC-05
             bilan, _code = conduite.simuler_ordres([Ordre("pause")], self.cal, self.journal, self._appareil_fictif())
             self._noter("pause (simulation)")
@@ -958,6 +1040,7 @@ class ServeurUI:
         corps = await self._corps(requete)
         if not isinstance(corps, dict) or corps.get("confirmer") is not True:
             raise ErreurSaisie("confirmation explicite attendue pour armer le pilotage direct")
+        self._refuser_si_main_rendue()
         if self.occupe or self._stop_demande:
             return _refus(409, "un ordre est en cours : armez le pilotage direct ensuite")
         if self.emet and (self.session is None or not self.session.lien.connecte):
@@ -969,6 +1052,13 @@ class ServeurUI:
 
     async def _direct_desarmer(self, _requete: web.Request) -> web.StreamResponse:
         self._desarmer("à la demande de la page")
+        if self._direct_en_cours and self.occupe:  # le pas en cours ne survit pas au désarmement
+            async with self._verrou_stop:
+                self._stop_demande = True  # annulation voulue : le serveur ne s'arrête pas pour autant
+                try:
+                    await self._interrompre()
+                finally:
+                    self._stop_demande = False
         return web.json_response({"arme": False})
 
     async def _direct_fleche(self, requete: web.Request) -> web.StreamResponse:
@@ -982,17 +1072,28 @@ class ServeurUI:
         try:
             if set(corps) - {"jeton", "direction", "pas", "allure", "forcer"}:
                 raise ErreurSaisie("champ inattendu : le pilotage direct n'accepte qu'une flèche, son pas et son allure")
-            ordre = fleches.ordre(corps.get("direction"), corps.get("pas"), corps.get("allure", "auto"), corps.get("forcer", False))
-        except ErreurSaisie as erreur:
-            self._desarmer(f"demande refusée ({erreur})")
+            ordre = fleches.ordre(
+                corps.get("direction"), corps.get("pas"), corps.get("allure", "auto"), corps.get("forcer", False),
+                self.cal.facteur_distance,
+            )
+        except ErreurSaisie as erreur:  # refus de validation : dit, sans désarmer
+            self.direct.prolonger()
             return _refus(400, str(erreur))
+        refus = mouvement.refus_prealable([ordre], self.cal)
+        if refus is not None:  # plafond dépassé (SEC-02) : dit, sans désarmer — rien n'est émis
+            self.direct.prolonger()
+            return _refus(400, str(refus.get("motif") or "ordre refusé"))
+        retenue = garde_carte.annonce_vitesse(ordre.vitesse, ordre.valeur) if corps.get("allure") == "lente" else ""
+        annonce = f"allure lente : {retenue}" if retenue else None
         if not self.emet:  # SEC-05 : simulation — même parcours, rien n'est émis
             bilan, _code = conduite.simuler_ordres([ordre], self.cal, self.journal, self._appareil_fictif())
             self.direct.faites.append({
                 "ordre": dataclasses.asdict(ordre), "rapport": {"ordre": str(ordre), "simulee": True},
             })
             self.version += 1
-            return web.json_response({"accepte": True, "simulation": True, "jeton": self.direct.renouveler(), "bilan": bilan})
+            return web.json_response(
+                {"accepte": True, "simulation": True, "jeton": self.direct.renouveler(), "bilan": bilan, "allure": annonce}
+            )
         if self.session is None or not self.session.lien.connecte:
             self._desarmer("robot injoignable")
             return _refus(503, f"robot injoignable : {self.etat_liaison}")
@@ -1015,7 +1116,7 @@ class ServeurUI:
                 raise
         self.version += 1
         return web.json_response(
-            {"accepte": True, "jeton": jeton, "file": [str(o) for o in self.direct.file]}, status=202
+            {"accepte": True, "jeton": jeton, "file": [str(o) for o in self.direct.file], "allure": annonce}, status=202
         )
 
     async def _derouler_file(self) -> tuple[dict[str, Any], int]:
@@ -1027,7 +1128,7 @@ class ServeurUI:
             while self.direct.file:
                 ordre = self.direct.file.pop(0)
                 self.version += 1
-                self._poser_origine(self.session)
+                self._munir_du_garde_fou([ordre])
                 bilan, code = await conduite.emettre_ordres(self.session, [ordre], self.journal)
                 rapport = bilan["etapes"][0] if bilan["etapes"] else {"ordre": str(ordre), "echec": bilan.get("motif")}
                 etapes.append(rapport)
@@ -1071,7 +1172,10 @@ class ServeurUI:
         """La carte à montrer : celle en mémoire si elle est complète, sinon la référence du disque.
 
         Affichage seulement — une écriture relit toujours le robot deux fois (SEC-09)."""
-        memoire = cartes.en_memoire(self.session) if self.session is not None else None
+        brute = self.session.carte_brute if self.session is not None else None
+        if self._decodee[0] is not brute:  # décodage une fois par carte reçue, pas à chaque instantané
+            self._decodee = (brute, cartes.en_memoire(self.session) if brute is not None else None)
+        memoire = self._decodee[1]
         if memoire is not None and memoire.complete:
             return memoire, None
         lue = self._carte_de_reference()
@@ -1100,13 +1204,35 @@ class ServeurUI:
     async def _carte(self, _requete: web.Request) -> web.StreamResponse:
         return web.json_response(self._carte_json())
 
+    def _demander_la_carte_d_office(self) -> None:
+        """À la première liaison, si aucune carte n'est connue (ni mémoire, ni référence) : une demande, une
+        seule — requête pure. L'onglet « Carte » n'attend pas un clic."""
+        if self._carte_demandee or self.ferme or self.occupe or self._carte_affichee()[0] is not None:
+            return
+        self._carte_demandee = True
+
+        async def demander() -> None:
+            try:
+                await self._charger_la_carte()
+            except Exception as erreur:  # noqa: BLE001 — « Actualiser la carte » reste là
+                self.carte_note = f"carte demandée à l'ouverture, non reçue ({masquer(str(erreur)) or type(erreur).__name__})"
+            self.version += 1
+
+        self._carte_initiale = asyncio.create_task(demander())
+
+    async def _charger_la_carte(self) -> None:
+        async with self._verrou_carte:
+            await cartes.demander(self.session, securite.ATTENTE_CARTE_S)
+            self._carte_recue()
+
     async def _carte_actualiser(self, _requete: web.Request) -> web.StreamResponse:
         """Demande de carte : une requête pure, permise en simulation dès qu'un compte est connecté."""
+        self._refuser_si_main_rendue()
         self._refuser_si_occupe()
         if self.session is None or not self.session.lien.connecte:
             return _refus(503, f"robot injoignable : {self.etat_liaison}")
         try:
-            await cartes.demander(self.session, securite.ATTENTE_CARTE_S)
+            await self._charger_la_carte()
         except cartes.CarteIllisible as erreur:  # reçue, mais refusée : le motif exact, tout de suite
             self._noter(str(erreur))
             if self._carte_de_reference() is None:
@@ -1116,6 +1242,9 @@ class ServeurUI:
             return web.json_response(self._carte_json())
         except Exception as erreur:  # noqa: BLE001
             return _refus(504, masquer(str(erreur)) or type(erreur).__name__)
+        return web.json_response(self._carte_json())
+
+    def _carte_recue(self) -> None:
         self.carte_heure = datetime.now().strftime("%H:%M:%S")
         lue = cartes.en_memoire(self.session)
         self.carte_note = None
@@ -1130,7 +1259,6 @@ class ServeurUI:
                     f"le robot n'a renvoyé qu'une carte partielle ({' ; '.join(lue.manques)}) : carte de référence affichée"
                 )
         self._noter("carte reçue")
-        return web.json_response(self._carte_json())
 
     async def _carte_previsualiser(self, requete: web.Request) -> web.StreamResponse:
         corps = await self._corps(requete)
@@ -1189,6 +1317,10 @@ class ServeurUI:
         if self.demonstration:
             raise web.HTTPForbidden(reason="indisponible en démonstration : aucun compte, aucun robot réel")
 
+    def _refuser_si_main_rendue(self) -> None:
+        if self.suspendue:
+            raise web.HTTPConflict(reason=MAIN_RENDUE)
+
     def _refuser_si_occupe(self) -> None:
         if self.occupe or self._stop_demande:
             raise web.HTTPConflict(reason="un ordre est en cours : attendez sa fin ou faites STOP")
@@ -1200,6 +1332,7 @@ class ServeurUI:
 
     async def _compte_commencer(self, requete: web.Request) -> web.StreamResponse:
         self._refuser_en_demonstration()
+        self._refuser_si_main_rendue()
         self._refuser_si_occupe()
         corps = await self._corps(requete)
         region = corps.get("region") if isinstance(corps, dict) else None
@@ -1213,6 +1346,7 @@ class ServeurUI:
 
     async def _compte_valider(self, requete: web.Request) -> web.StreamResponse:
         self._refuser_en_demonstration()
+        self._refuser_si_main_rendue()
         self._refuser_si_occupe()
         corps = await self._corps(requete)
         adresse = corps.get("adresse") if isinstance(corps, dict) else None
@@ -1220,6 +1354,8 @@ class ServeurUI:
 
     async def _terminer_connexion(self, adresse: Any) -> web.Response:
         """Fin de connexion, que l'adresse ait été collée dans la page ou remise par `lymow rappel`."""
+        if self.suspendue:
+            return _refus(409, MAIN_RENDUE)
         if isinstance(adresse, str):
             declarer_secret(adresse.strip())  # avant tout : aucun refus ne doit la faire fuiter
         tentative, self.tentative = self.tentative, None  # usage unique, même en cas de refus
@@ -1303,6 +1439,7 @@ class ServeurUI:
 
     async def _compte_choisir(self, requete: web.Request) -> web.StreamResponse:
         self._refuser_en_demonstration()
+        self._refuser_si_main_rendue()
         self._refuser_si_occupe()
         corps = await self._corps(requete)
         appareil = corps.get("appareil") if isinstance(corps, dict) else None
@@ -1323,6 +1460,11 @@ class ServeurUI:
         corps = corps if isinstance(corps, dict) else {}
         if self.occupe or self._stop_demande:
             return _refus(409, "un mouvement est en cours : attendez sa fin (ou STOP), puis rendez la main")
+        # La main n'est rendue que sur le choix explicite de la boîte (bogue du 2026-10-12 : la page appelait
+        # cette route à chaque résultat affiché, par une collision de noms de fonctions).
+        choix = corps.get("choix")
+        if choix not in ("pause", "reprendre") or set(corps) - {"choix", "sans_attendre"}:
+            return _refus(400, "rendre la main exige un choix explicite : laisser en pause, ou reprendre la tâche")
         session = self.session
         en_telecommande = session is not None and session.etat.statut == socle.WORK_STATUS_REMOTE_CONTROL
         if en_telecommande and corps.get("sans_attendre") is not True:
@@ -1335,7 +1477,7 @@ class ServeurUI:
         self.attestation.retirer("main rendue à l'application")
         self._desarmer("main rendue à l'application")
         self.previsualisation = None
-        if corps.get("reprendre") is True:
+        if choix == "reprendre":
             # « Reprendre la tâche » avant de rendre la main : le même ordre que le bouton, avec sa garde de
             # localisation (SEC-12). Refusé ou en échec : la main n'est PAS rendue, le motif est affiché.
             if not self.emet:
@@ -1350,7 +1492,10 @@ class ServeurUI:
                     motif = resultat.get("motif") or resultat.get("echec") or "reprise non confirmée"
                     return web.json_response({"suspendue": False, "attendre": False, "refus": motif, "message": motif})
         async with self._verrou_acces:
+            if self.occupe or self._stop_demande:  # revérifié sous le verrou : jamais de fermeture sous un mouvement
+                return _refus(409, "un mouvement est en cours : attendez sa fin (ou STOP), puis rendez la main")
             self.suspendue = True
+            self.diagnostic_rtk = False
             await self._pile.aclose()
             self._pile, self.session = AsyncExitStack(), None
             self.etat_liaison = LIAISON_SUSPENDUE
@@ -1382,21 +1527,24 @@ class ServeurUI:
     async def _releve_lire(self, requete: web.Request) -> web.StreamResponse:
         points = [
             [p["est_m"], p["nord_m"], p["precision_m"], securite.qualite_position(float(p["precision_m"]))]
-            for p in releve.lire(self.dossier, jours=self._jours(requete))
+            for p in self._lecteur.points(jours=self._jours(requete))
         ]
         return web.json_response({"points": points})
 
     async def _signal_proposer(self, requete: web.Request) -> web.StreamResponse:
         """Bon signal le plus proche et trajet proposé (mode assisté : rien n'est émis ni chargé ici)."""
+        self._refuser_si_occupe()  # le calcul peut durer : jamais pendant un mouvement
         carte, _meta = self._carte_affichee()
         if carte is None:
             return web.json_response({"cible": None, "trajet": None, "ordres": None, "motif": "aucune carte : actualisez d'abord la carte"})
         etat = self.session.etat if self.session is not None else None
         pose = etat.pose if etat is not None else None
-        proposition = bon_signal.proposer(
-            carte, releve.lire(self.dossier, jours=self._jours(requete)),
+        # Hors de la boucle d'évènements : STOP, l'homme mort et l'écoute du robot restent servis pendant le calcul.
+        proposition = await asyncio.to_thread(
+            bon_signal.proposer,
+            carte, self._lecteur.points(jours=self._jours(requete)),
             None if pose is None else (pose.est_m, pose.nord_m), None if pose is None else pose.cap_deg,
-            None if etat is None else etat.precision_m, self.cal.facteur_angle,
+            None if etat is None else etat.precision_m, self.cal.facteur_angle, None, self.cal.facteur_distance,
         )
         return web.json_response(proposition)
 
@@ -1417,6 +1565,7 @@ class ServeurUI:
 
     async def _compte_deconnecter(self, _requete: web.Request) -> web.StreamResponse:
         self._refuser_en_demonstration()
+        self._refuser_si_main_rendue()
         self._refuser_si_occupe()
         async with self._verrou_acces:
             self.attestation.retirer("compte effacé de ce poste")
@@ -1443,6 +1592,8 @@ class ServeurUI:
     async def _video_demarrer(self, _requete: web.Request) -> web.StreamResponse:
         if self.demonstration:
             return _refus(403, "vidéo désactivée en démonstration : le robot fictif n'a pas de caméra")
+        if self.suspendue:
+            return _refus(409, MAIN_RENDUE)
         if self.ident is None:
             return _refus(503, NON_CONNECTE)
         if self.video_ouverte:

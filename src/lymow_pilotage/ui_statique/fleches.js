@@ -27,6 +27,11 @@
     return null;
   }
 
+  /* Allure lente : 0,10 m/s, ou la plus faible vitesse qui tient dans les 9 s d'un ordre (SEC-02). */
+  function vitesseLente(distance, lente) {
+    return Math.min(0.25, Math.max(lente, Math.ceil(distance / 9 * 100 - 1e-9) / 100));
+  }
+
   function directionDe(ordre) {
     if (ordre.nom === "avancer") { return "haut"; }
     if (ordre.nom === "reculer") { return "bas"; }
@@ -147,10 +152,10 @@
     return actives ? "Flèches : ACTIVES — désactiver" : "Flèches : activer";
   }
 
-  /* Échap : STOP dès qu'un mouvement est en cours. Hors mouvement, il désactive seulement les flèches. */
-  function effetEchap(etat) {
-    if (etat.occupe) { return "stop"; }
-    return etat.flechesActives ? "desactiver" : "stop";
+  /* Échap = STOP complet, toujours, comme Espace (revue du 2026-10-12 : la page peut croire qu'aucun ordre
+   * n'est en cours alors qu'un pas vient de partir). Retirer seulement les flèches passe par leur bouton. */
+  function effetEchap() {
+    return "stop";
   }
 
   /* Clavier, flèches actives : la touche fait bouger le robot, PAS la page (constat du 2026-10-12 : la
@@ -174,6 +179,7 @@
 
   var api = {
     ordreDe: ordreDe,
+    vitesseLente: vitesseLente,
     basculer: basculer,
     libelleBascule: libelleBascule,
     effetEchap: effetEchap,

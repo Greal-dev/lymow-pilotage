@@ -156,8 +156,10 @@ def test_page_bascule_unique_des_fleches():
 def test_page_echap_reste_stop_des_qu_un_mouvement_est_en_cours():
     cas = lambda **etat: js("fleches.js", "M.effetEchap(a[0])", {"occupe": False, "directArme": False, "flechesActives": False} | etat)  # noqa: E731
     assert cas(occupe=True, flechesActives=True) == "stop"  # STOP prioritaire
-    assert cas(flechesActives=True) == "desactiver"  # hors mouvement : Échap désactive seulement les flèches
-    assert cas(directArme=True, flechesActives=True) == "desactiver"  # même en pilotage direct, sans mouvement
+    # Revue du 2026-10-12 : Échap = STOP complet, toujours — la page peut se tromper sur « aucun ordre en cours ».
+    assert cas(flechesActives=True) == "stop" and cas(directArme=True, flechesActives=True) == "stop"
+    app = (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
+    assert "LymowPave.echap" not in app and "echap:" not in (ui.STATIQUE / "pave.js").read_text(encoding="utf-8")
     assert cas() == "stop"  # comme avant
 
 
@@ -435,7 +437,7 @@ def test_page_trois_boutons_toujours_visibles_en_tete_dans_l_ordre():
     assert "if (actives) { desactiver(\"\"); } else { prendreLaMain(); }" in pave and pave.count("window.confirm(") == 2  # prendre la main ; forcer ce pas
     stop = app[app.index("  async function stop() {") :][:700]
     assert "sequence = [];" in stop and "oublierPrevisualisation" in stop and "desactiverFleches(false)" in stop
-    assert '"/api/liaison/rendre", { sans_attendre: true, reprendre: reprendre }' in app
+    assert '"/api/liaison/rendre", { sans_attendre: true, choix: choix }' in app
 
 
 @sans_node
@@ -453,7 +455,8 @@ def test_page_qui_a_la_main():
 @sans_node
 def test_page_prendre_la_main_pas_a_pas_sans_rien_enchainer_a_l_aveugle():
     def suite(**c):
-        base = {"suspendue": False, "connecte": True, "occupe": False, "ordres": {}, "flechesActives": False, "pauseDemandee": False}
+        base = {"suspendue": False, "connecte": True, "occupe": False, "ordres": {}, "flechesActives": False, "pauseDemandee": False,
+                "confirme": True}
         return js("ordres.js", "M.suitePrendreLaMain(a[0])", base | c)
 
     tonte = {"action": "pause", "mouvement_refuse": "Le robot tond : mettez la tâche en pause pour prendre la main."}
@@ -469,10 +472,19 @@ def test_page_prendre_la_main_pas_a_pas_sans_rien_enchainer_a_l_aveugle():
     urgence = {"action": None, "mouvement_refuse": "Arrêt d'urgence enclenché : levez-le sur le robot."}
     assert suite(ordres=urgence) == "bloque"  # non pilotable : rien n'est activé (l'attestation est alors proposée)
     assert suite() == "fleches"
+    # La confirmation vient APRÈS la liaison et la lecture de l'état : son texte dit alors vrai.
+    assert suite(suspendue=True, confirme=False) == "liaison"
+    assert suite(confirme=False) == "attendre"  # état pas encore relu
+    assert suite(confirme=False, ordres=tonte) == "confirmer" and suite(confirme=False, ordres={"statut": "en pause"}) == "confirmer"
+    assert suite(confirme=False, connecte=False, simulation=True) == "confirmer"  # simulation sans robot
+    assert suite(connecte=False, simulation=True) == "fleches"
+    pave = (ui.STATIQUE / "pave.js").read_text(encoding="utf-8")
+    prise = pave[pave.index("async function poursuivrePrise") :][:1400]
+    assert prise.index('suite === "confirmer"') < prise.index('"/api/pause"')  # rien n'est émis avant la confirmation
 
     annonce = js("ordres.js", "M.annoncePrendreLaMain(a[0])", {"suspendue": True, "ordres": tonte, "composer": False, "simulation": False})
     assert annonce.startswith("Prendre la main ?") and "liaison avec le robot sera rétablie" in annonce
-    assert "Le robot tond : il sera mis en pause." in annonce and "IMMÉDIATEMENT" in annonce and "STOP : Échap ou Espace." in annonce
+    assert "Le robot tond : la tâche sera mise en pause." in annonce and "IMMÉDIATEMENT" in annonce and "STOP : Échap ou Espace." in annonce
     simulation = js("ordres.js", "M.annoncePrendreLaMain(a[0])", {"suspendue": False, "ordres": {}, "composer": False, "simulation": True})
     assert "simulation : rien n'est émis" in simulation and "mis en pause" not in simulation
     composition = js("ordres.js", "M.annoncePrendreLaMain(a[0])", {"suspendue": False, "ordres": {}, "composer": True, "simulation": False})
@@ -500,13 +512,13 @@ def test_rendre_la_main_avec_reprise_gardee_par_sec12_puis_liaison_suspendue(tmp
         async with serveur_ui(tmp_path, monkeypatch, reel=True, session=session_reelle) as (serveur, http):
             await poster(http, serveur, "/api/actualiser")
             # « Reprendre la tâche » refusé par la garde de localisation : la main n'est PAS rendue.
-            statut, corps, _recus = await poster(http, serveur, "/api/liaison/rendre", {"sans_attendre": True, "reprendre": True})
+            statut, corps, _recus = await poster(http, serveur, "/api/liaison/rendre", {"sans_attendre": True, "choix": "reprendre"})
             assert statut == 200 and corps["suspendue"] is False and "Position imprécise (±1,32 m)" in corps["refus"]
             assert serveur.session is not None and not serveur.suspendue and lien.ordres == []
             # Position fiable : la tâche reprend, PUIS la liaison est suspendue.
             lien.robot = fragment(statut=3, tache=2, precision=0.04)
             await poster(http, serveur, "/api/actualiser")
-            statut, corps, _recus = await poster(http, serveur, "/api/liaison/rendre", {"sans_attendre": True, "reprendre": True})
+            statut, corps, _recus = await poster(http, serveur, "/api/liaison/rendre", {"sans_attendre": True, "choix": "reprendre"})
             assert corps["suspendue"] is True and serveur.session is None
             assert lien.ordres == [bytes.fromhex("10 31 28 04")]  # reprendre, et rien d'autre
             assert serveur.instantane()["liaison"] == "Liaison suspendue : l'application Lymow a la main"

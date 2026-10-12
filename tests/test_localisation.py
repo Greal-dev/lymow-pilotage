@@ -167,12 +167,12 @@ def test_rendre_la_main_ferme_la_liaison_suspend_la_reconnexion_et_n_emet_rien(t
 
             # Pendant un mouvement : refusé.
             serveur.tache = asyncio.ensure_future(asyncio.sleep(30))
-            statut, corps, _recus = await poster(http, serveur, "/api/liaison/rendre", {})
+            statut, corps, _recus = await poster(http, serveur, "/api/liaison/rendre", {"choix": "pause"})
             assert statut == 409 and "mouvement est en cours" in corps["erreur"] and serveur.session is not None
             serveur.tache.cancel()
             await asyncio.gather(serveur.tache, return_exceptions=True)
 
-            statut, corps, _recus = await poster(http, serveur, "/api/liaison/rendre", {})
+            statut, corps, _recus = await poster(http, serveur, "/api/liaison/rendre", {"choix": "pause"})
             assert statut == 200 and corps["suspendue"] is True and corps["message"] == ui.LIAISON_SUSPENDUE
             image = serveur.instantane()
             assert image["liaison_suspendue"] is True and image["liaison"] == "Liaison suspendue : l'application Lymow a la main"
@@ -204,10 +204,10 @@ def test_rendre_la_main_en_telecommande_propose_d_attendre_et_n_emet_rien(tmp_pa
             await poster(http, serveur, "/api/actualiser")
             await attendre(lambda: serveur.session.etat.statut == 6)
             emis = list(lien.trames)
-            statut, corps, _recus = await poster(http, serveur, "/api/liaison/rendre", {})
+            statut, corps, _recus = await poster(http, serveur, "/api/liaison/rendre", {"choix": "pause"})
             assert statut == 200 and corps["attendre"] is True and corps["suspendue"] is False
             assert "télécommande" in corps["message"] and serveur.session is not None and not serveur.suspendue
-            statut, corps, _recus = await poster(http, serveur, "/api/liaison/rendre", {"sans_attendre": True})
+            statut, corps, _recus = await poster(http, serveur, "/api/liaison/rendre", {"sans_attendre": True, "choix": "pause"})
             assert corps["suspendue"] is True and serveur.session is None
             assert lien.trames == emis and lien.ordres == []  # ni sortie de télécommande, ni rien d'autre
 

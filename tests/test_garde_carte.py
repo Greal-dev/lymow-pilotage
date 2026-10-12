@@ -210,7 +210,7 @@ def test_sec14_pose_qui_avance_le_pas_va_au_bout_et_la_surveillance_est_dite_act
 def test_fleches_allure_et_forcer_bornes_aux_listes():
     assert fleches.ALLURES == {"auto": None, "lente": 0.10, "normale": 0.25}
     assert fleches.ordre("haut", 1.0) == Ordre("avancer", 1.0)
-    assert fleches.ordre("haut", 1.0, "lente", True) == Ordre("avancer", 1.0, vitesse=0.10, force=True)
+    assert fleches.ordre("haut", 0.5, "lente", True) == Ordre("avancer", 0.5, vitesse=0.10, force=True)
     assert fleches.ordre("bas", 0.5, "normale") == Ordre("reculer", 0.5, vitesse=0.25)
     assert fleches.ordre("gauche", 45.0, "lente", True) == Ordre("tourner", 45.0)  # rotation inchangée
     for allure, forcer in (("rapide", False), (0.3, False), ("lente", "oui"), (None, False)):
@@ -235,16 +235,12 @@ def test_page_allure_forcer_et_distance_au_bord(tmp_path, monkeypatch, session_r
     forcer = pave[pave.index("function forcerCePas") :][:500]
     assert 'checked = false' in forcer and "window.confirm(" in forcer  # un pas, une confirmation
     lien.robot = _robot(7.02)
+    lien.carte = contenu()  # demandée d'office à l'ouverture
 
     async def scenario():
         async with serveur_ui(tmp_path, monkeypatch, reel=True, session=session_reelle) as (serveur, http):
             await poster(http, serveur, "/api/actualiser")
             await attendre(lambda: serveur.session.etat.pose is not None)
-            assert serveur.instantane()["ordres"]["bord"] == {
-                "devant_m": None, "derriere_m": None, "texte": "distance au bord inconnue : aucune carte de référence",
-            }
-            lien.carte = contenu()
-            await poster(http, serveur, "/api/carte/actualiser")
             await attendre(lambda: serveur.instantane()["ordres"]["bord"]["devant_m"] is not None)
             assert serveur.instantane()["ordres"]["bord"] == {
                 "devant_m": 2.95, "derriere_m": 7.0, "texte": "bord de zone devant : 2,95 m ; derrière : 7 m",

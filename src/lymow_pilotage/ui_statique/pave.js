@@ -45,8 +45,11 @@
   }
 
   function etapeDe(direction) {
-    return Fleches.ordreDe(direction, Number($("pave-distance").value), Number($("pave-angle").value),
-      allures[$("pave-allure").value], forcerCePas(direction));
+    var distance = Number($("pave-distance").value);
+    var vitesse = allures[$("pave-allure").value];
+    // Allure lente : la plus faible vitesse qui tient dans les 9 s d'un ordre (le serveur fait de même).
+    if ($("pave-allure").value === "lente") { vitesse = Fleches.vitesseLente(distance, vitesse); }
+    return Fleches.ordreDe(direction, distance, Number($("pave-angle").value), vitesse, forcerCePas(direction));
   }
 
   // --- miniature : trajet cumulé, étapes faites puis étapes à venir --------------
@@ -109,7 +112,7 @@
     $("pave-focus").textContent = !actives
       ? "Flèches inactives. Activées, elles font bouger le robot tout de suite (ou composent une séquence, case cochée)."
       : enDirect()
-        ? "Flèches ACTIVES — pilotage direct : ↑ ↓ ← → font bouger le robot. Échap : désactiver (STOP si un mouvement est en cours)."
+        ? "Flèches ACTIVES — pilotage direct : ↑ ↓ ← → font bouger le robot. Échap ou Espace : STOP."
         : "Flèches ACTIVES — composition : ↑ ↓ ← → ajoutent une étape, Entrée prévisualise, Retour arrière annule.";
   }
 
@@ -138,7 +141,8 @@
   function contexte() {
     return {
       suspendue: suspendue, connecte: connecte, occupe: occupeCourant, ordres: ordresDuRobot, flechesActives: actives,
-      composer: $("composer").checked, simulation: modeSimulation, pauseDemandee: Boolean(prise && prise.pauseDemandee)
+      composer: $("composer").checked, simulation: modeSimulation, pauseDemandee: Boolean(prise && prise.pauseDemandee),
+      confirme: Boolean(prise && prise.confirme)
     };
   }
 
@@ -147,20 +151,34 @@
   function prendreLaMain() {
     if (prise) { return; }
     if (occupeCourant) { signaler("Un ordre est en cours : attendez sa fin, ou STOP."); return; }
-    if (!window.confirm(Ordres.annoncePrendreLaMain(contexte()))) { return; }
-    prise = { pauseDemandee: false, enCours: false, echeance: Date.now() + 60000 };
-    mainPrise = true;
+    // Le focus ne reste pas sur les boutons du haut : une touche n'y activerait rien par mégarde.
+    if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); }
+    prise = { confirme: false, pauseDemandee: false, enCours: false, depuisSuspension: suspendue, echeance: Date.now() + 60000 };
     poursuivrePrise();
   }
 
+  /* Main rendue : la liaison est rétablie et l'état relu AVANT la confirmation, qui dit alors ce qui va vraiment
+   * se passer (« la tâche sera mise en pause »). Sinon la confirmation vient tout de suite, dans le même geste. */
   async function poursuivrePrise() {
     if (!prise || prise.enCours) { return; }
     var suite = Ordres.suitePrendreLaMain(contexte());
     if (suite === "attendre" && Date.now() < prise.echeance) { return; }
     var courante = prise;
+    if (suite === "confirmer") {
+      if (!window.confirm(Ordres.annoncePrendreLaMain(contexte()))) {
+        prise = null;
+        signaler(courante.depuisSuspension ? "Liaison rétablie ; les flèches ne sont pas activées." : "");
+        return;
+      }
+      courante.confirme = true;
+      mainPrise = true;
+      suite = Ordres.suitePrendreLaMain(contexte());
+      if (suite === "attendre") { return; }
+    }
     courante.enCours = true;
     try {
       if (suite === "liaison") {
+        signaler("Liaison en cours de rétablissement…");
         await page.appeler("/api/liaison/reprendre");
         suspendue = false;
       } else if (suite === "pause") {
@@ -250,7 +268,7 @@
     try {
       var reponse = await page.appeler("/api/direct/fleche", demande);
       jeton = reponse.jeton;
-      signaler(reponse.simulation ? "Simulation : étape parcourue, rien n'est émis." : "");
+      signaler([reponse.allure, reponse.simulation ? "Simulation : étape parcourue, rien n'est émis." : ""].filter(Boolean).join(" — "));
     } catch (erreur) {
       signaler(erreur.message); // file pleine : appui ignoré ; tout autre refus désarme côté serveur
     }
@@ -356,14 +374,8 @@
       }
       rafraichir();
     },
-    /* Échap, vu par la page : vrai si la touche n'a fait que désactiver les flèches (sinon : STOP). */
-    echap: function (occupe) {
-      var effet = Fleches.effetEchap({ occupe: occupe, flechesActives: actives });
-      if (effet !== "desactiver") { return false; }
-      desactiver("");
-      return true;
-    },
     /* « Rendre la main » et STOP : les flèches tombent ; « la main » n'est retirée que par « Rendre la main ». */
+    flechesActives: function () { return actives; },
     desactiverFleches: function (rendue) {
       prise = null;
       if (rendue) { mainPrise = false; }

@@ -26,6 +26,7 @@ from .geometrie import Point
 
 MARGE_FIXE_M = 0.30
 PAS_MIN_M = 0.25  # en dessous, un pas raccourci n'a plus de sens : refus
+AGE_POSE_MAX_S = 5.0  # une pose plus ancienne ne dit plus où est le robot : pas de garde-fou, et c'est dit
 ECHANTILLON_M = 0.05
 PORTEE_BORD_M = 15.0  # au-delà, le bord « devant » n'est plus cherché
 ALLURE_LENTE_M_S = 0.10
@@ -106,7 +107,8 @@ def metres(valeur: float) -> str:
 
 
 def juger_pas(
-    carte: Carte | None, depart: Point | None, cap_deg: float | None, distance_m: float, precision_m: float | None
+    carte: Carte | None, depart: Point | None, cap_deg: float | None, distance_m: float, precision_m: float | None,
+    age_pose_s: float | None = 0.0,
 ) -> Jugement:
     """SEC-13 : `distance_m` signée (positive = avance). Sans pose ou sans carte : aucun garde-fou, dit clairement."""
     demandee = abs(distance_m)
@@ -114,6 +116,8 @@ def juger_pas(
         return Jugement(INCONNU, demandee, "distance au bord inconnue : aucune carte de référence")
     if depart is None or cap_deg is None:
         return Jugement(INCONNU, demandee, "distance au bord inconnue : position du robot non fournie")
+    if age_pose_s is None or not age_pose_s <= AGE_POSE_MAX_S:
+        return Jugement(INCONNU, demandee, "distance au bord inconnue : position du robot trop ancienne")
     sens = 1.0 if distance_m >= 0 else -1.0
     bord = bord_devant(carte, depart, cap_deg, sens)
     if bord is None:
@@ -130,6 +134,49 @@ def juger_pas(
     if reduite >= PAS_MIN_M:
         return Jugement(RACCOURCI, round(reduite, 2), f"pas réduit à {metres(reduite)} : {detail}", bord, round(bord - reduite, 2))
     return Jugement(REFUS, 0.0, f"pas refusé : {detail}", bord, None)
+
+
+def annoncer(
+    carte: Carte | None, depart: Point | None, cap_deg: float | None, precision_m: float | None,
+    age_pose_s: float | None, etapes: list[tuple[str, float | None]],
+) -> list[str]:
+    """SEC-13, dès la prévisualisation : ce que le garde-fou fera de chaque avance ou recul de la séquence,
+    la pose étant propagée d'étape en étape (rotations comprises). Indicatif : l'émission rejuge chaque pas."""
+    annonces: list[str] = []
+    position, cap = depart, cap_deg
+    for numero, (nom, valeur) in enumerate(etapes, 1):
+        if nom not in ("avancer", "reculer", "tourner"):
+            continue
+        if valeur is None:
+            break  # étape tenue à la durée : la suite n'est plus prévisible
+        if nom == "tourner":
+            cap = None if cap is None else cap + valeur
+            continue
+        sens = 1.0 if nom == "avancer" else -1.0
+        jugement = juger_pas(carte, position, cap, sens * valeur, precision_m, age_pose_s)
+        if jugement.decision == INCONNU:
+            annonces.append(jugement.motif)
+            break
+        if jugement.decision != INCHANGE:
+            annonces.append(f"étape {numero} : {jugement.motif}")
+        if jugement.bloque:
+            break
+        dx, dy = _direction(cap, sens)
+        position = (position[0] + dx * jugement.distance_m, position[1] + dy * jugement.distance_m)
+    return annonces
+
+
+def vitesse_lente(distance_m: float, facteur_distance: float = 1.0) -> float:
+    """Vitesse de l'allure lente pour ce pas : 0,10 m/s, ou la plus faible qui tient dans la durée maximale
+    d'un ordre (SEC-02) — le pas garde sa longueur, il n'est jamais refusé pour cela."""
+    plancher = math.ceil(abs(distance_m) / (securite.DUREE_MAX_S * facteur_distance) * 100 - 1e-9) / 100
+    return min(max(ALLURE_LENTE_M_S, plancher), ALLURE_NORMALE_M_S)
+
+
+def annonce_vitesse(vitesse: float, distance_m: float) -> str:
+    if vitesse <= ALLURE_LENTE_M_S:
+        return ""
+    return f"{vitesse:g} m/s pour ce pas de {abs(distance_m):g} m ({securite.DUREE_MAX_S:g} s au plus par ordre)"
 
 
 def allure(vitesse_demandee: float | None, jugement: Jugement, precision_m: float | None) -> tuple[float | None, str | None]:

@@ -113,12 +113,13 @@ def test_direct_armement_expire_apres_soixante_secondes_sans_action(tmp_path, mo
         {"direction": "haut", "pas": 1, "ordres": [{"nom": "reprendre"}]}, {"direction": "haut", "pas": 1, "duree": 9},
     ],
 )
-def test_direct_ordre_ou_pas_hors_liste_refuse_et_desarme(tmp_path, monkeypatch, session_reelle, lien, demande):
+def test_direct_ordre_ou_pas_hors_liste_refuse_sans_desarmer(tmp_path, monkeypatch, session_reelle, lien, demande):
+    # Revue du 2026-10-12 : un refus de validation ne désarme pas (seuls un refus de sécurité ou un échec d'émission).
     async def scenario():
         async with serveur_ui(tmp_path, monkeypatch, reel=True, session=session_reelle) as (serveur, http):
             jeton = await armer(http, serveur)
             statut, _corps, _recus = await poster(http, serveur, "/api/direct/fleche", {"jeton": jeton} | demande)
-            assert statut == 400 and serveur.instantane()["direct"]["arme"] is False
+            assert statut == 400 and serveur.instantane()["direct"]["arme"] is True
             assert lien.ordres == [] and serveur.tache is None
 
     executer(scenario())

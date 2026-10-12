@@ -864,7 +864,11 @@ AJUSTEMENT = {"zone": "zoneA1", "de": 0, "a": 2, "cm": 20, "cote": "court", "rac
 def test_page_carte_en_simulation_lecture_et_previsualisation_sans_emission(tmp_path, monkeypatch, session_reelle, lien):
     from test_ui import executer, lire, poster, serveur_ui
 
+    from lymow_pilotage import ui
+
     lien.carte = contenu()
+    # La demande d'office de l'ouverture (testée ailleurs) est neutralisée : ce test part d'un serveur sans carte.
+    monkeypatch.setattr(ui.ServeurUI, "_demander_la_carte_d_office", lambda self: None)
 
     async def scenario():
         async with serveur_ui(tmp_path, monkeypatch, reel=False, session=session_reelle) as (serveur, http):

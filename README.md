@@ -99,6 +99,11 @@ mode, état du robot en une ligne, et **trois boutons toujours visibles** :
   choix : « Laisser le robot en pause » ou « Reprendre la tâche » (garde de
   localisation SEC-12 : refusée, la main n'est pas rendue) ; enfin la
   liaison est suspendue pour laisser l'application Lymow se connecter.
+  La main n'est rendue que sur ce clic suivi de ce choix — jamais au clavier
+  quand les flèches sont actives, jamais en différé. Tant qu'elle est
+  rendue, l'outil n'ouvre aucune liaison et ne publie rien, par aucun
+  chemin (veille, compte, vidéo, carte, diagnostic : refusés en clair) ;
+  seuls STOP et « Prendre la main » la reprennent.
 - **STOP** (Échap, Espace) — annule tout : mouvement en cours, file du
   pilotage direct, séquence composée, prévisualisation, armement ; puis
   émet l'arrêt (consignes nulles ×3) et la mise en pause de la tâche. Il ne
@@ -211,7 +216,9 @@ connecté), « Journal et résultat détaillé ».
   mouvement.
 - Avec un compte enregistré, l'interface ouvre la liaison même en simulation,
   pour afficher l'état : elle n'émet alors que des requêtes pures (présence,
-  demande de configuration, et demande de carte sur « Actualiser la carte »),
+  demande de configuration, et demande de carte : une fois d'office à la
+  première liaison si aucune carte n'est connue, puis sur « Actualiser la
+  carte »),
   jamais un ordre ni une écriture de carte.
 - En mode réel, ne fermez pas la fenêtre du terminal pendant un mouvement
   (voir « Ce que l'arrêt garanti ne couvre pas »).
@@ -265,9 +272,10 @@ réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même
   pas émettre tout de suite) » rend l'autre comportement : les flèches
   ajoutent des étapes, qui ne partent qu'avec « Prévisualiser » puis
   « Émettre ». Un liseré orange autour de la caméra montre l'activation.
-  Elle ne tombe que par le bouton, par Échap hors mouvement (Échap reste STOP
-  pendant un mouvement), ou par le désarmement du serveur (60 s sans action,
-  STOP, refus) — plus en cliquant ailleurs.
+  Elle ne tombe que par le bouton (qui interrompt aussi le pas en cours), par
+  STOP — Échap ou Espace, toujours un STOP complet — ou par le désarmement du
+  serveur (60 s sans action, refus de sécurité, échec d'émission) — plus en
+  cliquant ailleurs. Un refus de validation (pas hors liste) ne désarme pas.
 - **Clavier.** Flèches actives, les touches ↑ ↓ ← →, Entrée et Retour arrière
   sont captées au niveau de la page entière : elles ne la font plus défiler,
   quel que soit l'élément qui a le focus ; elles ne sont pas captées dans un
@@ -324,11 +332,15 @@ Ce qui est **observé** (trames réelles du 2026-10-12) :
 Ce qui est **documenté par le socle** (ha-lymow), non encore vu dans nos
 captures : le robot n'envoie le détail RTK qu'à un client qui le demande
 (demandes 57 et 58, toutes les 5 s) — âge des corrections de la base, état
-de la base, taux d'erreur du lien radio, motif d'erreur. L'outil émet ces
-deux demandes comme **requêtes pures** (forme exacte, contrôlée à l'octet),
-interface ouverte et liaison active seulement, jamais main rendue ni pendant
-un ordre ; `lymow capture --rtk` les émet aussi, pour disposer de trames
-réelles. La page affiche alors « corrections de la base reçues il y a 2 s »
+de la base, taux d'erreur du lien radio, motif d'erreur. L'outil sait émettre
+ces deux demandes comme **requêtes pures** (forme exacte, contrôlée à
+l'octet), mais **jamais d'office** : seulement si vous cochez « Diagnostic
+de localisation (interroge le robot toutes les 5 s) » sous la carte —
+décoché par défaut, décoché de nouveau quand la main est rendue, jamais
+pendant un mouvement — ou par `lymow capture --rtk`. Ce que les sources
+établissent : le socle nomme ces codes « QUERY » et les émet tels quels ;
+son relevé d'écrans associe ces octets à l'ouverture de l'écran « RTK
+Diagnostic » de l'application. Nous ne l'avons pas constaté nous-mêmes. La page affiche alors « corrections de la base reçues il y a 2 s »
 ou « plus de corrections depuis 45 s » : c'est ce qui distingue un lien de
 base perdu d'un ciel masqué.
 
@@ -576,8 +588,10 @@ s'exécute tout seul.**
   des zones : aucun garde-fou possible, dit en clair (« distance au bord
   inconnue »), sans blocage. La page affiche « bord de zone devant : 2,4 m ».
   Limites : seule la distance dans l'axe du pas est jugée (un bord latéral
-  proche ne l'est pas) ; la pose utilisée est la dernière reçue ; la
-  rotation n'est pas concernée.
+  proche ne l'est pas) ; une pose reçue il y a plus de 5 s ne compte plus
+  (« distance au bord inconnue : position du robot trop ancienne ») ; la
+  rotation n'est pas concernée. Le raccourcissement ou le refus est annoncé
+  dès la prévisualisation, étape par étape.
 - **SEC-14 Arrêt sur indice de choc** pendant un mouvement : arrêt immédiat
   si un code d'erreur ou d'avertissement de choc, pare-chocs, ultrasons,
   soulèvement, blocage ou patinage **apparaît** (un code déjà présent au

@@ -126,7 +126,7 @@
     $("liaison").textContent = image.liaison + (image.occupe ? " — ordre en cours" : "");
     // Statut du robot en clair près des ordres, et le refus de mouvement dit avant toute prévisualisation.
     $("ordres-etat").textContent = Ordres.texteEtatDesOrdres(image.ordres);
-    $("ordres-etat").classList.toggle("refuse", Boolean(image.ordres && image.ordres.mouvement_refuse));
+    $("ordres-etat").classList.toggle("refuse", Boolean(image.ordres && image.ordres.mouvement_refuse && !image.ordres.suspendue));
     occupe = Boolean(image.occupe);
     // Refus actionnable : le geste utile est à côté du message (pause), et la reprise reste proposée.
     var gestes = Ordres.gestesProposes(image.ordres, occupe);
@@ -147,6 +147,7 @@
       recalageAvant = null;
     }
     liaisonSuspendue = Boolean(image.liaison_suspendue);
+    $("diagnostic-rtk").checked = Boolean(image.diagnostic_rtk);
     dernieresOrdres = image.ordres || null;
     $("rendre-main").disabled = liaisonSuspendue;
     $("rendre-main").title = liaisonSuspendue ? "La main est déjà rendue : « Prendre la main » la reprend." : "";
@@ -154,11 +155,14 @@
     afficherAttestation(image.attestation);
     afficherEmission();
     $("appareil").textContent = image.appareil || "";
-    $("etat-resume").textContent = Ordres.resumeEtat(image.etat);
+    $("etat-resume").textContent = Ordres.resumeEtat(image.etat, Boolean(image.liaison_suspendue));
     // Aucun compte connecté (hors démonstration) : la section « Compte » s'ouvre d'elle-même.
     if (window.LymowVolets && image.compte && !demonstration) { window.LymowVolets.compte(image.compte.connecte); }
     afficherCompte(image.compte);
-    if (window.LymowCarte) { window.LymowCarte.robot(image.etat, image.ordres && image.ordres.bord ? image.ordres.bord.texte : ""); }
+    if (window.LymowCarte) {
+      window.LymowCarte.robot(image.etat, image.ordres && image.ordres.bord ? image.ordres.bord.texte : "");
+      window.LymowCarte.connue(Boolean(image.carte_connue));
+    }
     if (window.LymowPave) { window.LymowPave.appliquer(image); }
     var bloc = $("bloc-etat");
     var liste = $("etat-liste");
@@ -438,18 +442,20 @@
       signalerErreur(erreur);
       return;
     }
-    proposer(reponse.ordres, reponse.bilan, reponse.identifiant, estTache, reponse.etapes);
+    proposer(reponse.ordres, reponse.bilan, reponse.identifiant, estTache, reponse.etapes, reponse.garde_carte);
   }
 
   /* Affiche une prévisualisation et arme « Émettre » si le serveur a fourni un identifiant. */
-  function proposer(titre, detail, identifiant, estTache, etapes) {
+  function proposer(titre, detail, identifiant, estTache, etapes, gardeCarte) {
     oublierPrevisualisation("");
     var reponse = { ordres: titre, identifiant: identifiant };
     etapes = etapes && etapes.length ? etapes : [titre];
     $("previsualisation-titre").textContent = etapes.length > 1
       ? "Séquence de " + etapes.length + " étapes, émises dans cet ordre :" : "Un ordre sera émis :";
     // La liste vient du serveur : c'est exactement ce qui partira, étape par étape.
-    afficherEtapes(etapes, Ordres.avertissementOrdreSeul(etapes, estTache ? 0 : sequence.length));
+    // SEC-13 : un pas que le garde-fou carte raccourcira ou refusera est annoncé ici, avant « Émettre ».
+    afficherEtapes(etapes, [(gardeCarte || []).join(" ; "), Ordres.avertissementOrdreSeul(etapes, estTache ? 0 : sequence.length)]
+      .filter(Boolean).join(" — "));
     vider($("previsualisation-detail"));
     rendre(detail, $("previsualisation-detail"));
     if (!reponse.identifiant) {
@@ -638,6 +644,15 @@
   $("sequence-previsualiser").addEventListener("click", function () { previsualiser(sequence.slice(), false, objectifSequence); });
   $("sequence-vider").addEventListener("click", function () { sequence = []; afficherSequence(); });
   $("emettre").addEventListener("click", emettre);
+  $("diagnostic-rtk").addEventListener("change", async function () {
+    // Geste explicite de l'opérateur : le robot n'est interrogé que case cochée.
+    try {
+      await appeler("/api/diagnostic-rtk", { actif: $("diagnostic-rtk").checked });
+    } catch (erreur) {
+      $("diagnostic-rtk").checked = false;
+      $("carte-note").textContent = "Diagnostic de localisation refusé : " + erreur.message;
+    }
+  });
   $("recalage").addEventListener("click", function () {
     // Mode assisté : l'aller-retour est chargé dans la séquence et prévisualisé ; rien n'est émis sans « Émettre ».
     var pas = Number($("pave-distance").value) || 2;
@@ -655,7 +670,8 @@
       $("vue-" + onglet).hidden = onglet !== nom;
       $("onglet-" + onglet).setAttribute("aria-selected", String(onglet === nom));
     });
-    window.dispatchEvent(new Event("resize")); // la carte se dessine à sa taille réelle
+    // Masqué, le cadre de la carte n'a pas de dimension : elle se charge et se redessine à l'affichage.
+    if (nom === "carte" && window.LymowCarte) { window.LymowCarte.montrer(); }
   }
   $("onglet-camera").addEventListener("click", function () { montrerOnglet("camera"); });
   $("onglet-carte").addEventListener("click", function () { montrerOnglet("carte"); });
@@ -678,10 +694,10 @@
     $("rendre-pause").textContent = attente ? "Rendre la main sans attendre (robot laissé tel quel)" : "Laisser le robot en pause";
     $("rendre-reprendre").disabled = attente || !(dernieresOrdres && dernieresOrdres.reprise_possible);
   }
-  async function rendre(reprendre) {
+  async function rendreLaMain(choix) {
     rendreSansAttendre = true;
     try {
-      var reponse = await appeler("/api/liaison/rendre", { sans_attendre: true, reprendre: reprendre });
+      var reponse = await appeler("/api/liaison/rendre", { sans_attendre: true, choix: choix });
       if (reponse.suspendue) {
         $("rendre-choix").hidden = true;
         $("pause-etat").textContent = "";
@@ -692,7 +708,13 @@
       $("rendre-message").textContent = "Refusé : " + erreur.message;
     }
   }
-  $("rendre-main").addEventListener("click", async function () {
+  function clicExplicite(evenement) {  // `detail` vaut 0 pour un clic né du clavier (Entrée, Espace)
+    return Ordres.clicRendreAccepte({
+      clavier: evenement.detail === 0, flechesActives: Boolean(window.LymowPave && window.LymowPave.flechesActives())
+    });
+  }
+  $("rendre-main").addEventListener("click", async function (evenement) {
+    if (!clicExplicite(evenement)) { return; }
     var etape = Ordres.etapeRendreLaMain({ suspendue: liaisonSuspendue, occupe: occupe, ordres: dernieresOrdres, sansAttendre: false });
     if (etape === "deja") { $("pause-etat").textContent = "La main est déjà rendue : « Prendre la main » la reprend."; return; }
     if (etape === "refus") { $("pause-etat").textContent = "Un mouvement est en cours : utilisez STOP, puis rendez la main."; return; }
@@ -701,8 +723,8 @@
     $("rendre-choix").hidden = false;
     avancerRendre();
   });
-  $("rendre-pause").addEventListener("click", function () { rendre(false); });
-  $("rendre-reprendre").addEventListener("click", function () { rendre(true); });
+  $("rendre-pause").addEventListener("click", function (evenement) { if (clicExplicite(evenement)) { rendreLaMain("pause"); } });
+  $("rendre-reprendre").addEventListener("click", function (evenement) { if (clicExplicite(evenement)) { rendreLaMain("reprendre"); } });
   $("rendre-annuler").addEventListener("click", function () { $("rendre-choix").hidden = true; });
   $("pause-raccourci").addEventListener("click", async function () {
     // Une confirmation, puis la pause seule. Aucun mouvement n'est enchaîné : c'est à vous de rappuyer.
@@ -746,12 +768,7 @@
   }
   document.addEventListener("keydown", function (evenement) {
     if (!estToucheStop(evenement)) { return; }
-    // Échap : STOP prioritaire ; il retire seulement le focus des flèches si rien ne bouge ni n'est armé.
-    if (evenement.key === "Escape" && !evenement.repeat && window.LymowPave && window.LymowPave.echap(occupe)) {
-      evenement.preventDefault();
-      evenement.stopPropagation();
-      return;
-    }
+    // Échap = STOP complet, toujours, comme Espace : jamais un simple retrait des flèches.
     evenement.preventDefault();
     evenement.stopPropagation();
     if (!evenement.repeat) { stop(); }

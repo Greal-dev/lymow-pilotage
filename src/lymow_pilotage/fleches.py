@@ -17,6 +17,7 @@ import secrets
 from collections.abc import Callable
 from typing import Any
 
+from . import garde_carte
 from .mouvement import ErreurSaisie, Ordre
 
 DISTANCES_M = (0.25, 0.5, 1.0, 2.0)
@@ -30,13 +31,17 @@ DIRECTIONS: dict[str, tuple[str, float]] = {
 ALLURES: dict[str, float | None] = {"auto": None, "lente": 0.10, "normale": 0.25}
 FILE_MAX = 5
 DUREE_ARMEMENT_S = 60.0
+# Deux flèches plus rapides que l'aller-retour avec le serveur : la seconde porte encore le jeton précédent.
+JETON_PRECEDENT_S = 2.0
 
 
 class RefusDirect(Exception):
     """Mode direct non armé, expiré, ou jeton d'armement invalide."""
 
 
-def ordre(direction: object, pas: object, allure: object = "auto", forcer: object = False) -> Ordre:
+def ordre(
+    direction: object, pas: object, allure: object = "auto", forcer: object = False, facteur_distance: float = 1.0
+) -> Ordre:
     """La flèche et son pas → l'ordre. Tout ce qui n'est pas exactement dans les listes est refusé."""
     if not isinstance(direction, str) or direction not in DIRECTIONS:
         raise ErreurSaisie("flèche inconnue : haut, bas, gauche ou droite")
@@ -51,7 +56,10 @@ def ordre(direction: object, pas: object, allure: object = "auto", forcer: objec
         raise ErreurSaisie("allure inconnue : auto, lente ou normale")
     if nom == "tourner":  # rotation inchangée : ni allure, ni garde-fou carte
         return Ordre(nom, signe * float(pas))
-    return Ordre(nom, signe * float(pas), vitesse=ALLURES[allure], force=forcer)
+    vitesse = ALLURES[allure]
+    if allure == "lente":  # jamais refusée pour sa durée : la plus faible vitesse qui tient (SEC-02)
+        vitesse = garde_carte.vitesse_lente(float(pas), facteur_distance)
+    return Ordre(nom, signe * float(pas), vitesse=vitesse, force=forcer)
 
 
 class Armement:
@@ -60,6 +68,7 @@ class Armement:
     def __init__(self, horloge: Callable[[], float]) -> None:
         self.horloge = horloge
         self._jeton: str | None = None
+        self._precedent: tuple[str, float] | None = None
         self._expire = 0.0
         self.file: list[Ordre] = []
         self.faites: list[dict[str, Any]] = []
@@ -75,12 +84,15 @@ class Armement:
         return max(0, round(self._expire - self.horloge())) if self.arme else 0
 
     def armer(self) -> str:
+        self._jeton = self._precedent = None
         self.file.clear()
         self.faites.clear()
         return self.renouveler()
 
     def renouveler(self) -> str:
         """Nouveau jeton à chaque action : celui d'une page restée ouverte ailleurs ne vaut plus rien."""
+        if self._jeton is not None:
+            self._precedent = (self._jeton, self.horloge() + JETON_PRECEDENT_S)
         self._jeton = secrets.token_urlsafe(16)
         self.prolonger()
         return self._jeton
@@ -91,9 +103,12 @@ class Armement:
     def verifier(self, jeton: object) -> None:
         if not self.arme:
             raise RefusDirect("pilotage direct non armé (ou désarmé après 60 s sans action) : armez-le de nouveau")
-        if not isinstance(jeton, str) or not hmac.compare_digest(jeton.encode(), (self._jeton or "").encode()):
+        admis = [self._jeton or ""]
+        if self._precedent is not None and self.horloge() <= self._precedent[1]:
+            admis.append(self._precedent[0])
+        if not isinstance(jeton, str) or not any(hmac.compare_digest(jeton.encode(), a.encode()) for a in admis):
             raise RefusDirect("jeton d'armement invalide : pilotage direct désarmé")
 
     def desarmer(self) -> None:
-        self._jeton = None
+        self._jeton = self._precedent = None
         self.file.clear()

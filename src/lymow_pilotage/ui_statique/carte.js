@@ -16,6 +16,8 @@
   var carte = null;
   var robot = null;
   var etatRobot = null;
+  var chargement = false;
+  var cadreeVisible = false;
   var dejaCadree = false;
   var CADRE_ROBOT_M = 40; // cadrage initial : le robot et une quarantaine de mètres autour
   var apercu = null;
@@ -327,7 +329,7 @@
     var origine = reponse.reference
       ? reponse.reference
       : "carte reçue à " + (reponse.heure || "?") + (typeof reponse.age_s === "number" ? " (il y a " + Math.round(reponse.age_s) + " s)" : "");
-    $("carte-etat").textContent = carte ? incomplete + origine : "aucune carte : cliquez sur « Actualiser la carte »";
+    $("carte-etat").textContent = carte ? incomplete + origine : "aucune carte reçue pour l'instant : elle est demandée à l'ouverture ; « Actualiser la carte » la redemande";
     $("carte-note").textContent = reponse.note || "";
     afficherPossibilite();
     placerLeRobot();
@@ -438,6 +440,14 @@
   window.addEventListener("resize", dessiner);
 
   window.LymowCarte = {
+    /* Le serveur connaît une carte que la page n'a pas encore (demandée d'office à l'ouverture) : la charger. */
+    connue: function (oui) { if (oui && !carte) { charger(); } },
+    /* L'onglet « Carte » vient d'être affiché : premier cadrage à sa taille réelle, puis dessin. */
+    montrer: function () {
+      if (!carte) { charger(); return; }
+      if (!cadreeVisible) { cadreeVisible = true; if (robot) { cadrerSurLeRobot(); } else { toutVoir(); } }
+      dessiner();
+    },
     robot: function (etat, bord) {
       etatRobot = etat;
       placerLeRobot();
@@ -454,8 +464,14 @@
     }
   };
 
-  fetch("/api/carte", { credentials: "same-origin", cache: "no-store" })
-    .then(function (reponse) { return reponse.json(); })
-    .then(recevoir)
-    .catch(function () { return undefined; });
+  function charger() {
+    if (chargement) { return; }
+    chargement = true;
+    fetch("/api/carte", { credentials: "same-origin", cache: "no-store" })
+      .then(function (reponse) { return reponse.json(); })
+      .then(recevoir)
+      .catch(function () { return undefined; })
+      .then(function () { chargement = false; });
+  }
+  charger();
 })();

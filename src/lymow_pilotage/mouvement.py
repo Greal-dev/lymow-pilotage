@@ -459,6 +459,11 @@ def _surveiller(session: Session, attestable: bool = False) -> None:
         raise EchecOrdre(f"mouvement interrompu en cours de route : {refus}") from None
 
 
+def _age_de_la_pose(session: Session) -> float | None:
+    recue = session.etat.recu_pose
+    return None if recue is None else session.horloge() - recue
+
+
 def _garder_le_pas(session: Session, ordre: Ordre) -> tuple[Ordre, dict[str, Any]]:
     """SEC-13 : une avance ou un recul est projeté sur la carte de référence avant d'être émis.
 
@@ -473,7 +478,7 @@ def _garder_le_pas(session: Session, ordre: Ordre) -> tuple[Ordre, dict[str, Any
     sens = 1.0 if ordre.nom == "avancer" else -1.0
     jugement = garde_carte.juger_pas(
         session.carte_reference, None if pose is None else (pose.est_m, pose.nord_m),
-        None if pose is None else pose.cap_deg, sens * ordre.valeur, precision,
+        None if pose is None else pose.cap_deg, sens * ordre.valeur, precision, _age_de_la_pose(session),
     )
     infos: dict[str, Any] = {"garde_carte": jugement.motif}
     if jugement.decision in (garde_carte.RACCOURCI, garde_carte.REFUS):
@@ -488,10 +493,9 @@ def _garder_le_pas(session: Session, ordre: Ordre) -> tuple[Ordre, dict[str, Any
     if vitesse is not None:
         # SEC-02 borne la durée d'un ordre : un pas trop long pour l'allure lente garde sa longueur (la suite d'une
         # séquence en dépend) et prend la plus faible vitesse qui tient dans cette durée — c'est annoncé.
-        plancher = math.ceil(ordre.valeur / (securite.DUREE_MAX_S * session.cal.facteur_distance) * 100) / 100
-        if plancher > vitesse:
-            vitesse = min(plancher, securite.VITESSE_LINEAIRE_M_S)
-            annonce = f"{annonce} — {vitesse:g} m/s pour ce pas de {ordre.valeur:g} m ({securite.DUREE_MAX_S:g} s au plus par ordre)"
+        vitesse = garde_carte.vitesse_lente(ordre.valeur, session.cal.facteur_distance)
+        retenue = garde_carte.annonce_vitesse(vitesse, ordre.valeur)
+        annonce = f"{annonce} — {retenue}" if retenue else annonce
         ordre = dataclasses.replace(ordre, vitesse=vitesse)
         infos["allure"] = annonce
     return ordre, infos

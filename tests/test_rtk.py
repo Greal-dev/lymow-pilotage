@@ -181,15 +181,25 @@ def test_interface_sonde_le_diagnostic_rtk_liaison_active_seulement(tmp_path, mo
 
     async def scenario():
         async with serveur_ui(tmp_path, monkeypatch, reel=False, session=session_reelle) as (serveur, http):
+            await asyncio.sleep(0.3)
+            assert demandes() == [] and serveur.instantane()["diagnostic_rtk"] is False  # jamais d'office
+            statut, corps, _recus = await poster(http, serveur, "/api/diagnostic-rtk", {"actif": True})
+            assert statut == 200 and corps == {"actif": True}
             await attendre(lambda: len(demandes()) >= 4)  # simulation comprise : ce sont des lectures
             assert lien.ordres == [] and all(est_requete_pure(t) for t in lien.trames)
             await poster(http, serveur, "/api/carte/actualiser")
             await attendre(lambda: serveur.session.etat.origine == ORIGINE)  # l'origine de la carte sert à l'écart
-            await poster(http, serveur, "/api/liaison/rendre", {})  # main rendue : plus aucune demande
+            await poster(http, serveur, "/api/liaison/rendre", {"choix": "pause"})  # main rendue : plus aucune demande
             avant = len(demandes())
             await asyncio.sleep(0.3)
             assert len(demandes()) == avant
+            statut, _corps, _recus = await poster(http, serveur, "/api/diagnostic-rtk", {"actif": True})
+            assert statut == 409  # main rendue : refusé
             await poster(http, serveur, "/api/liaison/reprendre")
+            await asyncio.sleep(0.3)
+            assert len(demandes()) == avant and serveur.diagnostic_rtk is False  # rendre la main l'a décoché
+            await poster(http, serveur, "/api/diagnostic-rtk", {"actif": True})
+            await attendre(lambda: len(demandes()) > avant)
             serveur.tache = asyncio.ensure_future(asyncio.sleep(30))  # pendant un ordre : rien ne s'ajoute
             await asyncio.sleep(0.1)
             pendant = len(demandes())

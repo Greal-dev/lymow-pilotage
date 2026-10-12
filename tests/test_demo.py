@@ -189,6 +189,8 @@ def test_robot_fictif_publie_son_etat_periodiquement_l_affichage_ne_se_grise_pas
     async def scenario():
         async with serveur_demo(tmp_path, monkeypatch) as (serveur, _http):
             await attendre(lambda: serveur.session.etat.recu_statut is not None)
+            await attendre(lambda: serveur._carte_initiale is not None and serveur._carte_initiale.done())  # carte d'office
+            await attendre(lambda: serveur._carte_initiale is not None and serveur._carte_initiale.done())  # carte d'office
             premier = serveur.session.etat.recu_statut
             recues = len(serveur.session.lien.recues)
             await asyncio.sleep(0.4)  # aucune demande de la page pendant ce temps

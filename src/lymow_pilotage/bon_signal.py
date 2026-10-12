@@ -229,7 +229,9 @@ def trajet(carte: Carte, depart: Point, cible: Point, marge: float = MARGE_M) ->
     return None, "aucun trajet trouvé dans les zones et les passages de la carte : seul le cap est proposé"
 
 
-def decouper(points: list[Point], cap_deg: float | None, facteur_angle: float = 1.0) -> list[dict[str, Any]] | None:
+def decouper(
+    points: list[Point], cap_deg: float | None, facteur_angle: float = 1.0, facteur_distance: float = 1.0
+) -> list[dict[str, Any]] | None:
     """Trajet → pas compatibles avec SEC-02 : rotations bornées, avances de 2 m au plus. Rien si le cap est inconnu."""
     if cap_deg is None or len(points) < 2:
         return None
@@ -246,14 +248,20 @@ def decouper(points: list[Point], cap_deg: float | None, facteur_angle: float = 
             morceaux = math.ceil(abs(virage) / angle_max)
             ordres.extend({"nom": "tourner", "valeur": round(virage / morceaux, 1), "vitesse": None, "duree": None} for _ in range(morceaux))
         cap = vise
-        pas = math.ceil(distance / securite.DISTANCE_MAX_M)
+        # Plus long pas demandable : le plafond de distance, et la durée maximale d'un ordre une fois le facteur
+        # de distance appliqué (un facteur inférieur à 1 allonge la durée).
+        plus_long = min(
+            securite.DISTANCE_MAX_M,
+            math.floor(securite.VITESSE_LINEAIRE_M_S * securite.DUREE_MAX_S * facteur_distance * 100 + 1e-9) / 100,
+        )
+        pas = math.ceil(distance / plus_long - 1e-9)
         ordres.extend({"nom": "avancer", "valeur": round(distance / pas, 2), "vitesse": None, "duree": None} for _ in range(pas))
     return ordres
 
 
 def proposer(
     carte: Carte, releve: list[dict[str, Any]], robot: Point | None, cap_deg: float | None, precision_m: float | None,
-    facteur_angle: float = 1.0, jours: int | None = None,
+    facteur_angle: float = 1.0, jours: int | None = None, facteur_distance: float = 1.0,
 ) -> dict[str, Any]:
     """Tout ce que la page affiche : cible, distance, cap, trajet, pas — ou pourquoi il n'y en a pas."""
     fiables = points_fiables(releve, jours)
@@ -274,7 +282,7 @@ def proposer(
     if chemin is None:
         return resultat | {"motif": motif}
     resultat["trajet"] = [[round(x, 2), round(y, 2)] for x, y in chemin]
-    resultat["ordres"] = decouper(chemin, cap_deg, facteur_angle)
+    resultat["ordres"] = decouper(chemin, cap_deg, facteur_angle, facteur_distance)
     if resultat["ordres"] is None:
         resultat["motif"] = "cap du robot inconnu : le trajet est tracé, mais ses pas ne peuvent pas être calculés"
     return resultat

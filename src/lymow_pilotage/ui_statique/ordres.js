@@ -46,13 +46,15 @@
   /* Statut du robot en clair, et le refus de mouvement dit AVANT toute prévisualisation. */
   function texteEtatDesOrdres(ordres) {
     if (!ordres) { return ""; }
+    if (ordres.suspendue) { return ordres.texte; }  // état voulu : dit tel quel, sans alarme
     var texte = ordres.statut ? "Robot : " + ordres.statut : "Robot : état inconnu";
     if (ordres.tache) { texte += " (tâche : " + ordres.tache + ")"; }
     return ordres.mouvement_refuse ? texte + " — " + ordres.mouvement_refuse : texte;
   }
 
   /* En-tête : l'état du robot en une ligne (en ligne, statut, batterie, RTK). */
-  function resumeEtat(etat) {
+  function resumeEtat(etat, suspendue) {
+    if (suspendue) { return "liaison suspendue : l'application Lymow a la main"; }
     if (!etat) { return "état du robot inconnu"; }
     var morceaux = [etat.en_ligne === true ? "en ligne" : etat.en_ligne === false ? "HORS LIGNE" : "présence inconnue"];
     morceaux.push((etat.statut_libelle || "statut inconnu") + (etat.tache_libelle ? " (tâche : " + etat.tache_libelle + ")" : ""));
@@ -188,7 +190,7 @@
     var lignes = [];
     if (c.suspendue) { lignes.push("La liaison avec le robot sera rétablie."); }
     if (c.ordres && c.ordres.action === "pause") {
-      lignes.push(c.ordres.mouvement_refuse.replace(/ : .*$/, "") + " : il sera mis en pause.");
+      lignes.push(c.ordres.mouvement_refuse.replace(/ : .*$/, "") + " : la tâche sera mise en pause.");
     }
     lignes.push(c.composer
       ? "Les flèches composeront une séquence (rien ne part sans « Émettre »)."
@@ -200,9 +202,14 @@
   /* « Prendre la main », pas à pas : la prochaine action, au vu de l'état que le serveur vient d'annoncer.
    * Une seule à la fois ; rien n'est enchaîné à l'aveugle (la pause doit être CONFIRMÉE par le robot). */
   function suitePrendreLaMain(c) {
-    if (c.suspendue) { return "liaison"; }
-    if (!c.connecte || c.occupe) { return "attendre"; }
+    if (c.suspendue) { return "liaison"; }  // d'abord la liaison et l'état : la confirmation dira vrai
     var ordres = c.ordres || {};
+    if (c.simulation && !c.connecte) {  // simulation sans robot : rien à lire, rien à mettre en pause
+      if (!c.confirme) { return "confirmer"; }
+      return c.flechesActives ? "fait" : "fleches";
+    }
+    if (!c.connecte || c.occupe) { return "attendre"; }
+    if (!c.confirme) { return ordres.statut || ordres.mouvement_refuse ? "confirmer" : "attendre"; }
     var pause = ordres.pause ? ordres.pause.etat : null;
     if (pause === "en attente") { return "attendre"; }
     if (ordres.action === "pause") {
@@ -221,9 +228,16 @@
     return "choisir";
   }
 
+  /* « Rendre la main » et sa boîte de choix : un clic de souris, toujours ; au clavier (Entrée, Espace sur
+   * le bouton qui a le focus), seulement flèches inactives — flèches actives, Espace = STOP et rien d'autre. */
+  function clicRendreAccepte(c) {
+    return !(c.clavier && c.flechesActives);
+  }
+
   var api = {
     libelleLiaison: libelleLiaison,
     quiALaMain: quiALaMain,
+    clicRendreAccepte: clicRendreAccepte,
     texteDeLaMain: texteDeLaMain,
     annoncePrendreLaMain: annoncePrendreLaMain,
     suitePrendreLaMain: suitePrendreLaMain,

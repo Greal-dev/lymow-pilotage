@@ -37,10 +37,16 @@ def enregistrer(dossier: Path, appareil: str, carte: cartes.Carte) -> dict[str, 
         "sha256": hashlib.sha256(carte.octets).hexdigest(),
     }
     try:
+        meta["appareil"] = identifiant_sur(appareil)
         brut, fiche = _chemins(dossier, appareil)
         brut.parent.mkdir(parents=True, exist_ok=True)
-        brut.write_bytes(carte.octets)
-        fiche.write_text(json.dumps(meta, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
+        # Écriture atomique : fichiers temporaires puis renommage — une coupure ne laisse jamais une carte
+        # à moitié écrite (l'empreinte de la fiche trahirait de toute façon un mélange).
+        provisoires = (brut.with_suffix(".pb.tmp"), fiche.with_suffix(".json.tmp"))
+        provisoires[0].write_bytes(carte.octets)
+        provisoires[1].write_text(json.dumps(meta, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
+        provisoires[0].replace(brut)
+        provisoires[1].replace(fiche)
     except (OSError, RefusSecurite):
         return None  # jamais bloquant : la carte reste affichée depuis la mémoire
     return meta
@@ -53,6 +59,9 @@ def charger(dossier: Path, appareil: str) -> tuple[cartes.Carte, dict[str, Any]]
         octets = brut.read_bytes()
         meta = json.loads(fiche.read_text(encoding="utf-8"))
         if not isinstance(meta, dict) or meta.get("sha256") != hashlib.sha256(octets).hexdigest():
+            return None
+        attendu = identifiant_sur(appareil)
+        if meta.get("appareil", attendu) != attendu:  # carte d'un autre appareil : refusée
             return None
         carte = cartes.decoder(octets)
     except (OSError, ValueError, RefusSecurite):  # absente, abîmée, illisible, identifiant refusé : pas de référence
