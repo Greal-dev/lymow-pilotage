@@ -919,7 +919,7 @@ def test_compte_tentative_pkce_et_state_gardes_dans_le_serveur(tmp_path, monkeyp
         async with serveur_ui(tmp_path, monkeypatch, reel=False, coffre_factice={}) as (serveur, http):
             statut, texte, _recus = await lire(http, serveur, "/api/etat")
             image = json.loads(texte)
-            un_clic = {"pris_en_charge": True, "actif": False, "etranger": None}
+            un_clic = {"pris_en_charge": True, "actif": False, "perime": False, "etranger": None}
             assert image["compte"] == {
                 "connecte": False, "region": None, "appareil": None, "tentative": False, "choix": None, "un_clic": un_clic,
             }

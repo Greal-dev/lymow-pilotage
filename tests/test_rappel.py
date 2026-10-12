@@ -73,7 +73,6 @@ def test_commande_rappel_sans_interface_message_clair_et_fenetre_retenue(monkeyp
     import sys
 
     invites = []
-    monkeypatch.setenv("LYMOW_DONNEES", str(tmp_path))
     monkeypatch.setattr(rappel, "PORT_DEFAUT", 1)  # aucun serveur n'écoute là
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
@@ -101,7 +100,7 @@ def test_rappel_termine_la_connexion_comme_un_collage(tmp_path, monkeypatch, ser
             await poster(http, serveur, "/api/compte/commencer", {"region": "eu-west-1"})
             adresse = adresse_de(serveur)["adresse"]
             monkeypatch.setattr(rappel, "PORT_DEFAUT", serveur.port)
-            assert await rappel.transmettre(adresse, rappel.ports_connus(None)) is True  # ce que fait `lymow rappel`
+            assert await rappel.transmettre(adresse, rappel.ports_connus(None)) == rappel.REUSSIE  # ce que fait `lymow rappel`
             image = serveur.instantane()
             assert image["compte"]["connecte"] is True and serveur.tentative is None
             maintenant = serveur.horloge()
@@ -150,10 +149,14 @@ def test_rappel_refuse_state_faux_sans_consommer_la_tentative(tmp_path, monkeypa
                 assert reponse.status == 405
             assert serveur.tentative is not None and service_compte.envois == []
 
+            # Fréquence : limitée seulement après un `state` refusé ; le vrai rappel passe sans attendre.
             temps[0] += 2
+            fausse = "myapp://callback/?code=CODE-OAUTH-fff666&state=un-autre-etat"
+            assert [(await remettre(http, serveur, fausse))[0] for _ in range(3)] == [403, 429, 429]
+            statut, corps = await remettre(http, serveur, bonne)  # aussitôt après les fausses
+            assert statut == 200 and corps == {"interface": "lymow", "ok": True}
             statut, _corps = await remettre(http, serveur, bonne)
-            statut_suivant, _corps = await remettre(http, serveur, bonne)  # aussitôt après
-            assert statut == 200 and statut_suivant == 429
+            assert statut == 409  # tentative consommée
 
     executer(scenario())
     assert ui.DELAI_RAPPEL_S >= 1
@@ -177,7 +180,7 @@ def test_rappel_refuse_pendant_un_mouvement(tmp_path, monkeypatch, session_reell
 
 
 def test_installation_ecrit_la_commande_attendue_et_rien_d_autre(registre):
-    assert rappel.etat() == {"pris_en_charge": True, "actif": False, "etranger": None}
+    assert rappel.etat() == {"pris_en_charge": True, "actif": False, "perime": False, "etranger": None}
     message = rappel.installer(executable=NOTRE)
     assert registre.cles[r"Software\Classes\myapp"] == {"": "URL:Lymow, retour de connexion", "URL Protocol": ""}
     assert registre.cles[COMMANDE] == {"": f'"{NOTRE}" rappel "%1"'}
@@ -185,9 +188,7 @@ def test_installation_ecrit_la_commande_attendue_et_rien_d_autre(registre):
         "Software", r"Software\Classes", r"Software\Classes\myapp", r"Software\Classes\myapp\shell",
         r"Software\Classes\myapp\shell\open", COMMANDE,
     }
-    assert rappel.etat()["actif"] is True and "activée" in message
-    rappel.installer(executable=Path(r"D:\autre\lymow.exe"))  # notre clé, autre chemin : mise à jour admise
-    assert registre.cles[COMMANDE][""] == r'"D:\autre\lymow.exe" rappel "%1"'
+    assert rappel.etat(executable=NOTRE)["actif"] is True and "activée" in message
 
 
 def test_desinstallation_ne_retire_que_notre_cle(registre):
@@ -221,7 +222,7 @@ def test_hors_windows_non_pris_en_charge(monkeypatch):
         raise rappel.EchecRappel("connexion en un clic non prise en charge hors de Windows")
 
     monkeypatch.setattr(rappel, "_registre_reel", absent)
-    assert rappel.etat() == {"pris_en_charge": False, "actif": False, "etranger": None}
+    assert rappel.etat() == {"pris_en_charge": False, "actif": False, "perime": False, "etranger": None}
     with pytest.raises(rappel.EchecRappel, match="non prise en charge"):
         rappel.installer()
 
@@ -241,7 +242,9 @@ def test_commandes_rappel_installer_et_desinstaller(capsys, tmp_path, registre):
 def test_page_active_et_desactive_par_les_memes_fonctions(tmp_path, monkeypatch, registre):
     async def scenario():
         async with serveur_ui(tmp_path, monkeypatch, reel=False) as (serveur, http):
-            assert serveur.instantane()["compte"]["un_clic"] == {"pris_en_charge": True, "actif": False, "etranger": None}
+            assert serveur.instantane()["compte"]["un_clic"] == {
+                "pris_en_charge": True, "actif": False, "perime": False, "etranger": None,
+            }
             statut, corps, _recus = await poster(http, serveur, "/api/compte/un-clic", {"activer": True})
             assert statut == 200 and corps["un_clic"]["actif"] is True and COMMANDE in registre.cles
             assert serveur.instantane()["compte"]["un_clic"]["actif"] is True
@@ -281,3 +284,112 @@ def test_page_explique_le_registre_et_garde_le_repli_manuel():
     assert "Repli manuel" in page and 'id="compte-adresse"' in page
     assert r"HKCU\\Software\\Classes\\myapp" in script and "lymow rappel-desinstaller" in script and "window.confirm(EXPLICATION_UN_CLIC)" in script
     assert AVANCER_1 and HttpOAuth and asyncio and lire  # outils partagés avec test_ui
+
+
+# --- dixième avenant ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("machine", "affiche"),
+    [
+        ({"myapp": {"": "URL:AutreApp"}, r"myapp\shell\open\command": {"": r'"C:\Program Files\Autre\app.exe" "%1"'}}, "app.exe"),
+        ({"myapp": {"": "URL:AutreApp"}}, "URL:AutreApp"),
+        ({"myapp": {}}, "myapp sans commande"),
+    ],
+)
+def test_cle_myapp_de_la_machine_vue_par_hkcr_refuse_l_installation(registre, machine, affiche):
+    registre.machine.update(machine)
+    constat = rappel.etat()
+    assert constat["actif"] is False and constat["etranger"].startswith("clé de la machine") and affiche in constat["etranger"]
+    with pytest.raises(rappel.EchecRappel, match="ne pointe pas vers cet outil") as erreur:
+        rappel.installer(executable=NOTRE)
+    assert affiche in str(erreur.value) and registre.cles == {} and registre.ecritures == 0
+    with pytest.raises(rappel.EchecRappel, match="n'est pas la nôtre"):
+        rappel.desinstaller()
+
+
+def test_notre_cle_reconnue_par_egalite_exacte_sinon_perimee_et_reparable(registre):
+    rappel.installer(executable=NOTRE)
+    assert rappel.etat(executable=NOTRE) == {"pris_en_charge": True, "actif": True, "perime": False, "etranger": None}
+    ailleurs = Path(r"D:\ancien\.venv\Scripts\lymow.exe")
+    for periment in (ailleurs, Path(r"C:\outils\lymow\.venv\Scripts\LYMOW.EXE")):
+        constat = rappel.etat(executable=periment)  # même libellé, autre exécutable : plus de simple suffixe
+        assert (constat["actif"], constat["perime"], constat["etranger"]) == (False, True, None)
+    registre.cles[COMMANDE][""] = f'"{NOTRE}" rappel "%1" --reel'  # notre libellé, commande altérée
+    assert rappel.etat(executable=NOTRE)["perime"] is True
+    message = rappel.installer(executable=ailleurs)  # « réparer » : réécrit vers l'exécutable courant
+    assert "réparée" in message and registre.cles[COMMANDE][""] == f'"{ailleurs}" rappel "%1"'
+    assert rappel.etat(executable=ailleurs)["actif"] is True
+
+
+def test_desinstallation_d_une_cle_perimee_ou_incomplete_ne_laisse_rien(registre):
+    rappel.installer(executable=NOTRE)  # périmée vis-à-vis de l'exécutable courant du test
+    assert rappel.etat()["perime"] is True and "désactivée" in rappel.desinstaller()
+    assert not [cle for cle in registre.cles if "myapp" in cle]  # plus de clé `myapp`, même vide
+    registre.cles[r"Software\Classes\myapp"] = {"": rappel.LIBELLE, "URL Protocol": ""}  # notre libellé, sans commande
+    assert rappel.etat()["perime"] is True and "désactivée" in rappel.desinstaller()
+    assert not [cle for cle in registre.cles if "myapp" in cle]
+    rappel.installer(executable=NOTRE)
+    registre.cles[r"Software\Classes\myapp\shell\autre"] = {"": "ajout étranger"}
+    with pytest.raises(rappel.EchecRappel, match="retrait incomplet"):
+        rappel.desinstaller()
+
+
+def test_commande_rappel_installer_repare_une_cle_perimee(capsys, tmp_path, registre):
+    rappel.installer(executable=NOTRE)
+    assert cli.main(["rappel-installer", "--json", "--donnees", str(tmp_path)]) == 0
+    assert "réparée" in json.loads(capsys.readouterr().out)["connexion_en_un_clic"]
+    assert rappel.etat()["actif"] is True
+
+
+def test_page_propose_de_reparer(tmp_path, monkeypatch, registre):
+    rappel.installer(executable=NOTRE)
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False) as (serveur, http):
+            assert serveur.instantane()["compte"]["un_clic"]["perime"] is True
+            statut, corps, _recus = await poster(http, serveur, "/api/compte/un-clic", {"activer": True})
+            assert statut == 200 and "réparée" in corps["message"] and corps["un_clic"] == {
+                "pris_en_charge": True, "actif": True, "perime": False, "etranger": None,
+            }
+
+    executer(scenario())
+    assert "Réparer la connexion en un clic" in (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("issue", "code", "attendu"),
+    [("réussie", 0, "Connexion réussie"), ("refusée", 1, "Connexion refusée par le service"), ("aucune", 1, "Aucune interface Lymow")],
+)
+def test_message_de_rappel_selon_la_reponse_reelle_de_l_interface(monkeypatch, capsys, issue, code, attendu):
+    lus = []
+
+    async def transmettre(_adresse, ports):
+        lus.append(ports)
+        return issue
+
+    monkeypatch.setattr(rappel, "transmettre", transmettre)
+    rappel.noter_port(rappel.dossier_ports(), 9123, True)
+    assert cli.main(["rappel", VALIDE]) == code
+    sortie = capsys.readouterr()
+    assert attendu in sortie.out + sortie.err and "abc-123" not in sortie.out + sortie.err
+    assert lus == [[rappel.PORT_DEFAUT, 9123]]  # même fichier de ports que l'interface
+
+
+def test_rappel_echange_refuse_par_le_service_dit_refusee(tmp_path, monkeypatch, service_compte):
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=False, coffre_factice={}) as (serveur, http):
+            serveur.ouvrir_http = service_compte
+            service_compte.statut = 400
+            await poster(http, serveur, "/api/compte/commencer", {"region": "eu-west-1"})
+            bonne = adresse_de(serveur)["adresse"]
+            monkeypatch.setattr(rappel, "PORT_DEFAUT", serveur.port)
+            assert await rappel.transmettre(bonne, rappel.ports_connus(None)) == rappel.REFUSEE
+            assert await rappel.transmettre(bonne, rappel.ports_connus(None)) == rappel.AUCUNE  # plus de tentative
+
+    executer(scenario())
+
+
+def test_dossier_des_ports_independant_du_repertoire_courant(monkeypatch, tmp_path, registre):
+    monkeypatch.chdir(tmp_path)
+    assert (registre.dossier_ports_reel() / "pyproject.toml").is_file()  # la vraie fonction, sans le double

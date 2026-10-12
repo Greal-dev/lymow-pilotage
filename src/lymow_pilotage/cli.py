@@ -391,7 +391,8 @@ def _recevoir_rappel(arguments: list[str]) -> int:
         adresse = rappel.valider(arguments)
         journal.declarer_secret(adresse)
         fabrique = asyncio.SelectorEventLoop if sys.platform == "win32" else None
-        remise = asyncio.run(rappel.transmettre(adresse, rappel.ports_connus(config.dossier_donnees())), loop_factory=fabrique)
+        ports = rappel.ports_connus(rappel.dossier_ports())  # même fichier que l'interface, où qu'on soit lancé
+        remise = asyncio.run(rappel.transmettre(adresse, ports), loop_factory=fabrique)
     except ErreurSaisie:
         print("Adresse de rappel refusée : rien n'a été transmis.", file=sys.stderr)
         _retenir_la_fenetre()
@@ -400,9 +401,17 @@ def _recevoir_rappel(arguments: list[str]) -> int:
         print(f"Transmission impossible ({type(erreur).__name__}).", file=sys.stderr)
         _retenir_la_fenetre()
         return 1
-    if remise:
-        print("Connexion transmise à l'interface Lymow : cette fenêtre peut se fermer.")
+    if remise == rappel.REUSSIE:
+        print("Connexion réussie : l'interface Lymow est à jour, cette fenêtre peut se fermer.")
         return 0
+    if remise == rappel.REFUSEE:
+        print(
+            "Connexion refusée par le service (code expiré ou déjà utilisé ?) : le motif est affiché dans la page ; "
+            "recommencez avec « Se connecter avec Google ».",
+            file=sys.stderr,
+        )
+        _retenir_la_fenetre()
+        return 1
     print(
         "Aucune interface Lymow n'attend cette connexion. Lancez « lymow ui », cliquez sur "
         "« Se connecter avec Google », puis recommencez.",
