@@ -90,7 +90,7 @@ s'appliquent pas.
 - pas et allure en **groupes de boutons** : 0,25 · 0,5 · 1 · 2 m (touches 1
   à 4), 15 · 45 · 90°, auto · lente · normale ;
 - une **grille d'actions** : Pause, Reprendre, Retour base, Annuler tâche,
-  Plateau haut, Phares, Recalage assisté, Bon signal. Un bouton
+  Plateau haut, Recalage assisté, Bon signal. Un bouton
   indisponible est grisé, sa raison en info-bulle. Ces ordres sans
   déplacement partent d'un clic, sans prévisualisation ; « Reprendre », qui
   relance les lames, demande deux clics (le second dans les 5 s) ; « Annuler
@@ -453,20 +453,46 @@ de lui-même avant ou au contact, sa détection reste active en pilotage
 manuel ; noter alors le code affiché. S'il pousse le carton, elle ne l'est
 pas : seuls les garde-fous ci-dessus protègent.
 
-## Phares
+## Éclairage : voyants LED et phares
 
-« Phares : allumer / éteindre » : un bouton à bascule dans les actions du
-pilotage, et `lymow phares allumer|eteindre`. Un clic émet l'ordre, sans
-prévisualisation (ordre sans mouvement) ; demandé pendant un pas, il part à
-la fin du pas — jamais entre deux consignes, jamais devant un STOP, qui
-l'annule. Refusé main rendue. Forme émise : celle que le socle a capturée
-sur le bouton « Vehicle LED » de l'application (configuration du robot,
-signal 10 pour allumer, 11 pour éteindre). L'éclairage propre à la caméra
-(autres numéros de la même énumération) n'est attesté par aucune capture :
-il n'est pas proposé. État affiché : celui de la configuration du robot
-quand elle est reçue (champ absent = éteints, à confirmer au premier
-allumage), sinon « dernier ordre envoyé : allumés (état réel non
-transmis) ».
+**Voyants LED** (« Vehicle LED » de l'application) — `lymow voyants
+allumer|eteindre`, et deux boutons dans la section repliée « Ordres
+détaillés ». Forme émise : celle que le socle a capturée (configuration du
+robot, signal 10 pour allumer, 11 pour éteindre). **Ce ne sont pas les
+phares** : en essai réel (2026-10-12), le signal 10 est parti six fois sans
+allumer les phares — les voyants étaient d'ailleurs déjà allumés (niveau 3
+toute la journée d'après la configuration du robot).
+
+**Phares** (éclairage avant, celui de la caméra) — **lecture seule** : la
+pastille « phares allumés / éteints » et son info-bulle donnent le niveau
+annoncé par le robot et la plage d'allumage réglée dans l'application.
+Observé dans les trames réelles du 2026-10-12 : éteints le matin (aucune
+plage), allumés au niveau moyen entre 20:26 et 21:30 pendant la plage
+20:30–21:30, éteints après. **L'outil n'a pas de bouton « Phares »** :
+
+- attesté par capture de l'application (par le socle, en Bluetooth) : le
+  réglage « Headlight Mode », une plage horaire quotidienne ; l'extinction
+  y porte le signal 7 ;
+- non attesté par capture : l'allumage immédiat (signal 6, niveaux 15 et
+  16) — connu seulement par le code de l'application et par une intégration
+  tierce qui dit l'avoir vérifié.
+
+Pour l'obtenir avec certitude : capturer ce que l'application officielle
+envoie quand on appuie sur son bouton d'éclairage dans la vue caméra (on
+attend `10 31 6a 02 40 06`), ou décider d'essayer ce signal en ordre
+expérimental. En attendant, les phares s'allument en réglant leur plage
+dans l'application.
+
+## Essai dans un vrai navigateur
+
+`python outils/essai_navigateur.py <dossier> [recalage] [boutons]` lance
+l'interface de **démonstration** (robot fictif, aucun réseau, rien n'est
+émis) et la pilote dans Edge ou Chrome sans affichage : clics de souris
+réels, touches, boîtes de dialogue, captures d'écran, erreurs de console.
+Il n'est pas lancé par les tests. Le scénario « recalage » ouvre la carte,
+pointe le robot d'un clic réel (y compris un clic « tremblé ») et vérifie
+le décalage ; « boutons » clique chaque bouton du tableau de bord et relève
+ce que le journal de démonstration en dit.
 
 ## Ce que le diagnostic de localisation a réellement répondu
 
@@ -567,7 +593,10 @@ robot plutôt que de la carte.
 
 **« Le robot est ici »** (onglet Carte) : cliquez le bouton, puis l'endroit
 réel du robot sur la carte. L'outil enregistre le décalage entre la
-position annoncée et l'endroit indiqué (« décalage appliqué : 1,2 m vers
+position annoncée et l'endroit indiqué — en pointage, le curseur est une
+croix, un bandeau le rappelle, Échap l'annule, et la carte ne glisse pas :
+c'est l'endroit où vous relâchez qui compte ; un trait relie ensuite
+l'ancienne et la nouvelle position, avec la valeur (« décalage appliqué : 1,2 m vers
 l'est, 0,4 m vers le nord »), le mémorise avec sa date (`recalage.json` du
 dossier de données, lu aussi par la commande) et l'applique partout où il
 place le robot : marqueur et cercle d'incertitude, avertissement de bord de
@@ -575,8 +604,8 @@ zone, cible et trajet « bon signal », relevé affiché (le fichier du relevé
 garde les valeurs brutes, avec le décalage du moment). La mention « carte
 recalée par l'opérateur » reste affichée ; « Annuler le décalage » le
 retire. Si un écart a été mesuré à la station, « Utiliser l'écart mesuré à
-la station » l'applique en un clic. 20 m au plus ; une position annoncée de
-plus de 60 s ne sert pas de repère.
+la station » l'applique en un clic. 20 m au plus. La dernière position
+annoncée sert de repère quel que soit son âge.
 
 **Ce recalage ne concerne que l'affichage de l'outil : rien n'est envoyé au
 robot.** Si la carte du robot est réellement décalée, le robot lui-même

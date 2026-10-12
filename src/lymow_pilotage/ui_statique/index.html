@@ -103,7 +103,6 @@
           <p id="bord-zone" class="vers-pastilles"></p>
           <p id="recalage-mention" class="vers-pastilles"></p>
           <p id="pave-avertissement" class="vers-fil avertissement"></p>
-          <p id="phares-etat" class="vers-pastilles"></p>
           <p class="vers-pastilles"><meter id="plateau-jauge" min="20" max="100" value="20" hidden></meter> <span id="plateau-etat"></span></p>
           <p class="actions-robot">
             <button id="pause-bouton" type="button" data-tache="pause" title="Met la tâche (ou le retour à la base) en pause, tout de suite."><span class="icone" aria-hidden="true">⏸</span> Pause</button>
@@ -111,7 +110,6 @@
             <button id="base-bouton" type="button" data-tache="base" title="Retour à la base, tâche conservée, tout de suite."><span class="icone" aria-hidden="true">⌂</span> Retour base</button>
             <button id="annuler-bouton" type="button" data-tache="annuler" title="Annule la tâche : le robot s'arrête sur place et se remet en attente. Sur confirmation."><span class="icone" aria-hidden="true">✕</span> Annuler tâche</button>
             <button id="pave-plateau" type="button" title="Plateau de coupe au plus haut, tout de suite (en composition : ajouté à la séquence)."><span class="icone" aria-hidden="true">⤒</span> Plateau haut</button>
-            <button id="phares-bouton" type="button" title="Allume ou éteint les phares du robot : un clic. Pendant un pas, l'ordre part à sa fin.">Phares : allumer</button>
             <button id="recalage" type="button" title="Charge dans la séquence un aller-retour en ligne droite (deux pas en avant, deux en arrière, au pas choisi). À n'exécuter qu'en zone dégagée. Effet non garanti : jamais essayé sur ce robot."><span class="icone" aria-hidden="true">⟲</span> Recalage assisté</button>
             <button id="bon-signal-bouton" type="button" title="Ouvre la carte et cherche l'endroit de bon signal le plus proche."><span class="icone" aria-hidden="true">◎</span> Bon signal</button>
           </p>
@@ -190,6 +188,7 @@
               <label class="case" title="Précision de position relevée au fil des passages : vert jusqu'à 0,10 m, orange jusqu'à 0,50 m, rouge au-delà."><input id="carte-precision" type="checkbox"> précision relevée</label>
               <span id="carte-etat" class="note">aucune carte : cliquez sur « Actualiser la carte »</span>
             </p>
+            <p id="recalage-bandeau" class="bandeau-pointage" role="status" hidden>Cliquez l'endroit réel du robot sur la carte (Échap pour annuler)</p>
             <div class="cadre-carte">
               <svg id="carte-dessin" role="img" aria-label="Carte du terrain, nord en haut"></svg>
               <span class="nord" aria-hidden="true">N ↑</span>
@@ -246,6 +245,11 @@
       <summary>Ordres détaillés</summary>
       <section aria-labelledby="titre-ordres">
         <h2 id="titre-ordres" class="masque">Ordres</h2>
+      <p class="actions" title="Voyants LED du robot (« Vehicle LED » de l'application). Ce ne sont PAS les phares : aucun ordre d'allumage immédiat des phares n'est connu avec certitude ; leur état se lit dans la pastille « phares ».">
+        <button type="button" data-voyants="allumer">Voyants LED : allumer</button>
+        <button type="button" data-voyants="eteindre">Voyants LED : éteindre</button>
+        <span id="voyants-etat" class="note" role="status"></span>
+      </p>
       <p class="note" title="Le bouton « Prévisualiser » d'un formulaire ne prévisualise que SON ordre ; « Ajouter à la séquence » l'ajoute à la séquence du pilotage.">Angle ou distance, ou bien durée. « Ajouter à la séquence » alimente la même séquence que les flèches.</p>
 
       <form class="ordre" data-ordre="tourner">

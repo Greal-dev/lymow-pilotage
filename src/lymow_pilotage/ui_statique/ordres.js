@@ -188,7 +188,7 @@
   function etatDuRecalage(recalage, attenteDuClic) {
     var r = recalage || {};
     return {
-      texte: attenteDuClic ? "Cliquez sur la carte l'endroit où se trouve réellement le robot (Échap : STOP, comme toujours)." : (r.texte || ""),
+      texte: attenteDuClic ? "Cliquez l'endroit réel du robot sur la carte (Échap pour annuler)" : (r.texte || ""),
       annuler: Boolean(r.actif),
       mesure: r.mesure_station || "",
       utiliserLaMesure: Boolean(r.mesure_station) && !r.actif
@@ -215,13 +215,6 @@
     if (c.mode !== "réel") { return { possible: false, motif: "Essais de plateau : en mode réel seulement." }; }
     if (c.occupe) { return { possible: false, motif: "Un ordre est en cours." }; }
     return { possible: true, motif: "" };
-  }
-
-  /* Bouton à bascule des phares : il propose le contraire de l'état connu (transmis, sinon dernier ordre). */
-  function boutonPhares(phares) {
-    var p = phares || {};
-    var allumer = p.en_attente === true || p.en_attente === false ? !p.en_attente : p.allumes !== true;
-    return { allumer: allumer, libelle: allumer ? "Phares : allumer" : "Phares : éteindre", texte: p.texte || "" };
   }
 
   /* Fil d'activité : trois lignes, la plus récente en tête ; un message identique au dernier n'est pas redit. */
@@ -292,10 +285,19 @@
     }
     var plateau = textePlateau(image.plateau);
     liste.push({ texte: image.plateau && typeof image.plateau.mm === "number" ? "plateau " + image.plateau.mm + " mm" + (image.plateau.au_maximum ? " (max)" : "") : "plateau ?", titre: plateau.texte });
-    if (image.phares && image.phares.allumes === true) { liste.push({ texte: "phares allumés", titre: image.phares.texte }); }
+    // Phares : lecture seule (niveau annoncé par le robot, plage réglée dans l'application).
+    if (image.phares && typeof image.phares.allumes === "boolean") {
+      liste.push({ texte: image.phares.allumes ? "phares allumés" : "phares éteints", titre: image.phares.texte });
+    }
     if (image.recalage && image.recalage.actif) { liste.push({ texte: "carte recalée", classe: "alerte", titre: image.recalage.texte }); }
     liste.push({ texte: image.connecte ? "liaison ✓" : "liaison ✗", classe: image.connecte ? "ok" : (ordres.suspendue ? "" : "erreur"), titre: image.liaison || "" });
     return liste;
+  }
+
+  /* Longueur du décalage entre position annoncée et position recalée : « 1,2 m ». */
+  function distanceDuDecalage(annoncee, recalee) {
+    var d = Math.hypot(recalee[0] - annoncee[0], recalee[1] - annoncee[1]);
+    return String(Math.round(d * 100) / 100).replace(".", ",") + " m";
   }
 
   function enErreur(ordres) {
@@ -386,8 +388,8 @@
     diagnosticErreur: diagnosticErreur,
     alerteBord: alerteBord,
     etatDuRecalage: etatDuRecalage,
+    distanceDuDecalage: distanceDuDecalage,
     textePlateau: textePlateau,
-    boutonPhares: boutonPhares,
     filAjouter: filAjouter,
     graviteDe: graviteDe,
     heureCourte: heureCourte,
