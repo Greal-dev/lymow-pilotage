@@ -7,6 +7,10 @@
   var bornes = {};
   var sequence = [];
   var previsualisation = null;
+  var Ordres = window.LymowOrdres;
+  var occupe = false;
+  var noteEmission = "";
+  var reprise = null;
   var modeReel = false;
   var emission = false; // réel, ou démonstration (robot fictif)
   var dernierResultat = "";
@@ -94,7 +98,8 @@
   function signalerErreur(erreur) {
     $("previsualisation-titre").textContent = "Refusé : " + erreur.message;
     vider($("previsualisation-detail"));
-    oublierPrevisualisation("");
+    afficherEtapes([], "");
+    oublierPrevisualisation("Prévisualisation refusée : " + erreur.message);
   }
 
   // --- état -----------------------------------------------------------------
@@ -113,6 +118,11 @@
     $("mode").textContent = modeReel ? "MODE RÉEL" : image.mode;
     $("mode").className = "pastille" + (modeReel ? " reel" : "");
     $("liaison").textContent = image.liaison + (image.occupe ? " — ordre en cours" : "");
+    // Statut du robot en clair près des ordres, et le refus de mouvement dit avant toute prévisualisation.
+    $("ordres-etat").textContent = Ordres.texteEtatDesOrdres(image.ordres);
+    $("ordres-etat").classList.toggle("refuse", Boolean(image.ordres && image.ordres.mouvement_refuse));
+    occupe = Boolean(image.occupe);
+    afficherEmission();
     $("appareil").textContent = image.appareil || "";
     afficherCompte(image.compte);
     if (window.LymowCarte) { window.LymowCarte.robot(image.etat); }
@@ -138,6 +148,11 @@
       vider($("resultat-detail"));
       $("resultat-vide").hidden = Boolean(image.resultat);
       if (image.resultat) { rendre(image.resultat, $("resultat-detail")); }
+      // Séquence interrompue : les étapes restantes se reprennent en un clic (via la prévisualisation).
+      reprise = image.resultat && image.resultat.reprise && image.resultat.reprise.ordres ? image.resultat.reprise : null;
+      $("reprise-bloc").hidden = !reprise;
+      if (reprise) { $("reprise").textContent = Ordres.libelleReprise(reprise); }
+      if (image.resultat && !occupe && !previsualisation) { noteEmission = "Ordre terminé (résultat plus bas) : prévisualisez le suivant."; afficherEmission(); }
     }
     var journal = $("journal");
     vider(journal);
@@ -317,19 +332,31 @@
     return { nom: "tourner", valeur: valeur, vitesse: vitesse, duree: duree };
   }
 
-  function texteOrdre(ordre) {
-    var mots = [ordre.nom];
-    if (ordre.valeur !== null && ordre.valeur !== undefined) { mots.push(String(ordre.valeur)); }
-    if (ordre.duree !== null && ordre.duree !== undefined) { mots.push("durée " + ordre.duree + " s"); }
-    if (ordre.vitesse !== null && ordre.vitesse !== undefined) { mots.push("vitesse " + ordre.vitesse); }
-    return mots.join(" ");
+  var texteOrdre = Ordres.texteOrdre;
+
+  /* « Émettre » : actif ou non, et TOUJOURS la raison à côté quand il ne l'est pas. */
+  function afficherEmission() {
+    var motif = Ordres.motifEmissionIndisponible({
+      occupe: occupe, previsualisationValide: Boolean(previsualisation), emission: emission, note: noteEmission
+    });
+    $("emettre").disabled = motif !== "";
+    $("emettre-note").textContent = motif || noteEmission;
   }
 
   function oublierPrevisualisation(note) {
     if (previsualisation && previsualisation.minuterie) { window.clearTimeout(previsualisation.minuterie); }
     previsualisation = null;
-    $("emettre").disabled = true;
-    $("emettre-note").textContent = note;
+    noteEmission = note;
+    $("emettre").textContent = Ordres.libelleEmission([]);
+    afficherEmission();
+  }
+
+  function afficherEtapes(etapes, avertissement) {
+    var liste = $("previsualisation-etapes");
+    vider(liste);
+    (etapes || []).forEach(function (etape) { liste.appendChild(element("li", etape)); });
+    $("previsualisation-avertissement").textContent = avertissement || "";
+    $("previsualisation-avertissement").hidden = !avertissement;
   }
 
   async function previsualiser(ordres, estTache) {
@@ -341,20 +368,24 @@
       signalerErreur(erreur);
       return;
     }
-    proposer(reponse.ordres, reponse.bilan, reponse.identifiant, estTache);
+    proposer(reponse.ordres, reponse.bilan, reponse.identifiant, estTache, reponse.etapes);
   }
 
   /* Affiche une prévisualisation et arme « Émettre » si le serveur a fourni un identifiant. */
-  function proposer(titre, detail, identifiant, estTache) {
+  function proposer(titre, detail, identifiant, estTache, etapes) {
     oublierPrevisualisation("");
     var reponse = { ordres: titre, identifiant: identifiant };
-    $("previsualisation-titre").textContent = titre;
+    etapes = etapes && etapes.length ? etapes : [titre];
+    $("previsualisation-titre").textContent = etapes.length > 1
+      ? "Séquence de " + etapes.length + " étapes, émises dans cet ordre :" : "Un ordre sera émis :";
+    // La liste vient du serveur : c'est exactement ce qui partira, étape par étape.
+    afficherEtapes(etapes, Ordres.avertissementOrdreSeul(etapes, estTache ? 0 : sequence.length));
     vider($("previsualisation-detail"));
     rendre(detail, $("previsualisation-detail"));
     if (!reponse.identifiant) {
-      $("emettre-note").textContent = emission
-        ? "Refusée : rien à émettre."
-        : "Simulation : le serveur n'émet rien (relancez « lymow ui --reel » pour émettre).";
+      var motif = detail && detail.motif ? detail.motif : "voir le détail ci-dessus";
+      noteEmission = emission ? "Prévisualisation refusée, rien à émettre : " + motif : "";
+      afficherEmission();
       return;
     }
     previsualisation = {
@@ -365,8 +396,10 @@
         oublierPrevisualisation("Prévisualisation expirée : prévisualisez de nouveau.");
       }, bornes.previsualisation_s * 1000)
     };
-    $("emettre").disabled = false;
-    $("emettre-note").textContent = "Valable " + bornes.previsualisation_s + " s, pour cet ordre seulement.";
+    $("emettre").textContent = Ordres.libelleEmission(etapes);
+    noteEmission = "Valable " + bornes.previsualisation_s + " s, pour "
+      + (etapes.length > 1 ? "ces " + etapes.length + " étapes" : "cet ordre") + " seulement.";
+    afficherEmission();
   }
 
   async function emettre() {
@@ -376,10 +409,11 @@
     oublierPrevisualisation("Émission demandée…");
     try {
       await appeler("/api/emettre", { identifiant: courante.identifiant });
-      $("emettre-note").textContent = "Ordre accepté : le résultat s'affiche plus bas.";
+      noteEmission = "Ordre accepté : le résultat s'affichera plus bas. Prévisualisez ensuite le suivant.";
     } catch (erreur) {
-      $("emettre-note").textContent = "Refusé : " + erreur.message;
+      noteEmission = "Émission refusée : " + erreur.message + " — prévisualisez de nouveau.";
     }
+    afficherEmission();
   }
 
   async function stop() {
@@ -387,15 +421,17 @@
     try {
       var reponse = await appeler("/api/stop");
       if (reponse && reponse.bilan) {
+        afficherEtapes([], "");
         $("previsualisation-titre").textContent = "STOP (simulation)";
         vider($("previsualisation-detail"));
         rendre(reponse.bilan, $("previsualisation-detail"));
       } else {
-        $("emettre-note").textContent = "STOP envoyé.";
+        noteEmission = "STOP envoyé. Prévisualisez un ordre pour reprendre.";
       }
     } catch (erreur) {
-      $("emettre-note").textContent = "STOP refusé : " + erreur.message;
+      noteEmission = "STOP refusé : " + erreur.message;
     }
+    afficherEmission();
   }
 
   // --- séquence -------------------------------------------------------------
@@ -524,6 +560,12 @@
   $("sequence-previsualiser").addEventListener("click", function () { previsualiser(sequence.slice(), false); });
   $("sequence-vider").addEventListener("click", function () { sequence = []; afficherSequence(); });
   $("emettre").addEventListener("click", emettre);
+  $("reprise").addEventListener("click", function () {
+    if (!reprise) { return; }
+    sequence = reprise.ordres.slice();
+    afficherSequence();
+    previsualiser(sequence.slice(), false); // jamais d'émission directe : Prévisualiser, puis Émettre
+  });
   $("stop").addEventListener("click", stop);
   $("actualiser").addEventListener("click", function () {
     appeler("/api/actualiser").then(appliquer).catch(function (erreur) { $("liaison").textContent = erreur.message; });

@@ -136,11 +136,28 @@ def vider(octets: bytes, profondeur: int = 0) -> list[str]:
     return lignes
 
 
+def pour_un_ordre(dossier_donnees: Path, attendre: Callable[[], bool] | None = None) -> Enregistreur | None:
+    """Enregistreur des trames reçues pendant un ordre réel (`captures/ordre-<horodatage>/`).
+
+    Diagnostic : savoir ce que le robot envoie en mouvement. Jamais bloquant — sans disque, rien."""
+    try:
+        nom = "ordre-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+        return Enregistreur(dossier_donnees / DOSSIER / nom, attendre=attendre)
+    except OSError:
+        return None
+
+
 class Enregistreur:
     """Reçoit chaque message brut de la liaison et l'écrit aussitôt, sans rien décoder d'utile."""
 
-    def __init__(self, dossier: Path, horloge: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self, dossier: Path, horloge: Callable[[], float] = time.monotonic,
+        attendre: Callable[[], bool] | None = None,
+    ) -> None:
         dossier.mkdir(parents=True, exist_ok=False)
+        # SEC-03 : tant que `attendre()` est vrai (arrêt en cours), rien n'est écrit sur disque.
+        self.attendre = attendre
+        self._attente: list[tuple[str, bytes | str, bool, tuple[str, float]]] = []
         self.dossier = dossier
         self.horloge = horloge
         self._debut = horloge()
@@ -155,6 +172,19 @@ class Enregistreur:
         self.tronques = 0
 
     def recevoir(self, sujet: str, charge: bytes | str, retenu: bool = False) -> None:
+        instant = (datetime.now().isoformat(timespec="milliseconds"), round(self.horloge() - self._debut, 3))
+        if self.attendre is not None and self.attendre() and len(self._attente) < MESSAGES_MAX:
+            self._attente.append((sujet, charge, retenu, instant))
+            return
+        self.vider_attente()
+        self._traiter(sujet, charge, retenu, instant)
+
+    def vider_attente(self) -> None:
+        attente, self._attente = self._attente, []
+        for message in attente:
+            self._traiter(*message)
+
+    def _traiter(self, sujet: str, charge: bytes | str, retenu: bool, instant: tuple[str, float]) -> None:
         brut = charge.encode() if isinstance(charge, str) else bytes(charge)
         self.messages += 1
         self.octets += len(brut)
@@ -166,8 +196,8 @@ class Enregistreur:
         fiche: dict[str, Any] = {
             "numero": self.messages,
             "sujet": sujet,
-            "horodatage": datetime.now().isoformat(timespec="milliseconds"),
-            "t_s": round(self.horloge() - self._debut, 3),
+            "horodatage": instant[0],
+            "t_s": instant[1],
             "retenu": retenu,
             "taille": len(brut),
         }

@@ -227,6 +227,11 @@ premier essai, ouvrir la console du navigateur (F12) et observer :
 2. `lymow tourner 10 --reel` : sens de rotation (`signe_angulaire`).
 3. `lymow avancer 0.5 --reel`, puis `lymow tourner 90 --reel` : échelles
    (`facteur_distance`, `facteur_angle`).
+   Constat du 2026-10-12 (premier ordre réel, depuis la page) : `reculer 2`
+   à 0,25 m/s a produit environ 2 m réels, mesurés à l'œil par le
+   propriétaire — facteur de distance voisin de 1,0 à cette vitesse, trame
+   variante `mqtt`, version 49. `calibration.toml` n'a pas été modifié ;
+   rotation et autres vitesses restent à mesurer.
 4. Vérifier à l'œil que les lames sont à l'arrêt dans les statuts pause (3),
    erreur (7) et télécommande (6).
 5. `lymow plateau 60 --reel` puis `lymow plateau-haut --reel` : effet réel de
@@ -264,16 +269,32 @@ premier essai, ouvrir la console du navigateur (F12) et observer :
   déplacement mesuré. La position de départ doit être aussi fraîche que l'état
   de SEC-01, sinon « constat impossible ». Sont signalés : « le robot n'a pas
   bougé » (sous 5 cm ou 3°), un déplacement dans le mauvais sens, un
-  déplacement nettement supérieur à l'ordre (plus de 1,5 fois). Si aucun état
-  n'est arrivé depuis l'ordre, l'outil le dit au lieu d'affirmer.
+  déplacement nettement supérieur à l'ordre (plus de 1,5 fois). Le constat
+  attend une trame d'état fraîche, 12 s au plus. Constat du 2026-10-12 : le
+  robot réel envoie son état toutes les demi-secondes après un ordre, mais
+  pas sa position ; l'outil conclut alors aussitôt « position non fournie
+  par le robot : déplacement non vérifiable par l'outil (utilisez la
+  vidéo) » — un constat normal. Sans aucune trame d'état en 12 s : « liaison
+  douteuse ».
 - **SEC-05** Simulation par défaut, `--reel` à chaque commande, en toutes
   lettres (aucune abréviation d'option).
 - **SEC-06** Journal `journaux/AAAA-MM-JJ.jsonl` de chaque ordre simulé ou émis
   et de chaque état reçu, filtré de tout secret.
 - **SEC-07** Séquence : toutes les étapes sont validées avant la première
-  émission (un plafond dépassé et rien ne part) ; elle s'interrompt au premier
-  refus, échec ou constat qui ne confirme pas l'ordre, en disant pourquoi et
-  quelles étapes n'ont pas été exécutées.
+  émission (un plafond dépassé et rien ne part). Révisé le 2026-10-12 au vu
+  du réel : elle s'interrompt si un ordre est refusé ou échoue, si l'arrêt
+  n'est pas confirmé, si le statut reçu sort de la liste blanche, si aucune
+  trame d'état fraîche n'arrive dans le délai, ou si une position EST
+  fournie et contredit l'ordre (« n'a pas bougé », « mauvais sens ») — plus
+  parce que le robot ne fournit pas sa position. Chaque étape repasse par
+  SEC-01 (état frais). Le bilan dit pour chaque étape « émise, vérifiée »,
+  « émise, non vérifiable »…, pourquoi la séquence s'est arrêtée, et les
+  étapes restantes ; la page propose « Reprendre à l'étape N », qui repasse
+  par Prévisualiser puis Émettre.
+- **Diagnostic des ordres réels** : pendant un ordre réel (et 20 s après,
+  depuis la page), les trames reçues sont enregistrées telles quelles dans
+  `captures/ordre-<horodatage>/`, au format de `lymow capture`. Jamais
+  bloquant ; rien n'est écrit pendant un arrêt (SEC-03).
 
 Codes de sortie : 0 fait ; 1 échec ou séquence interrompue ; 2 refus ou saisie
 invalide ; 3 arrêt non confirmé ; 130 interruption au clavier (arrêt émis).
@@ -429,6 +450,13 @@ tonte ; la surface et les bornes que le robot recalcule ne sont pas comparées.
 - Lames à l'arrêt en pause (3) et en erreur (7) : non prouvé, à constater
   robot à vue.
 - Robot sur sa base : `avancer` le pousserait contre la station.
+- Mode télécommande : les sources ne décrivent aucune entrée explicite (la
+  trame de consigne suffit ; le 2026-10-12 le statut est resté « prêt »
+  pendant le recul) ; ha-lymow connaît une sortie, `userCtrl 32`, que cet
+  outil n'émet pas.
+- Liaison coupée par le service (par exemple quand une autre application
+  prend la main) : la page le dit et se reconnecte seule ; la cause exacte
+  n'est pas connue de l'outil.
 - La présence en ligne est tenue pour confirmée dès qu'un état non conservé
   arrive du robot pendant la session ; on ignore si le robot répond à une
   sollicitation ou seulement à son battement d'environ 60 s (attente jusqu'à

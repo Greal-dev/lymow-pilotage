@@ -27,7 +27,7 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
-from . import auth, compte, conduite, demo, geometrie, liaison, mouvement, rappel, retouche, securite
+from . import auth, capture, compte, conduite, demo, geometrie, liaison, mouvement, rappel, retouche, securite
 from . import carte as cartes
 from .config import Calibration
 from .journal import Journal, assainir, declarer_secret, masquer
@@ -49,6 +49,7 @@ FICHIERS = {
     "signalisation.js": "text/javascript",
     "style.css": "text/css",
     "carte.js": "text/javascript",
+    "ordres.js": "text/javascript",
 }
 NOMS_ORDRES = (*mouvement.ETAPES_SEQUENCE, mouvement.ESSAI, *mouvement.TACHES)
 NON_CONNECTE = "non connecté — utilisez le panneau « Compte » de cette page"
@@ -58,6 +59,14 @@ ROUTE_ARRET = "/api/instance/arreter"
 ROUTES_LOCALES = (ROUTE_REOUVERTURE, ROUTE_IDENTITE, ROUTE_ARRET, rappel.ROUTE)
 REMPLACEE = "ancienne version remplacée"
 DELAI_LIBERATION_S = 10.0
+# Après un ordre réel, les trames reçues sont encore enregistrées ce temps-là (diagnostic).
+SUITE_CAPTURE_S = 20.0
+# Veille de la liaison : une coupure est vue et réparée sans attendre un clic.
+PERIODE_VEILLE_S = 2.0
+LIAISON_COUPEE = (
+    "liaison coupée par le service — peut-être reprise par une autre application "
+    "(l'application officielle ?) : reconnexion automatique"
+)
 
 
 def charger_statiques() -> dict[str, str]:
@@ -181,6 +190,9 @@ class ServeurUI:
         self.registre: Any = None  # None : registre Windows réel ; les tests y mettent un double
         self.un_clic: dict[str, Any] = {"pris_en_charge": False, "actif": False, "perime": False, "etranger": None}
         self._battement: asyncio.Task[None] | None = None  # démonstration : état périodique du robot fictif
+        self._veille: asyncio.Task[None] | None = None
+        self._ecoute: capture.Enregistreur | None = None  # trames brutes pendant un ordre réel
+        self._fin_ecoute: asyncio.TimerHandle | None = None
         self.video_ouverte = False
         # Connexion au compte : vérificateur PKCE et `state` ne quittent jamais la mémoire du serveur.
         self.tentative: tuple[auth.DemandeOAuth, float] | None = None
@@ -232,6 +244,7 @@ class ServeurUI:
         self.port = self.adresses_ecoute()[0][1]
         self.un_clic = rappel.etat(self.registre)
         await self._connecter()
+        self._veille = asyncio.create_task(self._veiller())
         self._noter(f"interface démarrée en mode {self.mode}")
 
     def adresses_ecoute(self) -> list[tuple[str, int]]:
@@ -267,6 +280,10 @@ class ServeurUI:
         self.ferme = True
         self._stop_demande = True
         await self._interrompre()
+        self._fermer_ecoute()
+        if self._veille is not None:
+            self._veille.cancel()
+            await asyncio.gather(self._veille, return_exceptions=True)
         if self._battement is not None:
             self._battement.cancel()
             await asyncio.gather(self._battement, return_exceptions=True)
@@ -309,7 +326,7 @@ class ServeurUI:
         autorisees = frozenset(Categorie) if self.reel else frozenset({Categorie.REQUETE_PURE})
         try:
             self.session = await self._pile.enter_async_context(
-                liaison.ouvrir_session(self.journal, self.cal, autorisees, self.ident)
+                liaison.ouvrir_session(self.journal, self.cal, autorisees, self.ident, brut=self._brut)
             )
         except Exception as erreur:  # noqa: BLE001
             self.session = None
@@ -318,6 +335,60 @@ class ServeurUI:
         self.session.signaler = self._signaler
         self.etat_liaison = "connecté"
         await self.session.solliciter()
+
+    async def _veiller(self) -> None:
+        """Liaison perdue hors de tout ordre : le dire en clair et se reconnecter, sans page figée.
+
+        Pendant un ordre, c'est le mouvement lui-même qui traite la coupure (SEC-03)."""
+        while True:
+            await asyncio.sleep(PERIODE_VEILLE_S)
+            session = self.session
+            if self.demonstration or session is None or session.lien.connecte or self.occupe or self.ferme:
+                continue
+            self.etat_liaison = LIAISON_COUPEE
+            self._noter(LIAISON_COUPEE)
+            try:
+                async with self._verrou_acces:
+                    if not self.occupe and self.session is session:
+                        await self._rouvrir_liaison()
+                        if self.session is not None:
+                            self._noter("liaison rétablie")
+            except Exception as erreur:  # noqa: BLE001 — la veille ne meurt jamais ; nouvel essai au tour suivant
+                self.etat_liaison = f"{LIAISON_COUPEE} — échec ({type(erreur).__name__}), nouvel essai"
+            if self.session is None and self.ident is not None:
+                # Reconnexion manquée : on réessaie, sans marteler le service.
+                await asyncio.sleep(4 * PERIODE_VEILLE_S)
+                async with self._verrou_acces:
+                    if self.session is None and not self.ferme:
+                        await self._connecter_sans_verrou()
+
+    # --- enregistrement de diagnostic pendant un ordre réel --------------------
+
+    def _brut(self, sujet: str, charge: bytes | str, retenu: bool) -> None:
+        if self._ecoute is not None:
+            try:
+                self._ecoute.recevoir(sujet, charge, retenu)
+            except Exception:  # noqa: BLE001 — jamais bloquant : le diagnostic ne gêne ni l'écoute ni l'ordre
+                self._ecoute = None
+
+    def _ouvrir_ecoute(self) -> None:
+        if self._fin_ecoute is not None:
+            self._fin_ecoute.cancel()  # nouvel ordre pendant la suite du précédent : même dossier
+            self._fin_ecoute = None
+        if self._ecoute is None and self.reel:
+            session = self.session
+            self._ecoute = capture.pour_un_ordre(self.dossier, lambda: bool(session and session.arret_en_cours))
+
+    def _fermer_ecoute(self) -> None:
+        if self._fin_ecoute is not None:
+            self._fin_ecoute.cancel()
+        ecoute, self._ecoute, self._fin_ecoute = self._ecoute, None, None
+        if ecoute is not None:
+            try:
+                ecoute.vider_attente()
+                self.journal.ecrire("capture-ordre", messages=ecoute.messages, octets=ecoute.octets)
+            except Exception:  # noqa: BLE001
+                pass
 
     # --- garde commune à toutes les routes -----------------------------------
 
@@ -463,6 +534,7 @@ class ServeurUI:
             "liaison": self.etat_liaison,
             "appareil": demo.APPAREIL if self.demonstration else self.ident.appareil if self.ident else None,
             "occupe": self.occupe,
+            "ordres": self._etat_des_ordres(),
             "compte": self._compte(),
             "etat": etat,
             "resultat": self.resultat,
@@ -474,6 +546,20 @@ class ServeurUI:
                 "regions": list(auth.REGIONS), "region_defaut": auth.REGION_DEFAUT,
             }
         return image
+
+    def _etat_des_ordres(self) -> dict[str, Any]:
+        """Statut du robot en clair, et ce qui empêcherait un mouvement, dit AVANT la prévisualisation."""
+        session = self.session
+        if session is None or not session.lien.connecte:
+            return {"statut": None, "mouvement_refuse": f"robot injoignable ({self.etat_liaison})"}
+        etat = session.etat
+        libelle = etat.resume(session.horloge())["statut_libelle"]
+        refus = None
+        if etat.en_ligne is False:
+            refus = "mouvement refusé : le robot est hors ligne"
+        elif etat.statut is not None and etat.statut not in securite.STATUTS_LAMES_ARRET:
+            refus = f"mouvement refusé tant que le robot est en : {libelle}"
+        return {"statut": libelle, "mouvement_refuse": refus}
 
     async def _etat(self, _requete: web.Request) -> web.StreamResponse:
         return web.json_response(self.instantane(complet=True))
@@ -532,7 +618,10 @@ class ServeurUI:
             self.previsualisation = (identifiant, ordres, self.horloge() + DUREE_PREVISUALISATION_S)
         texte = " ; ".join(str(ordre) for ordre in ordres)
         self._noter(f"prévisualisation : {texte}" + ("" if code == 0 else f" — refusée : {bilan.get('motif')}"))
-        return web.json_response({"bilan": bilan, "identifiant": identifiant, "ordres": texte})
+        # `etapes` : ce que CE serveur émettra, étape par étape — la page l'affiche tel quel, numéroté.
+        return web.json_response({
+            "bilan": bilan, "identifiant": identifiant, "ordres": texte, "etapes": [str(ordre) for ordre in ordres],
+        })
 
     async def _emettre(self, requete: web.Request) -> web.StreamResponse:
         # SEC-05 : serveur lancé sans --reel, aucun ordre réel, quoi que demande la page.
@@ -574,6 +663,7 @@ class ServeurUI:
         if self.occupe:
             raise web.HTTPConflict(reason="un ordre est déjà en cours")
         self._noter(f"émission : {texte}")
+        self._ouvrir_ecoute()
         self.tache = asyncio.create_task(self._conduire(travail))
 
     async def _conduire(self, travail: Any) -> None:
@@ -598,6 +688,8 @@ class ServeurUI:
             self._noter(f"ordre en échec : {self.resultat['echec']}")
         finally:
             self.version += 1
+            if self._ecoute is not None and not self.ferme:
+                self._fin_ecoute = asyncio.get_running_loop().call_later(SUITE_CAPTURE_S, self._fermer_ecoute)
 
     async def _stop(self, _requete: web.Request) -> web.StreamResponse:
         """STOP : sans prévisualisation, prioritaire sur tout ordre en cours."""
