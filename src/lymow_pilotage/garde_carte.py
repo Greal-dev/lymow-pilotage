@@ -1,7 +1,10 @@
 """Garde-fous de déplacement fondés sur ce que l'outil VOIT : la carte, la pose, les codes du robot.
 
 Rôle :
-- SEC-13 (carte) : avant une avance ou un recul, projeter le pas sur la carte de référence et dire
+- SEC-13 (carte) — AVERTISSEMENT par défaut depuis le 2026-10-12 (décision du propriétaire, après un
+  essai réel où la position annoncée était fausse et le garde-fou bloquait à tort) ; il ne raccourcit et
+  ne refuse que si l'opérateur a coché « Arrêter aux bords de zone (d'après la carte) » :
+  avant une avance ou un recul, projeter le pas sur la carte de référence et dire
   s'il reste dans les zones de tonte et les passages, hors zones interdites, en gardant devant lui
   une marge de sécurité (0,30 m + l'incertitude de position annoncée) ; sinon proposer la plus
   grande distance sûre, ou le refus ;
@@ -136,12 +139,21 @@ def juger_pas(
     return Jugement(REFUS, 0.0, f"pas refusé : {detail}", bord, None)
 
 
+def constat(jugement: Jugement, distance_m: float) -> tuple[str, bool]:
+    """Mode avertissement : ce que dit la carte, sans rien décider — (texte, alerte si le bord est avant la fin du pas)."""
+    if jugement.decision == INCONNU or jugement.bord_m is None:
+        return jugement.motif, False
+    devant = "devant" if distance_m >= 0 else "derrière"
+    return f"d'après la carte : bord de zone {devant} à {metres(jugement.bord_m)}", jugement.bord_m < abs(distance_m)
+
+
 def annoncer(
     carte: Carte | None, depart: Point | None, cap_deg: float | None, precision_m: float | None,
-    age_pose_s: float | None, etapes: list[tuple[str, float | None]],
+    age_pose_s: float | None, etapes: list[tuple[str, float | None]], arreter: bool = False,
 ) -> list[str]:
-    """SEC-13, dès la prévisualisation : ce que le garde-fou fera de chaque avance ou recul de la séquence,
-    la pose étant propagée d'étape en étape (rotations comprises). Indicatif : l'émission rejuge chaque pas."""
+    """SEC-13, dès la prévisualisation : ce que la carte dit de chaque avance ou recul de la séquence, la pose étant
+    propagée d'étape en étape (rotations comprises). `arreter` : le garde-fou raccourcira ou refusera ; sinon ce
+    n'est qu'un avertissement, et le pas partira en entier. Indicatif : l'émission rejuge chaque pas."""
     annonces: list[str] = []
     position, cap = depart, cap_deg
     for numero, (nom, valeur) in enumerate(etapes, 1):
@@ -157,12 +169,18 @@ def annoncer(
         if jugement.decision == INCONNU:
             annonces.append(jugement.motif)
             break
-        if jugement.decision != INCHANGE:
+        parcouru = jugement.distance_m
+        if not arreter:
+            texte, alerte = constat(jugement, sens * valeur)
+            if alerte:
+                annonces.append(f"étape {numero} : {texte} (pas demandé : {metres(valeur)}) — le pas partira en entier")
+            parcouru = valeur
+        elif jugement.decision != INCHANGE:
             annonces.append(f"étape {numero} : {jugement.motif}")
-        if jugement.bloque:
-            break
+            if jugement.bloque:
+                break
         dx, dy = _direction(cap, sens)
-        position = (position[0] + dx * jugement.distance_m, position[1] + dy * jugement.distance_m)
+        position = (position[0] + dx * parcouru, position[1] + dy * parcouru)
     return annonces
 
 
@@ -180,15 +198,14 @@ def annonce_vitesse(vitesse: float, distance_m: float) -> str:
 
 
 def allure(vitesse_demandee: float | None, jugement: Jugement, precision_m: float | None) -> tuple[float | None, str | None]:
-    """Allure du pas : (vitesse imposée ou None, annonce). Lente d'office près d'un bord ou position non fiable,
-    sauf si l'opérateur a choisi sa vitesse."""
+    """Allure du pas : (vitesse imposée ou None, annonce). Lente d'office près d'un bord de zone, seulement quand la
+    position est fiable — sinon la carte n'est pas crédible et l'allure reste normale (décision du propriétaire,
+    2026-10-12). Jamais si l'opérateur a choisi sa vitesse."""
     if vitesse_demandee is not None:
         return None, None
-    # Précision non annoncée : rien ne dit que la position est mauvaise, l'allure n'est pas changée.
-    if precision_m is not None and securite.qualite_position(precision_m) != securite.FIABLE:
-        return ALLURE_LENTE_M_S, f"allure lente : position {securite.qualite_position(precision_m)}"
-    proche = jugement.arrivee_au_bord_m is not None and jugement.arrivee_au_bord_m < BORD_PROCHE_M
-    if proche:
+    if precision_m is None or securite.qualite_position(precision_m) != securite.FIABLE:
+        return None, None
+    if jugement.arrivee_au_bord_m is not None and jugement.arrivee_au_bord_m < BORD_PROCHE_M:
         return ALLURE_LENTE_M_S, f"allure lente : l'arrivée est à moins de {metres(BORD_PROCHE_M)} d'un bord de zone"
     return None, None
 

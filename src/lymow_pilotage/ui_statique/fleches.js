@@ -135,7 +135,9 @@
     if (rapport.echec) { return debut + "refusée : " + rapport.echec; }
     if (rapport.simulee) { return debut + "simulée, rien n'est émis"; }
     var suite = rapport.constat || "";
-    if (rapport.verification === "non vérifiable") { suite = "position non fournie"; }
+    if (rapport.verification === "non vérifiable") { suite = rapport.cause_probable || "position non fournie"; }
+    // Pose inchangée : la cause probable selon le statut (« en erreur : ordre ignoré », « patinage possible »).
+    else if (rapport.cause_probable) { suite = "le robot n'a pas bougé — " + rapport.cause_probable; }
     if (rapport.verification === "vérifiée") { suite = "déplacement constaté"; }
     return debut + "émise, arrêt acquitté" + (suite ? " — " + suite : "") + textePrecision(rapport);
   }

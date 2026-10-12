@@ -200,6 +200,8 @@ class Etat:
             "tache_libelle": _libelle_statut(self.tache) if self.tache not in (None, self.statut) else None,
             "erreurs": _libelles(d.get("errorCodes"), socle.ERROR_DESCRIPTIONS),
             "avertissements": _libelles(d.get("warningCodes"), socle.WARNING_DESCRIPTIONS),
+            # Âge de la position : au-delà de quelques secondes, le marqueur de la carte ne dit plus où est le robot.
+            "age_pose_s": None if self.recu_pose is None else round(max(0.0, instant - self.recu_pose), 1),
             "position_est_m": pose.est_m if pose else None,
             "position_nord_m": pose.nord_m if pose else None,
             "cap_deg": pose.cap_deg if pose else None,

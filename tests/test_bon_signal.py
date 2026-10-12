@@ -135,8 +135,8 @@ def test_sequence_vers_le_signal_s_arrete_d_elle_meme_quand_la_precision_redevie
     def signal_retrouve(lien_, octets):
         if est_consigne(octets):
             compte.append(1)
-            # Position perdue : allure lente d'office, 0,12 m/s pour un pas de 1 m (9 s au plus) — 84 consignes par pas.
-            if len(compte) == 168:  # dernière consigne de la deuxième étape
+            # Position perdue : la carte n'est pas crédible, l'allure reste normale (décision du 2026-10-12).
+            if len(compte) == 80:  # dernière consigne de la deuxième étape (40 par mètre à 0,25 m/s)
                 lien_.robot = {"robotState": 6, "workStatus": 2, "rtkEastM": 0.06}
 
     lien.sur_publication = signal_retrouve

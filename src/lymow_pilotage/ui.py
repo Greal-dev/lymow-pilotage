@@ -28,7 +28,7 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
-from . import auth, bon_signal, capture, garde_carte, coffre, compte, conduite, demo, fleches, geometrie, liaison, reference, releve, mouvement, rappel, retouche, securite
+from . import auth, bon_signal, capture, config, diagnostic, garde_carte, coffre, compte, conduite, demo, fleches, geometrie, liaison, reference, releve, mouvement, rappel, retouche, securite
 from . import carte as cartes
 from .config import Calibration
 from .journal import Journal, assainir, declarer_secret, masquer
@@ -71,6 +71,11 @@ DELAI_LIBERATION_S = 10.0
 SUITE_CAPTURE_S = 20.0
 # Après « Mettre en pause » : temps laissé au robot pour annoncer son statut « pause ».
 DELAI_PAUSE_S = 15.0
+ATTENTE_DIAGNOSTIC_S = 20.0  # sans réponse du robot au diagnostic de localisation au-delà : c'est dit
+DELAI_ANNULATION_S = 15.0  # après « annuler la tâche », le statut « prêt » est attendu ce temps-là
+# Pas de suite sans déplacement constaté avant de désarmer le pilotage direct (essai réel du 2026-10-12 :
+# au premier constat, la main se perdait à chaque pas).
+IMMOBILES_MAX = 3
 # Veille de la liaison : une coupure est vue et réparée sans attendre un clic.
 PERIODE_VEILLE_S = 2.0
 LIAISON_SUSPENDUE = "Liaison suspendue : l'application Lymow a la main"
@@ -215,6 +220,11 @@ class ServeurUI:
         self.direct = fleches.Armement(lambda: self.horloge())
         # Pause demandée : (instant de la demande, échéance, statut attendu) ; jamais suivie d'un mouvement automatique.
         self._pause: tuple[float, float, int] | None = None
+        self._annulation: tuple[float, float] | None = None  # « annuler la tâche » sur erreur : instant, échéance
+        self._immobiles = 0  # pas directs de suite sans déplacement constaté
+        # SEC-13 : avertissement par défaut ; la case « Arrêter aux bords de zone » est mémorisée sur ce poste.
+        self.arret_aux_bords = config.arret_aux_bords(self.dossier)
+        self._diagnostic_depuis: float | None = None
         self._direct_en_cours = False
         # « Rendre la main à l'application » : liaison fermée, reconnexion automatique suspendue.
         self.suspendue = False
@@ -257,9 +267,11 @@ class ServeurUI:
                 web.post("/api/emettre", self._emettre),
                 web.post("/api/stop", self._stop),
                 web.post("/api/pause", self._pause_raccourci),
+                web.post("/api/erreur/annuler", self._erreur_annuler),
                 web.post("/api/liaison/rendre", self._liaison_rendre),
                 web.post("/api/liaison/reprendre", self._liaison_reprendre),
                 web.post("/api/diagnostic-rtk", self._diagnostic_rtk),
+                web.post("/api/garde-carte", self._garde_carte),
                 web.get("/api/releve", self._releve_lire),
                 web.get("/api/signal", self._signal_proposer),
                 web.post("/api/direct/armer", self._direct_armer),
@@ -452,6 +464,35 @@ class ServeurUI:
             except Exception:  # noqa: BLE001 — une demande perdue se refera au tour suivant
                 continue
 
+    def _texte_du_diagnostic(self) -> str:
+        """Case cochée : ce que le robot a répondu, ou qu'il ne répond pas (dit après 20 s)."""
+        session = self.session
+        if not self.diagnostic_rtk or session is None:
+            return ""
+        if self._diagnostic_depuis is None:
+            self._diagnostic_depuis = session.horloge()
+        etat, depuis = session.etat, self._diagnostic_depuis
+        if etat.recu_rtk is not None and etat.recu_rtk >= depuis:
+            detail = etat.detail_localisation() or "réponse reçue, sans détail exploitable"
+            if etat.ecart_brut_m is None:
+                detail += " ; écart position satellite / position calculée : non mesurable (position brute non transmise)"
+            return detail
+        if session.horloge() - depuis > ATTENTE_DIAGNOSTIC_S:
+            return "le robot ne répond pas à la demande de diagnostic"
+        return "demande envoyée : réponse attendue…"
+
+    async def _garde_carte(self, requete: web.Request) -> web.StreamResponse:
+        """Case « Arrêter aux bords de zone (d'après la carte) » : décochée par défaut, mémorisée sur ce poste."""
+        corps = await self._corps(requete)
+        arreter = corps.get("arreter") if isinstance(corps, dict) else None
+        if not isinstance(arreter, bool) or set(corps) != {"arreter"}:
+            raise ErreurSaisie("« arreter » attendu : vrai ou faux")
+        self.arret_aux_bords = arreter
+        memorisee = config.memoriser_arret_aux_bords(self.dossier, arreter)
+        self.journal.ecrire("garde-carte", arret_aux_bords=arreter, memorisee=memorisee)
+        self.version += 1
+        return web.json_response({"arreter": arreter, "memorisee": memorisee})
+
     async def _diagnostic_rtk(self, requete: web.Request) -> web.StreamResponse:
         corps = await self._corps(requete)
         actif = corps.get("actif") if isinstance(corps, dict) else None
@@ -462,6 +503,7 @@ class ServeurUI:
             self._refuser_si_main_rendue()
         if actif != self.diagnostic_rtk:
             self.diagnostic_rtk = actif
+            self._diagnostic_depuis = self.session.horloge() if actif and self.session is not None else None
             self.journal.ecrire("diagnostic-rtk", actif=actif, mode=self.mode)
             self._noter("diagnostic de localisation : " + ("le robot est interrogé toutes les 5 s" if actif else "arrêté"))
         return web.json_response({"actif": self.diagnostic_rtk})
@@ -492,7 +534,9 @@ class ServeurUI:
             cap = None if pose is None else pose.cap_deg
             devant, derriere = (garde_carte.bord_devant(carte, point, cap, sens) if fraiche else None for sens in (1.0, -1.0))
             inconnue = garde_carte.juger_pas(carte, point, cap, 1.0, session.etat.precision_m, age).motif if devant is None else None
-            texte = inconnue or f"bord de zone devant : {garde_carte.metres(devant)} ; derrière : {garde_carte.metres(derriere)}"
+            texte = inconnue or (
+                f"d'après la carte : bord de zone devant à {garde_carte.metres(devant)} ; derrière à {garde_carte.metres(derriere)}"
+            )
             self._bord = (cle, {"devant_m": devant, "derriere_m": derriere, "texte": texte})
         return self._bord[1]
 
@@ -670,6 +714,8 @@ class ServeurUI:
             "occupe": self.occupe,
             "ordres": self._etat_des_ordres(),
             "diagnostic_rtk": self.diagnostic_rtk,
+            "diagnostic_texte": self._texte_du_diagnostic(),
+            "arret_aux_bords": self.arret_aux_bords,
             "carte_connue": self._carte_affichee()[0] is not None,  # la page la charge alors d'elle-même
             "direct": {
                 "arme": self.direct.arme, "reste_s": self.direct.reste_s,
@@ -724,6 +770,10 @@ class ServeurUI:
             # Après un dégagement, la reprise reste proposée clairement (les lames peuvent redémarrer).
             "reprise_possible": etat.statut == socle.WORK_STATUS_PAUSE,
             "telecommande": etat.statut == socle.WORK_STATUS_REMOTE_CONTROL,
+            "erreur": self._etat_de_l_erreur(etat, session.horloge()),
+            # Dit AVANT le pas, pas après : le pas reste possible, le propriétaire décide.
+            "avertissement_pas": diagnostic.AVERTISSEMENT_PAS if diagnostic.en_erreur(etat.statut) else None,
+            "immobiles": self._immobiles,
             "bord": self._bord_sans_echec(session),  # SEC-13
             # SEC-12 : dit AVANT de reprendre ou de renvoyer à la base ; rien si la position est fiable.
             "avertissement_position": securite.avertissement_position(etat.precision_m, etat.ecart_pour_la_garde),
@@ -737,6 +787,31 @@ class ServeurUI:
                 etat.statut == socle.WORK_STATUS_PAUSE
                 and securite.avertissement_position(etat.precision_m, etat.ecart_pour_la_garde) is None
             ),
+        }
+
+    def _etat_de_l_erreur(self, etat: Any, maintenant: float) -> dict[str, Any] | None:
+        """Robot en erreur : le diagnostic et le geste proposé ; après « annuler la tâche », la suite — une fois."""
+        annulation = self._annulation
+        if not diagnostic.en_erreur(etat.statut):
+            if annulation is None or etat.recu_statut is None or etat.recu_statut <= annulation[0]:
+                return None
+            pret = etat.statut == socle.WORK_STATUS_WAITING
+            libelle = etat.resume(maintenant)["statut_libelle"]
+            return {"resolue": True, "libelles": [], "annulation": "réussie", "message": (
+                "Le robot est de nouveau en attente : les flèches sont de nouveau utilisables — reculez pour dégager le pare-chocs."
+                if pret else f"Le robot n'est plus en erreur (statut : {libelle})."
+            )}
+        suite, message = None, None
+        if annulation is not None:
+            relu = etat.recu_statut is not None and etat.recu_statut > annulation[0]
+            if self.occupe or not relu or maintenant <= annulation[1]:
+                suite, message = "en attente", "Annulation demandée : attente du statut « prêt »…"
+            else:  # dit une fois pour toutes : rien n'est retenté de lui-même
+                suite = "persistante"
+                message = "L'erreur persiste : intervention sur place nécessaire, ou essayez l'application Lymow."
+        return {
+            "resolue": False, "libelles": diagnostic.libelles_erreurs(etat.donnees.get("errorCodes")),
+            "phrase": diagnostic.PHRASE_ERREUR, "annulation": suite, "message": message,
         }
 
     def _etat_de_la_pause(self, etat: Any, maintenant: float) -> dict[str, str] | None:
@@ -847,7 +922,7 @@ class ServeurUI:
             annonces = garde_carte.annoncer(
                 self.session.carte_reference, None if etat.pose is None else (etat.pose.est_m, etat.pose.nord_m),
                 None if etat.pose is None else etat.pose.cap_deg, etat.precision_m, age,
-                [(o.nom, o.valeur) for o in ordres if not o.force],
+                [(o.nom, o.valeur) for o in ordres if not o.force], self.arret_aux_bords,
             ) if any(o.nom in ("avancer", "reculer") and not o.force for o in ordres) else []
         texte = " ; ".join(str(ordre) for ordre in ordres)
         self._noter(f"prévisualisation : {texte}" + ("" if code == 0 else f" — refusée : {bilan.get('motif')}"))
@@ -905,6 +980,7 @@ class ServeurUI:
         pause ou rotation ; et un échec ici ne retient aucun ordre (pas de garde-fou, c'est dit au bilan)."""
         if not any(ordre.nom in ("avancer", "reculer") for ordre in ordres):
             return
+        self.session.arret_aux_bords = self.arret_aux_bords
         try:
             self._poser_origine(self.session)
         except Exception:  # noqa: BLE001
@@ -916,6 +992,7 @@ class ServeurUI:
             raise web.HTTPConflict(reason="un ordre est déjà en cours")
         self._noter(f"émission : {texte}")
         self._pause = None
+        self._annulation = None
         try:
             self._ouvrir_ecoute()
         except Exception:  # noqa: BLE001 — l'enregistrement de diagnostic ne retient jamais un ordre, STOP compris
@@ -995,6 +1072,34 @@ class ServeurUI:
         self._lancer([Ordre("pause")])
         return web.json_response({"accepte": True}, status=202)
 
+    async def _erreur_annuler(self, requete: web.Request) -> web.StreamResponse:
+        """Robot en erreur : « Annuler la tâche et remettre le robot en attente » — le seul ordre « annuler »
+        (28, déjà connu de l'outil), sur confirmation explicite. Rien n'est retenté si l'erreur persiste."""
+        corps = await self._corps(requete)
+        if not isinstance(corps, dict) or corps.get("confirmer") is not True or set(corps) != {"confirmer"}:
+            raise ErreurSaisie("confirmation explicite attendue pour annuler la tâche")
+        self._refuser_si_main_rendue()
+        if not self.emet:  # SEC-05
+            bilan, _code = conduite.simuler_ordres([Ordre("annuler")], self.cal, self.journal, self._appareil_fictif())
+            self._noter("annulation de tâche (simulation)")
+            return web.json_response({"accepte": True, "simulation": True, "bilan": bilan})
+        if self.session is None or not self.session.lien.connecte:
+            return _refus(503, f"robot injoignable : {self.etat_liaison}")
+        if self.occupe or self._stop_demande:
+            return _refus(409, "un ordre ou un STOP est en cours : attendez sa fin")
+        if not diagnostic.en_erreur(self.session.etat.statut):
+            return _refus(409, "le robot n'est pas en erreur : « Annuler la tâche » reste disponible dans les ordres")
+        self.direct.file.clear()
+        self.previsualisation = None
+        self.journal.ecrire("erreur-annulation-demandee", codes=self.session.etat.donnees.get("errorCodes"))
+        self._lancer([Ordre("annuler")])
+        instant = self.session.horloge()
+        self._annulation = (instant, instant + DELAI_ANNULATION_S)
+        self._immobiles = 0
+        if self.direct.arme:
+            self.direct.prolonger()  # la main reste prise pendant l'annulation
+        return web.json_response({"accepte": True}, status=202)
+
     # --- attestation « lames à l'arrêt » de l'opérateur (SEC-01b) -------------
     # Ces routes ne font que poser ou retirer l'attestation : aucun ordre n'en part, et la règle
     # elle-même vit dans `securite` — flèches, pilotage direct et ordres classiques la lisent pareil.
@@ -1046,6 +1151,7 @@ class ServeurUI:
         if self.emet and (self.session is None or not self.session.lien.connecte):
             return _refus(503, f"robot injoignable : {self.etat_liaison}")
         jeton = self.direct.armer()
+        self._immobiles = 0
         self.journal.ecrire("direct-arme", mode=self.mode)
         self._noter("PILOTAGE DIRECT ARMÉ : chaque flèche émet son étape sans prévisualisation")
         return web.json_response({"arme": True, "jeton": jeton, "valable_s": fleches.DUREE_ARMEMENT_S})
@@ -1097,9 +1203,12 @@ class ServeurUI:
         if self.session is None or not self.session.lien.connecte:
             self._desarmer("robot injoignable")
             return _refus(503, f"robot injoignable : {self.etat_liaison}")
-        if self._stop_demande or (self.occupe and not self._direct_en_cours):
-            self._desarmer("un autre ordre ou un STOP est en cours")
-            return _refus(409, "un autre ordre ou un STOP est en cours : pilotage direct désarmé")
+        if self._stop_demande:
+            self._desarmer("un STOP est en cours")
+            return _refus(409, "un STOP est en cours : pilotage direct désarmé")
+        if self.occupe and not self._direct_en_cours:  # refus avant émission : dit, la main est gardée
+            self.direct.prolonger()
+            return _refus(409, "un autre ordre est en cours : attendez sa fin, puis rappuyez")
         if self.occupe and len(self.direct.file) >= fleches.FILE_MAX:
             self.direct.prolonger()  # appui ignoré, jeton inchangé : la page reste armée
             return _refus(429, f"file d'attente pleine ({fleches.FILE_MAX}) : appui ignoré")
@@ -1136,6 +1245,27 @@ class ServeurUI:
                 del self.direct.faites[:-20]
                 self.version += 1
                 contraire = rapport.get("verification") in (mouvement.ANOMALIE, mouvement.AUCUN_ETAT)
+                # « Le robot n'a pas bougé » : dit en clair, la main est gardée ; désarmé au troisième de suite.
+                immobile = code == 0 and rapport.get("constat") == mouvement.IMMOBILE
+                self._immobiles = self._immobiles + 1 if immobile else 0
+                if immobile and self._immobiles < IMMOBILES_MAX:
+                    self.direct.file.clear()  # les pas en attente supposaient ce déplacement
+                    self.direct.prolonger()
+                    continue
+                if immobile:
+                    motif = (
+                        f"{IMMOBILES_MAX} pas de suite sans déplacement constaté "
+                        f"({rapport.get('cause_probable') or 'cause inconnue'})"
+                    )
+                    code = 1
+                    break
+                # Refus AVANT émission (rien n'est parti) : seuls SEC-01 (statut du robot) et la liaison désarment.
+                # Bornes (SEC-02), carte (SEC-13), localisation (SEC-12) : dits, la main est gardée.
+                if code != 0 and rapport.get("refus_avant_emission") and "SEC-01" not in str(rapport.get("echec")):
+                    self.direct.file.clear()
+                    self.direct.prolonger()
+                    code = 0
+                    continue
                 if code != 0 or contraire:
                     motif = bilan.get("motif") or rapport.get("echec") or rapport.get("constat") or "échec"
                     code = code or 1

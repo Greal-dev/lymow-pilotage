@@ -280,6 +280,7 @@ async def _emettre(ordres: list[Ordre], ctx: Contexte, attestee: bool = False) -
             en_arret[0] = lambda: session.arret_en_cours
             lue = None if ctx.dossier is None else reference.charger(ctx.dossier, session.appareil)
             session.carte_reference = None if lue is None else lue[0]  # SEC-13
+            session.arret_aux_bords = config.arret_aux_bords(ctx.dossier)  # même préférence que la page
             if not attestee:
                 return await conduite.emettre_ordres(session, ordres, ctx.journal)
             # SEC-01b : attestation de cette invocation seulement ; elle meurt avec la commande.

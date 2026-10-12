@@ -22,6 +22,10 @@
   var ordresDuRobot = null;
   var actives = false; // LA bascule : boutons sur la caméra et clavier, ensemble
   var modeSimulation = false;
+  var dernierBord = null;
+  function afficherAlerteBord() {
+    $("bord-zone").classList.toggle("alerte-carte", Ordres.alerteBord(dernierBord, Number($("pave-distance").value)));
+  }
   var allures = { auto: null, lente: 0.10, normale: 0.25 };
   var Ordres = window.LymowOrdres;
   var prise = null; // « Prendre la main » en cours
@@ -303,6 +307,7 @@
   // « Flèches : activer » est le reflet de « Prendre la main » : le même geste.
   $("fleches-bascule").addEventListener("click", function () { if (actives) { desactiver(""); } else { prendreLaMain(); } });
   $("prendre-main").addEventListener("click", prendreLaMain);
+  $("pave-distance").addEventListener("change", afficherAlerteBord);  // l'alerte dépend du pas choisi
   document.getElementById("vue-camera").addEventListener("click", function (evenement) {
     if (!actives && !evenement.target.closest("button")) { prendreLaMain(); }
   });
@@ -349,6 +354,16 @@
       modeSimulation = image.mode === "simulation";
       suspendue = Boolean(image.liaison_suspendue);
       $("bord-zone").textContent = image.ordres && image.ordres.bord ? image.ordres.bord.texte : "";  // SEC-13
+      dernierBord = image.ordres ? image.ordres.bord : null;
+      afficherAlerteBord();
+      $("garde-carte").checked = Boolean(image.arret_aux_bords);
+      $("pave-forcer-libelle").hidden = !image.arret_aux_bords;  // « Forcer ce pas » n'a de sens que garde-fou actif
+      if (!image.arret_aux_bords) { $("pave-forcer").checked = false; }
+      // Robot en erreur : dit AVANT le pas ; pas sans déplacement : dit, la main est gardée.
+      $("pave-avertissement").textContent = [
+        image.ordres && image.ordres.avertissement_pas,
+        image.ordres && image.ordres.immobiles ? image.ordres.immobiles + " pas de suite sans déplacement constaté (désarmement au troisième)." : ""
+      ].filter(Boolean).join(" ");
       connecte = Boolean(image.connecte);
       occupeCourant = Boolean(image.occupe);
       if (suspendue) { mainPrise = false; }

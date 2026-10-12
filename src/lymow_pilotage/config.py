@@ -6,6 +6,7 @@ calibration. Aucun secret ici ; aucune clé ne touche aux invariants SEC-*.
 
 from __future__ import annotations
 
+import json
 import os
 import tomllib
 from dataclasses import dataclass, fields
@@ -33,6 +34,30 @@ def dossier_donnees(option: str | None = None) -> Path:
     """Option `--donnees`, sinon variable LYMOW_DONNEES, sinon racine du projet."""
     choisi = option or os.environ.get(VARIABLE_DOSSIER)
     return Path(choisi).expanduser().resolve() if choisi else _racine_projet()
+
+
+FICHIER_PREFERENCES = "preferences.json"
+
+
+def arret_aux_bords(dossier: Path | None) -> bool:
+    """Préférence « Arrêter aux bords de zone (d'après la carte) » : fausse par défaut, et si elle est illisible."""
+    try:
+        lue = json.loads((dossier / FICHIER_PREFERENCES).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False
+    return isinstance(lue, dict) and lue.get("arret_aux_bords") is True
+
+
+def memoriser_arret_aux_bords(dossier: Path, actif: bool) -> bool:
+    """Écriture atomique ; faux si le disque refuse (la préférence vaut alors pour cette session seulement)."""
+    try:
+        dossier.mkdir(parents=True, exist_ok=True)
+        provisoire = dossier / (FICHIER_PREFERENCES + ".tmp")
+        provisoire.write_text(json.dumps({"arret_aux_bords": bool(actif)}) + "\n", encoding="utf-8", newline="\n")
+        provisoire.replace(dossier / FICHIER_PREFERENCES)
+    except OSError:
+        return False
+    return True
 
 
 @dataclass(frozen=True)

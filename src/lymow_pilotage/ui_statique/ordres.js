@@ -120,7 +120,12 @@
   function positionAffichee(etat, station) {
     var rayon = etat && typeof etat.precision_m === "number" ? etat.precision_m : null;
     if (etat && typeof etat.position_est_m === "number" && typeof etat.position_nord_m === "number") {
-      return { est: etat.position_est_m, nord: etat.position_nord_m, cap: etat.cap_deg || 0, rayon: rayon, source: "pose", note: "" };
+      // Position ancienne : le marqueur reste où il était, et c'est dit — le robot ne la transmet plus.
+      var age = typeof etat.age_pose_s === "number" ? etat.age_pose_s : 0;
+      var note = age > 5
+        ? "position reçue il y a " + (age < 90 ? Math.round(age) + " s" : Math.round(age / 60) + " min") + " : le robot ne la transmet plus, le marqueur n'est plus à jour"
+        : "";
+      return { est: etat.position_est_m, nord: etat.position_nord_m, cap: etat.cap_deg || 0, rayon: rayon, source: "pose", note: note };
     }
     if (station) {
       return {
@@ -173,6 +178,29 @@
     return texte;
   }
 
+  /* SEC-13, avertissement : le bord (d'après la carte) est-il avant la fin du pas demandé, devant ou derrière ? */
+  function alerteBord(bord, pas) {
+    if (!bord || typeof pas !== "number") { return false; }
+    return (typeof bord.devant_m === "number" && bord.devant_m < pas) || (typeof bord.derriere_m === "number" && bord.derriere_m < pas);
+  }
+
+  function enErreur(ordres) {
+    return Boolean(ordres && ordres.erreur && !ordres.erreur.resolue);
+  }
+
+  /* Encadré « robot en erreur » : libellés, phrase, bouton d'annulation (masqué pendant l'attente et quand
+   * l'erreur a persisté — rien ne boucle), puis la suite. Rien si le robot n'est pas en erreur. */
+  function diagnosticErreur(erreur) {
+    if (!erreur) { return null; }
+    if (erreur.resolue) { return { titre: "", phrase: "", bouton: false, suite: erreur.message || "" }; }
+    return {
+      titre: "Robot en erreur — " + (erreur.libelles && erreur.libelles.length ? erreur.libelles.join(" ; ") : "code d'erreur non transmis"),
+      phrase: erreur.phrase || "",
+      bouton: !erreur.annulation,
+      suite: erreur.message || ""
+    };
+  }
+
   /* Qui a la main ? L'application quand la liaison est suspendue ; l'outil quand il l'a prise et que la
    * liaison est active (STOP ne la retire pas) ; sinon personne en particulier. */
   function quiALaMain(c) {
@@ -189,7 +217,9 @@
   function annoncePrendreLaMain(c) {
     var lignes = [];
     if (c.suspendue) { lignes.push("La liaison avec le robot sera rétablie."); }
-    if (c.ordres && c.ordres.action === "pause") {
+    if (enErreur(c.ordres)) {
+      lignes.push("Le robot est EN ERREUR : il ignorera probablement les flèches. Voyez l'encadré rouge (annuler la tâche).");
+    } else if (c.ordres && c.ordres.action === "pause") {
       lignes.push(c.ordres.mouvement_refuse.replace(/ : .*$/, "") + " : la tâche sera mise en pause.");
     }
     lignes.push(c.composer
@@ -212,7 +242,8 @@
     if (!c.confirme) { return ordres.statut || ordres.mouvement_refuse ? "confirmer" : "attendre"; }
     var pause = ordres.pause ? ordres.pause.etat : null;
     if (pause === "en attente") { return "attendre"; }
-    if (ordres.action === "pause") {
+    // Robot en erreur : aucune pause n'est tentée ; le diagnostic et son geste sont affichés tels quels.
+    if (ordres.action === "pause" && !enErreur(ordres)) {
       if (!c.pauseDemandee) { return "pause"; }
       return pause === "non confirmée" ? "abandon" : "attendre";
     }
@@ -238,6 +269,8 @@
     libelleLiaison: libelleLiaison,
     quiALaMain: quiALaMain,
     clicRendreAccepte: clicRendreAccepte,
+    diagnosticErreur: diagnosticErreur,
+    alerteBord: alerteBord,
     texteDeLaMain: texteDeLaMain,
     annoncePrendreLaMain: annoncePrendreLaMain,
     suitePrendreLaMain: suitePrendreLaMain,

@@ -64,6 +64,8 @@ class Session:
         self.arret_en_cours = False
         # SEC-13 : carte de référence posée par l'appelant (page ou commande) ; absente, pas de garde-fou carte.
         self.carte_reference: Any = None
+        # SEC-13 : faux (défaut) = la carte avertit seulement ; vrai = elle raccourcit ou refuse. Posé par l'appelant.
+        self.arret_aux_bords = False
         # SEC-01b : posée par l'appelant (page ou commande), jamais par la session elle-même.
         self.attestation: Attestation | None = None
         self._differes: list[tuple[str, dict[str, Any]]] = []
