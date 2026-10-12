@@ -29,7 +29,8 @@ def liaison_factice(monkeypatch, session):
     ouvertures = []
 
     @asynccontextmanager
-    async def ouvrir(journal, cal, autorisees, *_args):
+    async def ouvrir(journal, cal, autorisees, *_args, brut=None):
+        session.brut = brut
         ouvertures.append(autorisees)
         session.autorisees = autorisees
         yield session

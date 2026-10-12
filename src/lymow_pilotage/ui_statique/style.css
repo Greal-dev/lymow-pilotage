@@ -71,6 +71,9 @@ section, .ordre {
   letter-spacing: 0.04em;
 }
 .version { margin-left: 0.6rem; opacity: 0.7; font-size: 0.8rem; }
+.etat-ordres { margin: 0 0 0.6rem; font-weight: 600; }
+.etat-ordres.refuse, .avertissement { color: var(--danger); font-weight: 700; }
+.etapes { margin: 0.3rem 0 0.6rem 1.4rem; padding: 0; font-weight: 600; }
 .bandeau-demo {
   position: sticky;
   top: 0;

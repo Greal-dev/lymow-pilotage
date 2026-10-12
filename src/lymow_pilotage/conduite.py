@@ -52,6 +52,7 @@ LIBELLES = {
     "surface_m2": "surface (m²)", "zones_interdites": "zones interdites", "passage_de_station": "passage de station",
     "complete": "carte complète", "manques": "ce qui manque", "empreinte": "empreinte à confirmer",
     "connexion_en_un_clic": "connexion en un clic",
+    "verification": "vérification par l'outil", "issue": "issue de l'étape", "reprise": "reprise proposée",
     "cote": "côté", "apercu": "aperçu", "differences": "différences", "horodatage": "horodatage",
 }
 

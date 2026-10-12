@@ -222,12 +222,33 @@ def _ordres(args: argparse.Namespace) -> list[Ordre]:
     return [Ordre(args.commande, lire("valeur"), lire("vitesse"), lire("duree"))]
 
 
+def _sans_echec(fonction: Any) -> Any:
+    """Le diagnostic ne doit jamais faire échouer un ordre ni l'écoute de la liaison."""
+
+    def protegee(*arguments: Any) -> None:
+        try:
+            fonction(*arguments)
+        except Exception:  # noqa: BLE001
+            pass
+
+    return protegee
+
+
 async def _emettre(ordres: list[Ordre], ctx: Contexte) -> tuple[dict[str, Any], int]:
     refus = conduite.refuser(ordres, ctx.cal, ctx.journal, "réel")
     if refus:
         return refus, CODE_REFUS
-    async with liaison.ouvrir_session(ctx.journal, ctx.cal, _AUTORISEES_ORDRES) as session:
-        return await conduite.emettre_ordres(session, ordres, ctx.journal)
+    # Diagnostic : les trames reçues pendant l'ordre sont gardées telles quelles (captures/ordre-…).
+    en_arret = [lambda: False]
+    ecoute = capture.pour_un_ordre(ctx.dossier, lambda: en_arret[0]())
+    brut = None if ecoute is None else _sans_echec(ecoute.recevoir)
+    try:
+        async with liaison.ouvrir_session(ctx.journal, ctx.cal, _AUTORISEES_ORDRES, brut=brut) as session:
+            en_arret[0] = lambda: session.arret_en_cours
+            return await conduite.emettre_ordres(session, ordres, ctx.journal)
+    finally:
+        if ecoute is not None:
+            _sans_echec(ecoute.vider_attente)()
 
 
 async def _commande_ordres(args: argparse.Namespace, ctx: Contexte) -> tuple[Any, int]:
