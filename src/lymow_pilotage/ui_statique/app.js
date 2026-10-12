@@ -10,6 +10,7 @@
   var Ordres = window.LymowOrdres;
   var occupe = false;
   var liaisonSuspendue = false;
+  var objectifSequence = null;
   var noteEmission = "";
   var reprise = null;
   var modeReel = false;
@@ -129,6 +130,7 @@
     $("reprendre-rappel").hidden = !gestes.reprendre;
     $("pause-etat").textContent = gestes.texte;
     $("reprise-avertissement").textContent = gestes.avertissementPosition;
+    $("reprise-conseil").textContent = Ordres.conseilDeReprise(image.ordres);
     $("reprendre-quand-meme").hidden = !gestes.reprendreQuandMeme;
     // Qualité de localisation : la précision en mètres, à chaque trame.
     $("localisation").textContent = image.etat ? image.etat.localisation_texte : "";
@@ -413,11 +415,11 @@
     $("previsualisation-avertissement").hidden = !avertissement;
   }
 
-  async function previsualiser(ordres, estTache) {
+  async function previsualiser(ordres, estTache, objectif) {
     oublierPrevisualisation("");
     var reponse;
     try {
-      reponse = await appeler("/api/previsualiser", { ordres: ordres });
+      reponse = await appeler("/api/previsualiser", objectif ? { ordres: ordres, objectif: objectif } : { ordres: ordres });
     } catch (erreur) {
       signalerErreur(erreur);
       return;
@@ -612,7 +614,7 @@
   document.querySelectorAll("[data-tache]").forEach(function (bouton) {
     bouton.addEventListener("click", function () { previsualiser([{ nom: bouton.dataset.tache }], true); });
   });
-  $("sequence-previsualiser").addEventListener("click", function () { previsualiser(sequence.slice(), false); });
+  $("sequence-previsualiser").addEventListener("click", function () { previsualiser(sequence.slice(), false, objectifSequence); });
   $("sequence-vider").addEventListener("click", function () { sequence = []; afficherSequence(); });
   $("emettre").addEventListener("click", emettre);
   // Cadre de droite : deux onglets, « Caméra » et « Carte ».
@@ -720,8 +722,10 @@
     sequence: function () { return sequence.slice(); },
     ajouterEtape: function (ordre) { sequence.push(ordre); afficherSequence(); },
     annulerDerniere: function () { sequence.pop(); afficherSequence(); },
-    viderSequence: function () { sequence = []; afficherSequence(); },
-    previsualiserSequence: function () { if (sequence.length) { previsualiser(sequence.slice(), false); } },
+    viderSequence: function () { sequence = []; objectifSequence = null; afficherSequence(); },
+    previsualiserSequence: function () { if (sequence.length) { previsualiser(sequence.slice(), false, objectifSequence); } },
+    // Trajet vers le bon signal : chargé dans LA séquence, avec son objectif (arrêt dès que la précision est fiable).
+    chargerSequence: function (ordres, objectif) { sequence = ordres.slice(); objectifSequence = objectif || null; afficherSequence(); },
     previsualiser: function (ordres) { previsualiser(ordres, false); }
   };
 })();

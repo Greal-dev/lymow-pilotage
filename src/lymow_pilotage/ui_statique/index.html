@@ -61,7 +61,7 @@
               <span id="attestation-erreur" class="avertissement" role="alert"></span>
             </p>
             <p class="ligne-etat" id="reprendre-rappel" hidden>
-              <span class="note">Robot en pause : « Reprendre » relance la tâche — les lames peuvent redémarrer.</span>
+              <span id="reprise-conseil" class="note">Robot en pause : « Reprendre » relance la tâche — les lames peuvent redémarrer.</span>
               <span id="reprise-avertissement" class="avertissement" role="alert"></span>
               <button id="reprendre-quand-meme" type="button" data-tache="reprendre-quand-meme" hidden>Reprendre quand même</button>
             </p>
@@ -131,6 +131,12 @@
               <li><span class="pastille-station"></span> station</li>
               <li><span class="pastille-robot"></span> robot (pointe = cap) <span id="carte-rtk"></span></li>
             </ul>
+            <p class="actions">
+              <button id="signal-chercher" type="button" title="Cherche, dans le relevé de précision, l'endroit de bon signal le plus proche du robot, à l'intérieur d'une zone ou d'un passage.">Bon signal le plus proche</button>
+              <label class="case" title="N'utiliser que les relevés des 30 derniers jours"><input id="signal-recent" type="checkbox"> derniers 30 jours</label>
+              <button id="signal-charger" type="button" hidden title="Charge les pas du trajet dans la séquence : vous prévisualisez puis émettez, ou vous pilotez à la main en suivant le tracé.">Charger le trajet dans la séquence</button>
+              <span id="signal-etat" class="note" role="status"></span>
+            </p>
             <p class="note"><span id="carte-note" role="status"></span> <span id="carte-position" role="status"></span></p>
           </div>
         </div>

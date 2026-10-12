@@ -28,7 +28,7 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
-from . import auth, capture, coffre, compte, conduite, demo, fleches, geometrie, liaison, reference, releve, mouvement, rappel, retouche, securite
+from . import auth, bon_signal, capture, coffre, compte, conduite, demo, fleches, geometrie, liaison, reference, releve, mouvement, rappel, retouche, securite
 from . import carte as cartes
 from .config import Calibration
 from .journal import Journal, assainir, declarer_secret, masquer
@@ -191,6 +191,7 @@ class ServeurUI:
         self.etat_liaison = NON_CONNECTE
         self.tache: asyncio.Task[None] | None = None
         self.previsualisation: tuple[str, Any, float] | None = None  # ordres, ou retouche de carte
+        self._objectif_signal = False  # la séquence prévisualisée est un trajet « vers le bon signal »
         self.resultat: dict[str, Any] | None = None
         self.fil: list[dict[str, str]] = []
         self.version = 0
@@ -246,6 +247,7 @@ class ServeurUI:
                 web.post("/api/liaison/rendre", self._liaison_rendre),
                 web.post("/api/liaison/reprendre", self._liaison_reprendre),
                 web.get("/api/releve", self._releve_lire),
+                web.get("/api/signal", self._signal_proposer),
                 web.post("/api/direct/armer", self._direct_armer),
                 web.post("/api/direct/desarmer", self._direct_desarmer),
                 web.post("/api/direct/fleche", self._direct_fleche),
@@ -622,6 +624,10 @@ class ServeurUI:
             "reprise_possible": etat.statut == socle.WORK_STATUS_PAUSE,
             # SEC-12 : dit AVANT de reprendre ou de renvoyer à la base ; rien si la position est fiable.
             "avertissement_position": securite.avertissement_position(etat.precision_m),
+            # Signal retrouvé, robot en pause : la reprise est proposée (la garde SEC-12 passe).
+            "reprise_conseillee": (
+                etat.statut == socle.WORK_STATUS_PAUSE and securite.qualite_position(etat.precision_m) == securite.FIABLE
+            ),
         }
 
     def _etat_de_la_pause(self, etat: Any, maintenant: float) -> dict[str, str] | None:
@@ -714,7 +720,10 @@ class ServeurUI:
             raise ErreurSaisie("corps JSON attendu") from None
 
     async def _previsualiser(self, requete: web.Request) -> web.StreamResponse:
-        ordres = ordres_depuis(await self._corps(requete))
+        corps = await self._corps(requete)
+        ordres = ordres_depuis(corps)
+        # Trajet vers le bon signal : la séquence s'arrêtera d'elle-même dès que la précision sera fiable.
+        self._objectif_signal = isinstance(corps, dict) and corps.get("objectif") == "signal"
         bilan, code = conduite.simuler_ordres(ordres, self.cal, self.journal, self._appareil_fictif())
         identifiant = None
         self.previsualisation = None  # une nouvelle prévisualisation annule toujours la précédente
@@ -754,13 +763,14 @@ class ServeurUI:
                 lambda: retouche.emettre(self.session, operation, self.dossier, demonstration=self.demonstration),
             )
         else:
-            self._lancer(attendue[1])
+            self._lancer(attendue[1], self._objectif_signal)
+            self._objectif_signal = False
         return web.json_response({"accepte": True}, status=202)
 
-    def _lancer(self, ordres: list[Ordre]) -> None:
+    def _lancer(self, ordres: list[Ordre], objectif_signal: bool = False) -> None:
         self._lancer_travail(
-            " ; ".join(str(ordre) for ordre in ordres),
-            lambda: conduite.emettre_ordres(self.session, ordres, self.journal),
+            " ; ".join(str(ordre) for ordre in ordres) + (" (vers le bon signal)" if objectif_signal else ""),
+            lambda: conduite.emettre_ordres(self.session, ordres, self.journal, objectif_signal),
         )
         if ordres == [Ordre("pause")]:  # la page attendra le statut « pause » frais avant de rendre les flèches
             instant = self.session.horloge()
@@ -1289,12 +1299,31 @@ class ServeurUI:
         if pose is not None and precision is not None and etat.recu_pose == instant and not self.demonstration:
             self._releve.noter(pose.est_m, pose.nord_m, precision, etat.donnees.get("rtkSatellites"), instant)
 
-    async def _releve_lire(self, _requete: web.Request) -> web.StreamResponse:
+    @staticmethod
+    def _jours(requete: web.Request) -> int | None:
+        """Option « derniers 30 jours » : `?jours=30` ; toute autre valeur vaut « tout le relevé »."""
+        return 30 if requete.query.get("jours") == "30" else None
+
+    async def _releve_lire(self, requete: web.Request) -> web.StreamResponse:
         points = [
             [p["est_m"], p["nord_m"], p["precision_m"], securite.qualite_position(float(p["precision_m"]))]
-            for p in releve.lire(self.dossier)
+            for p in releve.lire(self.dossier, jours=self._jours(requete))
         ]
         return web.json_response({"points": points})
+
+    async def _signal_proposer(self, requete: web.Request) -> web.StreamResponse:
+        """Bon signal le plus proche et trajet proposé (mode assisté : rien n'est émis ni chargé ici)."""
+        carte, _meta = self._carte_affichee()
+        if carte is None:
+            return web.json_response({"cible": None, "trajet": None, "ordres": None, "motif": "aucune carte : actualisez d'abord la carte"})
+        etat = self.session.etat if self.session is not None else None
+        pose = etat.pose if etat is not None else None
+        proposition = bon_signal.proposer(
+            carte, releve.lire(self.dossier, jours=self._jours(requete)),
+            None if pose is None else (pose.est_m, pose.nord_m), None if pose is None else pose.cap_deg,
+            None if etat is None else etat.precision_m, self.cal.facteur_angle,
+        )
+        return web.json_response(proposition)
 
     async def _rouvrir_liaison(self) -> None:
         # SEC-01b : nouvelle liaison, état du robot à relire — l'attestation ne lui survit pas.

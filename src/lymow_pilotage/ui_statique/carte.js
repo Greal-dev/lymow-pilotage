@@ -21,6 +21,7 @@
   var apercu = null;
   var vue = { x: -10, y: -10, l: 20, h: 15 };
   var glisse = null;
+  var signal = null; // bon signal le plus proche : cible, trajet proposé
   var releve = []; // précision relevée : [est, nord, précision, qualité]
 
   function $(id) { return document.getElementById(id); }
@@ -138,6 +139,14 @@
         var rayon = SOMMET_PX * parPixel * (borne ? 1.6 : 1);
         dessin.appendChild(titre(svg("circle", "carte-sommet" + (borne ? " borne" : ""), { cx: p[0], cy: -p[1], r: rayon }), "sommet " + indice));
       });
+    }
+    if (signal && signal.trajet) {
+      dessin.appendChild(titre(svg("polyline", "carte-trajet", { points: points(signal.trajet) }), "trajet proposé vers le bon signal"));
+    }
+    if (signal && signal.cible) {
+      dessin.appendChild(titre(svg("circle", "carte-cible", {
+        cx: signal.cible.est_m, cy: -signal.cible.nord_m, r: 7 * parPixel
+      }), "bon signal le plus proche : " + signal.cible.distance_m + " m, cap " + signal.cible.cap_deg + "°"));
     }
     if (robot && robot.rayon) {  // cercle d'incertitude, au rayon annoncé par le robot
       dessin.appendChild(titre(svg("circle", "carte-incertitude", {
@@ -366,6 +375,25 @@
       .catch(function () { return undefined; });
   }
   $("carte-precision").addEventListener("change", lireReleve);
+  // Bon signal le plus proche : proposition seulement (mode assisté) ; rien n'est émis d'ici.
+  $("signal-chercher").addEventListener("click", function () {
+    $("signal-etat").textContent = "recherche…";
+    fetch("/api/signal" + ($("signal-recent").checked ? "?jours=30" : ""), { credentials: "same-origin", cache: "no-store" })
+      .then(function (reponse) { return reponse.json(); })
+      .then(function (proposition) {
+        signal = proposition;
+        $("signal-etat").textContent = window.LymowOrdres.texteSignal(proposition) || "aucune proposition";
+        $("signal-charger").hidden = !(proposition.ordres && proposition.ordres.length);
+        dessiner();
+      })
+      .catch(function () { $("signal-etat").textContent = "proposition indisponible"; });
+  });
+  $("signal-charger").addEventListener("click", function () {
+    if (!signal || !signal.ordres) { return; }
+    page.chargerSequence(signal.ordres, "signal");
+    $("signal-etat").textContent = "Trajet chargé dans la séquence (" + signal.ordres.length
+      + " pas) : cochez « Composer une séquence », prévisualisez, puis émettez — ou suivez le tracé à la main.";
+  });
   window.setInterval(function () { if ($("carte-precision").checked) { lireReleve(); } }, 15000);
   $("carte-zone").addEventListener("change", zoneChangee);
   ["carte-de", "carte-a"].forEach(function (id) { $(id).addEventListener("input", function () { apercu = null; dessiner(); }); });

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -48,8 +48,9 @@ class Releve:
         return True
 
 
-def lire(dossier: Path, maximum: int = POINTS_MAX) -> list[dict[str, Any]]:
-    """Les derniers points relevés ; une ligne illisible est ignorée."""
+def lire(dossier: Path, maximum: int = POINTS_MAX, jours: int | None = None) -> list[dict[str, Any]]:
+    """Les derniers points relevés ; une ligne illisible est ignorée. `jours` écarte les relevés plus anciens."""
+    limite = None if jours is None else datetime.now() - timedelta(days=jours)
     try:
         lignes = (dossier / FICHIER).read_text(encoding="utf-8").splitlines()[-maximum:]
     except OSError:
@@ -61,5 +62,11 @@ def lire(dossier: Path, maximum: int = POINTS_MAX) -> list[dict[str, Any]]:
         except ValueError:
             continue
         if isinstance(point, dict) and all(isinstance(point.get(c), (int, float)) for c in ("est_m", "nord_m", "precision_m")):
+            if limite is not None:
+                try:
+                    if datetime.fromisoformat(str(point.get("horodatage"))) < limite:
+                        continue
+                except ValueError:
+                    continue
             points.append(point)
     return points

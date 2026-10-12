@@ -52,7 +52,7 @@ LIBELLES = {
     "surface_m2": "surface (m²)", "zones_interdites": "zones interdites", "passage_de_station": "passage de station",
     "complete": "carte complète", "manques": "ce qui manque", "empreinte": "empreinte à confirmer",
     "connexion_en_un_clic": "connexion en un clic",
-    "precision_m": "précision de position (m)", "precision_avant_m": "précision avant l'ordre (m)",
+    "objectif_atteint": "objectif atteint", "precision_m": "précision de position (m)", "precision_avant_m": "précision avant l'ordre (m)",
     "localisation_texte": "localisation", "rapport_mesure_sur_commande": "rapport mesuré / commandé",
     "facteur_distance_suggere": "facteur_distance suggéré", "facteur_angle_suggere": "facteur_angle suggéré",
     "verification": "vérification par l'outil", "issue": "issue de l'étape", "reprise": "reprise proposée",
@@ -83,11 +83,13 @@ def simuler_ordres(
     return {"mode": "simulation", "etapes": etapes, "interrompue": False}, 0
 
 
-async def emettre_ordres(session: Session, ordres: list[Ordre], journal: Journal) -> tuple[dict[str, Any], int]:
+async def emettre_ordres(
+    session: Session, ordres: list[Ordre], journal: Journal, objectif_signal: bool = False
+) -> tuple[dict[str, Any], int]:
     """Émission réelle sur une session ouverte ; l'appelant a déjà passé `refuser`."""
     journal.ecrire("session-reelle", strict=True, ordres=[str(ordre) for ordre in ordres])
     try:
-        bilan = await mouvement.executer_sequence(session, ordres)
+        bilan = await mouvement.executer_sequence(session, ordres, objectif_signal)
     except BaseException:
         journal.ecrire("ordre-interrompu", ordres=[str(ordre) for ordre in ordres])
         raise

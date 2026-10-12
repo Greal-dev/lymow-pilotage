@@ -787,7 +787,7 @@ def _reprise(ordres: list[Ordre], rang: int) -> dict[str, Any]:
     }
 
 
-async def executer_sequence(session: Session, ordres: list[Ordre]) -> dict[str, Any]:
+async def executer_sequence(session: Session, ordres: list[Ordre], objectif_signal: bool = False) -> dict[str, Any]:
     """SEC-07 (révisé le 2026-10-12, décision du pilote au vu du réel) : mêmes règles par étape.
 
     La séquence s'arrête si (a) un ordre est refusé ou échoue, (b) l'arrêt n'est pas confirmé,
@@ -818,6 +818,14 @@ async def executer_sequence(session: Session, ordres: list[Ordre]) -> dict[str, 
         bilan["etapes"].append(rapport)
         if not ordres[rang + 1 :]:
             break
+        if objectif_signal and securite.qualite_position(session.etat.precision_m) == securite.FIABLE:
+            # Trajet « vers le bon signal » : la précision est redevenue fiable — arrêt NORMAL, annoncé.
+            reste = [str(o) for o in ordres[rang + 1 :]]
+            return bilan | {
+                "objectif_atteint": True, "non_executees": reste,
+                "motif": f"précision retrouvée ({securite.texte_precision(session.etat.precision_m)}) : objectif atteint, "
+                         f"séquence arrêtée — {len(reste)} étape(s) non exécutée(s)",
+            }
         motif = None
         if rapport.get("verification") in (ANOMALIE, AUCUN_ETAT):
             motif = rapport["constat"]

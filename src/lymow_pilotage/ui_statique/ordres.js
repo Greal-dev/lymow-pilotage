@@ -129,8 +129,31 @@
     return null;
   }
 
+  /* Bon signal le plus proche : ce que la page en dit, en une ligne. */
+  function texteSignal(proposition) {
+    if (!proposition) { return ""; }
+    var texte = "";
+    if (proposition.cible) {
+      texte = "Bon signal à " + proposition.cible.distance_m + " m, cap " + proposition.cible.cap_deg + "° ("
+        + proposition.cible.points + " relevé" + (proposition.cible.points > 1 ? "s" : "") + ")";
+      if (proposition.ordres) { texte += " — trajet de " + proposition.ordres.length + " pas"; }
+    }
+    if (proposition.motif) { texte += (texte ? " — " : "") + proposition.motif; }
+    if (proposition.mention) { texte += " — " + proposition.mention; }
+    return texte;
+  }
+
+  /* Robot en pause : la phrase qui accompagne « Reprendre ». Signal retrouvé : la reprise est conseillée. */
+  function conseilDeReprise(ordres) {
+    return ordres && ordres.reprise_conseillee
+      ? "Signal retrouvé, position fiable : vous pouvez « Reprendre » la tâche — les lames redémarrent."
+      : "Robot en pause : « Reprendre » relance la tâche — les lames peuvent redémarrer.";
+  }
+
   var api = {
     libelleLiaison: libelleLiaison,
+    texteSignal: texteSignal,
+    conseilDeReprise: conseilDeReprise,
     positionAffichee: positionAffichee,
     messageStatutDeclare: messageStatutDeclare,
     bandeauAttestation: bandeauAttestation,

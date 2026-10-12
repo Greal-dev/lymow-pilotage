@@ -290,6 +290,39 @@ réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même
   à vue ou vidéo ouverte. Non vérifié en réel : ce panneau n'a été testé que
   hors ligne.
 
+## Retour vers le bon signal
+
+But : quand le robot a perdu sa position précise, le ramener là où le signal
+était bon, puis reprendre la tonte. **Mode assisté seulement : rien ne
+s'exécute tout seul.**
+
+- **Relevé.** Tant que l'interface est ouverte et reliée au robot — tonte
+  normale comprise, en écoute seule —, la précision annoncée est relevée par
+  position, avec sa date (`releve-precision.jsonl`, hors dépôt). La carte
+  l'affiche (case « précision relevée ») ; « derniers 30 jours » écarte les
+  relevés anciens.
+- **Bon signal le plus proche** (onglet « Carte »). Les points relevés à
+  0,10 m ou mieux sont regroupés ; la cible proposée est le groupe le plus
+  proche du robot situé dans une zone de tonte (à 0,5 m au moins de son
+  contour) ou sur un passage, hors zones interdites. La carte montre la
+  cible, la distance et le cap à prendre.
+- **Trajet proposé.** Ligne droite si elle tient dans les zones et les
+  passages ; sinon un contournement simple par les sommets des contours ;
+  sinon l'outil le dit et ne propose que le cap. Le trajet est découpé en pas
+  admis par SEC-02 (avances de 2 m au plus, rotations sous l'angle maximal
+  demandable). « Charger le trajet dans la séquence » le place dans la
+  séquence : vous prévisualisez et émettez comme d'habitude, ou vous pilotez
+  à la main en suivant le tracé. Pendant son exécution, la séquence s'arrête
+  d'elle-même dès que la précision redevient fiable (« objectif atteint »).
+- **Ensuite.** Position fiable, robot en pause : la page propose « Reprendre »
+  (la garde SEC-12 passe ; les lames redémarrent).
+- **Limites.** Quand le signal est perdu, la position du robot est
+  incertaine : son point porte un cercle au rayon annoncé et le trajet est
+  dit « indicatif, surveillez la caméra ». Les obstacles non cartographiés
+  sont ignorés. Le calcul est borné à 3 s : sur une grande carte, un détour
+  long à travers plusieurs zones n'est souvent pas trouvé, et seul le cap est
+  proposé. Jamais essayé en réel.
+
 ## Calibration (robot à vue, zone dégagée, main sur le bouton STOP)
 
 1. **`lymow essai-arret-auto --reel` en premier.** But : savoir si le robot
