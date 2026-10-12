@@ -44,7 +44,8 @@ def test_bouton_emettre_ne_reste_pas_grise_apres_un_ordre_sans_position(tmp_path
             etape = serveur.resultat["etapes"][0]
             assert etape["verification"] == "non vérifiable" and etape["constat"] == mouvement.POSITION_NON_FOURNIE
             assert serveur.resultat["code_sortie"] == 0 and serveur.resultat["interrompue"] is False
-            assert serveur.instantane()["ordres"] == {"statut": "prêt, en attente d'ordre", "mouvement_refuse": None}
+            ordres = serveur.instantane()["ordres"]
+            assert (ordres["statut"], ordres["mouvement_refuse"], ordres["action"]) == ("prêt, en attente d'ordre", None, None)
             # La page est de nouveau utilisable : un second ordre se prévisualise et s'émet.
             statut, _corps = await emettre(http, serveur, [RECULER])
             assert statut == 202
@@ -54,9 +55,9 @@ def test_bouton_emettre_ne_reste_pas_grise_apres_un_ordre_sans_position(tmp_path
             lien.robot = dict(EN_RETOUR)
             await poster(http, serveur, "/api/actualiser")
             await attendre(lambda: serveur.instantane()["ordres"]["mouvement_refuse"] is not None)
-            assert serveur.instantane()["ordres"] == {
-                "statut": "retour à la base", "mouvement_refuse": "mouvement refusé tant que le robot est en : retour à la base",
-            }
+            ordres = serveur.instantane()["ordres"]
+            assert ordres["statut"] == "retour à la base" and ordres["action"] == "pause"
+            assert ordres["mouvement_refuse"] == "Le robot rentre à sa base : mettez le retour en pause pour prendre la main."
             # Un ordre refusé rend la main lui aussi, avec son motif et la reprise proposée.
             statut, _corps = await emettre(http, serveur, [RECULER, RECULER])
             assert statut == 202

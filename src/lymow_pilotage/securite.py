@@ -268,16 +268,44 @@ def consigne_essai(vitesse: float | None, observation: float | None) -> Consigne
 
 
 
+# Statuts où la mise en pause rend la main : tonte (2, 8, 9), retour à la base (4), dégagement (14).
+# Le retour déjà en pause (10) n'en fait pas partie : une seconde pause n'y changerait rien.
+STATUTS_PAUSE_UTILE = socle.WORK_STATUS_MOWING_GROUP | {socle.WORK_STATUS_DOCKING, socle.WORK_STATUS_ESCAPING}
+
+
+def explication_statut(statut: int | None) -> tuple[str, str | None]:
+    """Pourquoi un mouvement est refusé dans ce statut, et que faire — en clair, sans numéro.
+
+    Constat du 2026-10-12 : « statut de travail 2 hors de la liste » ne disait ni l'un ni l'autre.
+    La règle (liste blanche de SEC-01) ne change pas : seul son énoncé est humain."""
+    if statut in socle.WORK_STATUS_MOWING_GROUP:
+        return "le robot tond", "mettez la tâche en pause pour prendre la main"
+    connus = {
+        socle.WORK_STATUS_DOCKING: ("le robot rentre à sa base", "mettez le retour en pause pour prendre la main"),
+        socle.WORK_STATUS_ESCAPING: ("le robot se dégage d'un obstacle", "mettez la tâche en pause pour prendre la main"),
+        socle.WORK_STATUS_PAUSE_DOCKING: (
+            "le retour à la base est en pause",
+            "aucun mouvement n'est permis dans ce statut ; seul « Annuler la tâche » peut rendre la main",
+        ),
+        socle.WORK_STATUS_UPDATING: ("le robot se met à jour", "attendez la fin de la mise à jour"),
+        socle.WORK_STATUS_EMERGENCY_STOP: ("arrêt d'urgence enclenché", "levez-le sur le robot"),
+        socle.WORK_STATUS_OFFLINE: ("robot inconnu ou hors ligne", "attendez son retour en ligne"),
+        None: ("aucun statut reçu du robot", "cliquez sur « Actualiser »"),
+    }
+    return connus.get(statut, (f"statut {statut} non reconnu comme « lames à l'arrêt »", None))
+
+
 def verifier_presence_et_statut(statut: int | None, en_ligne: bool | None) -> None:
     """SEC-01 : présence explicitement confirmée et statut dans la liste blanche."""
     if en_ligne is False:
-        raise RefusSecurite("robot hors ligne : mouvement refusé (SEC-01)")
+        raise RefusSecurite("robot hors ligne : attendez son retour en ligne — mouvement refusé (SEC-01)")
     if en_ligne is not True:
-        raise RefusSecurite("présence en ligne du robot non confirmée : mouvement refusé (SEC-01)")
-    if statut not in STATUTS_LAMES_ARRET:
         raise RefusSecurite(
-            f"statut de travail {statut} hors de la liste « lames à l'arrêt » : mouvement refusé (SEC-01)"
+            "présence en ligne du robot non confirmée : cliquez sur « Actualiser » — mouvement refusé (SEC-01)"
         )
+    if statut not in STATUTS_LAMES_ARRET:
+        constat, conseil = explication_statut(statut)
+        raise RefusSecurite(f"{constat} : {conseil + ' — ' if conseil else ''}mouvement refusé (SEC-01)")
 
 
 def verifier_repos_pour_carte(statut: int | None, age_s: float | None, en_ligne: bool | None) -> None:
@@ -297,9 +325,12 @@ def verifier_repos_pour_carte(statut: int | None, age_s: float | None, en_ligne:
 def verifier_lames_arret(statut: int | None, age_s: float | None, en_ligne: bool | None) -> None:
     """SEC-01 : refuse tout mouvement sans preuve fraîche de lames à l'arrêt."""
     if statut is None or age_s is None:
-        raise RefusSecurite("aucun état reçu du robot depuis la sollicitation : mouvement refusé (SEC-01)")
+        raise RefusSecurite(
+            "aucun état reçu du robot depuis la sollicitation : cliquez sur « Actualiser » — mouvement refusé (SEC-01)"
+        )
     if not 0 <= age_s <= AGE_MAX_ETAT_S:
         raise RefusSecurite(
-            f"état périmé ({age_s:.0f} s, maximum {AGE_MAX_ETAT_S:.0f} s) : mouvement refusé (SEC-01)"
+            f"état périmé ({age_s:.0f} s, maximum {AGE_MAX_ETAT_S:.0f} s) : cliquez sur « Actualiser » — "
+            "mouvement refusé (SEC-01)"
         )
     verifier_presence_et_statut(statut, en_ligne)

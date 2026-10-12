@@ -43,6 +43,7 @@ Python 3.12) ; il se régénère avec
 | `lymow plateau-haut` | Raccourci : hauteur maximale (100 mm, réglable de 80 à 100). |
 | `lymow stop` | Consigne nulle émise 3 fois, sans précondition, puis mise en pause de la tâche (userCtrl 3 ; 21 si le dernier état connu indique un retour à la base). |
 | `lymow sequence "plateau 90; tourner 45 --vitesse 0.2; reculer --duree 2 --vitesse 0.1"` | Enchaîne ; rien ne part si une étape est refusable ; s'arrête au premier refus, échec ou constat non confirmé. Étapes : `tourner`, `avancer`, `reculer`, `plateau`, `plateau-haut`, `stop`. `--reel` et `essai-arret-auto` y sont interdits. |
+| `lymow pause` | Met la tâche en pause (3), ou le retour à la base (21) : la pause de `stop`, sans les consignes nulles. |
 | `lymow reprendre` / `base` / `annuler` | Reprise de tâche (4), retour base tâche conservée (33), annulation sur place (28). |
 | `lymow ui [--reel \| --demo] [--port N]` | Interface web locale avec retour vidéo (voir « Interface web locale ») ; `--demo` : robot et jardin fictifs, sans compte ni réseau. |
 | `lymow carte` | Carte du robot : zones, zones interdites, passages, station (lecture seule ; contours complets avec `--json`). Une grande carte arrive coupée à 81 920 octets (constat du 2026-10-12) : les tranches suivantes sont demandées une à une (hypothèse à confirmer en réel), et une carte restée tronquée est refusée avec son motif. |
@@ -82,6 +83,16 @@ s'appliquent pas.
 `127.0.0.1` uniquement — aucune option ne change cet hôte —, ouvre le
 navigateur et s'arrête sur Ctrl+C. `lancer-lymow.cmd` (double-clic) lance
 `lymow ui` en simulation.
+
+La page tient en un écran de pilotage : l'en-tête (mode, état du robot en une
+ligne, STOP toujours visible), puis un bloc unique — la vidéo, sa barre de
+commande (vidéo, « Flèches : activer », pas des flèches, « Direct : armer »,
+« Plateau haut », « Pause ») et la séquence en cours sur une ligne avec
+« Prévisualiser » et « Émettre ». Tout le reste est rangé dans des sections
+repliées par défaut, dont l'état ouvert ou fermé est mémorisé par le
+navigateur (rien d'autre n'y est stocké) : « Carte et ajustement de zone »,
+« Ordres détaillés », « Calibration », « Compte » (ouverte d'elle-même si
+aucun compte n'est connecté), « Journal et résultat détaillé ».
 
 - Version. Au lancement, l'interface calcule une empreinte de son code et
   charge sa page en mémoire : la page servie reste cohérente avec le serveur,
@@ -215,7 +226,21 @@ premier essai, ouvrir la console du navigateur (F12) et observer :
 ## Pilotage par flèches
 
 But : écrire vite une suite d'étapes — se dégager, rejoindre une zone où le
-réseau revient — et non piloter à vue. Le panneau est à côté de la vidéo.
+réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même.
+
+- **Une seule bascule : « Flèches : activer »** (ou un clic dans la vidéo).
+  Elle active ensemble les quatre boutons affichés sur la vidéo et le
+  clavier ; un liseré orange autour de la vidéo le montre. Cliquer ailleurs
+  ou Échap les désactive — Échap reste STOP dès qu'un mouvement est en cours
+  ou que le pilotage direct est armé.
+- **Robot en tonte ou en retour : un mouvement est refusé** (SEC-01), et la
+  page le dit avant même d'essayer : « Le robot tond : mettez la tâche en
+  pause pour prendre la main », avec le bouton « Mettre en pause » à côté (une
+  confirmation, puis la pause seule : `userCtrl` 3, ou 21 pendant un retour à
+  la base). Les flèches attendent ensuite le statut « pause » reçu du robot ;
+  rien ne part tout seul après la pause. « Reprendre la tâche » reste proposé
+  (les lames peuvent redémarrer). Limite connue : un retour à la base mis en
+  pause donne un statut où aucun mouvement n'est permis.
 
 - Quatre flèches (boutons, ou clavier quand le panneau a le focus) : ↑ avancer,
   ↓ reculer, ← tourner à gauche, → tourner à droite. Pas choisis dans deux

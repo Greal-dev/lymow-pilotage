@@ -19,6 +19,8 @@
   var dernierResultat = "";
   var faitesEnFile = 0; // étapes de la séquence déjà émises (marquées dans la miniature)
   var cap = null;
+  var ordresDuRobot = null;
+  var actives = false; // LA bascule : boutons sur la vidéo et clavier, ensemble
 
   function $(id) { return document.getElementById(id); }
 
@@ -62,6 +64,9 @@
     var minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);
     var marge = Math.max(maxX - minX, maxY - minY, 1) * 0.15 + 0.3;
     miniature.setAttribute("viewBox", [minX - marge, minY - marge, maxX - minX + 2 * marge, maxY - minY + 2 * marge].join(" "));
+    afficherPastilles(
+      direct.arme ? faites : aVenir.slice(0, dejaFaites), direct.arme ? aVenir : aVenir.slice(dejaFaites)
+    );
     for (var i = 1; i < points.length; i += 1) {
       miniature.appendChild(trait(i <= dejaFaites ? "fait" : "prevu", points[i - 1], points[i]));
     }
@@ -77,8 +82,30 @@
     pointe.setAttribute("transform", "translate(" + fin.x + " " + (-fin.y) + ") rotate(" + (-fin.cap) + ")");
     miniature.appendChild(pointe);
     var enTete = cap === null ? "Départ : repère local (cap du robot inconnu, tracé vers le haut). " : "Départ : cap courant du robot. ";
-    $("pave-total").textContent = enTete + Fleches.texteTotal(Fleches.trace(aVenir, depart, vitesses), aVenir.length)
-      + (direct.arme ? " en attente" : " dans la séquence");
+    $("pave-total").textContent = Fleches.texteTotal(Fleches.trace(aVenir, depart, vitesses), aVenir.length)
+      + (direct.arme ? " en attente" : "");
+    $("pave-total").title = enTete;
+  }
+
+  /* Bascule unique : un seul état, visible (liseré autour de la vidéo, libellé du bouton). */
+  function regler(nouveau) {
+    actives = nouveau;
+    panneau.classList.toggle("actif", actives);
+    panneau.querySelectorAll("[data-fleche]").forEach(function (bouton) { bouton.disabled = !actives; });
+    $("fleches-bascule").textContent = Fleches.libelleBascule(actives);
+    $("fleches-bascule").setAttribute("aria-pressed", String(actives));
+    $("pave-focus").textContent = actives
+      ? "Flèches actives : ↑ ↓ ← → ajoutent une étape, Entrée prévisualise, Retour arrière annule. Échap ou clic ailleurs : désactiver."
+      : "Flèches inactives : cliquez dans la vidéo ou sur « Flèches : activer ».";
+    if (actives && !panneau.contains(document.activeElement)) { panneau.focus(); }
+  }
+
+  function afficherPastilles(faites, aVenir) {
+    var liste = $("pave-pastilles");
+    page.vider(liste);
+    faites.forEach(function (ordre) { liste.appendChild(page.element("li", Fleches.symbole(ordre), "faite")); });
+    aVenir.forEach(function (ordre) { liste.appendChild(page.element("li", Fleches.symbole(ordre))); });
+    if (!faites.length && !aVenir.length) { liste.appendChild(page.element("li", "séquence vide", "vide")); }
   }
 
   function afficherRetours() {
@@ -90,7 +117,7 @@
     } else if (resultat && resultat.etapes) {
       lignes = resultat.etapes.map(function (etape) { return Fleches.ligneRetour(etape.ordre, etape); });
     }
-    lignes.slice(-6).forEach(function (ligne) { liste.appendChild(page.element("li", ligne)); });
+    lignes.slice(-2).forEach(function (ligne) { liste.appendChild(page.element("li", ligne)); });
     $("pave-file").textContent = direct.arme
       ? "File d'attente (" + direct.file.length + "/" + config.file_max + ") : "
         + (direct.file.map(Fleches.symbole).join(", ") || "vide")
@@ -102,7 +129,7 @@
     $("direct-interrupteur").checked = direct.arme;
     $("direct-etat").textContent = direct.arme
       ? "ARMÉ : chaque flèche émet tout de suite. Désarmement automatique dans " + direct.reste_s + " s sans action."
-      : "désarmé : les flèches ajoutent des étapes à la séquence.";
+      : "";
     // Hors des quatre flèches, rien ne part en direct : ces boutons le disent quand ils sont inactifs.
     $("pave-plateau").disabled = direct.arme;
     $("pave-previsualiser").disabled = direct.arme || page.sequence().length === 0;
@@ -110,7 +137,7 @@
     $("pave-vider").disabled = direct.arme || page.sequence().length === 0;
     $("pave-boutons-note").textContent = direct.arme
       ? "Pilotage direct armé : seules les quatre flèches agissent (ni plateau, ni séquence)."
-      : (page.sequence().length === 0 ? "Séquence vide : ajoutez une étape avec une flèche." : "");
+      : "";
   }
 
   function rafraichir() {
@@ -133,6 +160,9 @@
   }
 
   function fleche(direction) {
+    if (!actives) { return; }
+    var blocage = window.LymowOrdres.blocageDesFleches(ordresDuRobot);
+    if (blocage) { signaler(blocage); return; }
     if (direct.arme && jeton) { flecheDirecte(direction); return; }
     var etape = etapeDe(direction);
     if (!etape) { return; }
@@ -153,7 +183,7 @@
     if (!accord) { $("direct-interrupteur").checked = false; return; }
     try {
       jeton = (await page.appeler("/api/direct/armer", { confirmer: true })).jeton;
-      panneau.focus();
+      regler(Fleches.basculer(actives, "armement"));
     } catch (erreur) {
       jeton = null;
       $("direct-interrupteur").checked = false;
@@ -170,16 +200,21 @@
   $("pave-annuler").addEventListener("click", page.annulerDerniere);
   $("pave-vider").addEventListener("click", page.viderSequence);
   $("pave-previsualiser").addEventListener("click", page.previsualiserSequence);
-  $("pave-clavier").addEventListener("click", function () { panneau.focus(); });
-  $("direct-interrupteur").addEventListener("change", basculerDirect);
-  ["pave-distance", "pave-angle"].forEach(function (id) { $(id).addEventListener("change", function () { panneau.focus(); }); });
-
-  // Le clavier n'agit que lorsque le panneau a le focus ; un clic dans le panneau le lui donne.
-  panneau.addEventListener("click", function (evenement) {
-    if (!/^(INPUT|SELECT|BUTTON|LABEL)$/.test(evenement.target.tagName)) { panneau.focus(); }
+  $("fleches-bascule").addEventListener("click", function () { regler(Fleches.basculer(actives, "bouton")); });
+  panneau.querySelector(".cadre-video").addEventListener("click", function () {
+    regler(Fleches.basculer(actives, "clic-video"));
+    panneau.focus();
   });
+  $("direct-interrupteur").addEventListener("change", basculerDirect);
+  ["pave-distance", "pave-angle"].forEach(function (id) {
+    $(id).addEventListener("change", function () { if (actives) { panneau.focus(); } });
+  });
+
+  // Le clavier n'agit que flèches activées ET focus dans le panneau ; cliquer ailleurs les désactive.
   panneau.addEventListener("keydown", function (evenement) {
-    var touche = { key: evenement.key, repeat: evenement.repeat, balise: evenement.target.tagName, dansLePave: true };
+    var touche = {
+      key: evenement.key, repeat: evenement.repeat, balise: evenement.target.tagName, dansLePave: true, actives: actives
+    };
     if (Fleches.retientLaTouche(touche)) { evenement.preventDefault(); } // la page ne défile pas
     var action = Fleches.actionClavier(touche);
     if (!action) { return; }
@@ -188,14 +223,11 @@
     if (action.type === "annuler" && !direct.arme) { page.annulerDerniere(); }
     if (action.type === "previsualiser" && !direct.arme) { page.previsualiserSequence(); }
   });
-  function focusChange() {
-    var actif = panneau.contains(document.activeElement);
-    $("pave-focus").textContent = actif
-      ? "Clavier ACTIF : ↑ ↓ ← →, Entrée = prévisualiser, Retour arrière = annuler la dernière."
-      : "Clavier inactif : cliquez dans ce panneau ou sur « Activer le clavier ».";
-  }
-  panneau.addEventListener("focusin", focusChange);
-  panneau.addEventListener("focusout", function () { window.setTimeout(focusChange, 0); });
+  panneau.addEventListener("focusout", function () {
+    window.setTimeout(function () {
+      if (actives && !panneau.contains(document.activeElement)) { regler(Fleches.basculer(actives, "sortie")); }
+    }, 0);
+  });
   window.addEventListener("pagehide", function () {
     if (direct.arme && navigator.sendBeacon) { navigator.sendBeacon("/api/direct/desarmer"); }
   });
@@ -212,6 +244,7 @@
     },
     appliquer: function (image) {
       direct = image.direct || direct;
+      ordresDuRobot = image.ordres || null;
       if (!direct.arme) { jeton = null; } // expiré, STOP, refus ou échec : le serveur a désarmé
       cap = image.etat && typeof image.etat.cap_deg === "number" ? image.etat.cap_deg : null;
       var texte = JSON.stringify(image.resultat);
@@ -226,10 +259,18 @@
       }
       rafraichir();
     },
+    /* Échap, vu par la page : vrai si la touche n'a fait que désactiver les flèches (sinon : STOP). */
+    echap: function (occupe) {
+      var effet = Fleches.effetEchap({ occupe: occupe, directArme: direct.arme, flechesActives: actives });
+      if (effet !== "desactiver") { return false; }
+      regler(Fleches.basculer(actives, "echap"));
+      if (document.activeElement && panneau.contains(document.activeElement)) { document.activeElement.blur(); }
+      return true;
+    },
     sequenceChangee: function () {
       faitesEnFile = 0;
       rafraichir();
     }
   };
-  focusChange();
+  regler(false);
 })();

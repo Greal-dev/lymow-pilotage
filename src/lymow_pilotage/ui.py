@@ -36,6 +36,7 @@ from .mouvement import ErreurSaisie, Ordre
 from .securite import RefusSecurite
 from .protocole import Categorie
 from .session import Session
+from .vendor.ha_lymow import const as socle
 
 HOTE = "127.0.0.1"  # jamais 0.0.0.0 : aucune option ne change cette valeur
 PORT_DEFAUT = 8377
@@ -53,6 +54,7 @@ FICHIERS = {
     "ordres.js": "text/javascript",
     "fleches.js": "text/javascript",
     "pave.js": "text/javascript",
+    "volets.js": "text/javascript",
 }
 NOMS_ORDRES = (*mouvement.ETAPES_SEQUENCE, mouvement.ESSAI, *mouvement.TACHES)
 NON_CONNECTE = "non connecté — utilisez le panneau « Compte » de cette page"
@@ -64,6 +66,8 @@ REMPLACEE = "ancienne version remplacée"
 DELAI_LIBERATION_S = 10.0
 # Après un ordre réel, les trames reçues sont encore enregistrées ce temps-là (diagnostic).
 SUITE_CAPTURE_S = 20.0
+# Après « Mettre en pause » : temps laissé au robot pour annoncer son statut « pause ».
+DELAI_PAUSE_S = 15.0
 # Veille de la liaison : une coupure est vue et réparée sans attendre un clic.
 PERIODE_VEILLE_S = 2.0
 LIAISON_COUPEE = (
@@ -196,6 +200,8 @@ class ServeurUI:
         self._veille: asyncio.Task[None] | None = None
         # Pilotage direct par flèches : désarmé par défaut, armé explicitement, 60 s sans action au plus.
         self.direct = fleches.Armement(lambda: self.horloge())
+        # Pause demandée : (instant de la demande, échéance, statut attendu) ; jamais suivie d'un mouvement automatique.
+        self._pause: tuple[float, float, int] | None = None
         self._direct_en_cours = False
         self._ecoute: capture.Enregistreur | None = None  # trames brutes pendant un ordre réel
         self._fin_ecoute: asyncio.TimerHandle | None = None
@@ -225,6 +231,7 @@ class ServeurUI:
                 web.post("/api/previsualiser", self._previsualiser),
                 web.post("/api/emettre", self._emettre),
                 web.post("/api/stop", self._stop),
+                web.post("/api/pause", self._pause_raccourci),
                 web.post("/api/direct/armer", self._direct_armer),
                 web.post("/api/direct/desarmer", self._direct_desarmer),
                 web.post("/api/direct/fleche", self._direct_fleche),
@@ -573,12 +580,36 @@ class ServeurUI:
             return {"statut": None, "mouvement_refuse": f"robot injoignable ({self.etat_liaison})"}
         etat = session.etat
         libelle = etat.resume(session.horloge())["statut_libelle"]
-        refus = None
+        refus, action = None, None
         if etat.en_ligne is False:
-            refus = "mouvement refusé : le robot est hors ligne"
+            refus = "Le robot est hors ligne : attendez son retour en ligne."
         elif etat.statut is not None and etat.statut not in securite.STATUTS_LAMES_ARRET:
-            refus = f"mouvement refusé tant que le robot est en : {libelle}"
-        return {"statut": libelle, "mouvement_refuse": refus}
+            constat, conseil = securite.explication_statut(etat.statut)
+            refus = constat[0].upper() + constat[1:] + (f" : {conseil}." if conseil else " : mouvement refusé.")
+            action = "pause" if etat.statut in securite.STATUTS_PAUSE_UTILE else None
+        pause = self._etat_de_la_pause(etat, session.horloge())
+        if pause and pause["etat"] == "en attente":
+            refus, action = "Pause demandée : attente de la confirmation du robot.", None
+        return {
+            "statut": libelle, "mouvement_refuse": refus, "action": action, "pause": pause,
+            # Après un dégagement, la reprise reste proposée clairement (les lames peuvent redémarrer).
+            "reprise_possible": etat.statut == socle.WORK_STATUS_PAUSE,
+        }
+
+    def _etat_de_la_pause(self, etat: Any, maintenant: float) -> dict[str, str] | None:
+        """Suite d'une pause demandée : en attente, confirmée par un statut FRAIS, ou non confirmée."""
+        if self._pause is None:
+            return None
+        instant, echeance, attendu = self._pause
+        frais = etat.recu_statut is not None and etat.recu_statut > instant
+        if frais and etat.statut == attendu:
+            if attendu == socle.WORK_STATUS_PAUSE:
+                return {"etat": "confirmée", "texte": "Pause confirmée : flèches disponibles."}
+            return {"etat": "confirmée", "texte": "Retour en pause confirmé : aucun mouvement n'est permis dans ce statut."}
+        if self.occupe or maintenant <= echeance:
+            return {"etat": "en attente", "texte": "Pause demandée : attente de la confirmation du robot…"}
+        libelle = etat.resume(maintenant)["statut_libelle"]
+        return {"etat": "non confirmée", "texte": f"Pause non confirmée : le robot annonce « {libelle} »."}
 
     async def _etat(self, _requete: web.Request) -> web.StreamResponse:
         return web.json_response(self.instantane(complet=True))
@@ -676,12 +707,18 @@ class ServeurUI:
             " ; ".join(str(ordre) for ordre in ordres),
             lambda: conduite.emettre_ordres(self.session, ordres, self.journal),
         )
+        if ordres == [Ordre("pause")]:  # la page attendra le statut « pause » frais avant de rendre les flèches
+            instant = self.session.horloge()
+            retour = self.session.etat.statut == socle.WORK_STATUS_DOCKING
+            attendu = socle.WORK_STATUS_PAUSE_DOCKING if retour else socle.WORK_STATUS_PAUSE
+            self._pause = (instant, instant + DELAI_PAUSE_S, attendu)
 
     def _lancer_travail(self, texte: str, travail: Any) -> None:
         # Jamais deux tâches : l'appelant a vérifié, ceci interdit toute tâche orpheline.
         if self.occupe:
             raise web.HTTPConflict(reason="un ordre est déjà en cours")
         self._noter(f"émission : {texte}")
+        self._pause = None
         self._ouvrir_ecoute()
         self.tache = asyncio.create_task(self._conduire(travail))
 
@@ -730,6 +767,25 @@ class ServeurUI:
             finally:
                 self._stop_demande = False
             return web.json_response({"accepte": True}, status=202)
+
+    async def _pause_raccourci(self, requete: web.Request) -> web.StreamResponse:
+        """« Mettre en pause » : UNE confirmation de la page, puis le seul ordre « pause » — rien d'autre,
+        et jamais de mouvement à sa suite : c'est le propriétaire qui rappuie."""
+        corps = await self._corps(requete)
+        if not isinstance(corps, dict) or corps.get("confirmer") is not True or set(corps) != {"confirmer"}:
+            raise ErreurSaisie("confirmation explicite attendue pour mettre en pause")
+        if not self.emet:  # SEC-05
+            bilan, _code = conduite.simuler_ordres([Ordre("pause")], self.cal, self.journal, self._appareil_fictif())
+            self._noter("pause (simulation)")
+            return web.json_response({"accepte": True, "simulation": True, "bilan": bilan})
+        if self.session is None or not self.session.lien.connecte:
+            return _refus(503, f"robot injoignable : {self.etat_liaison}")
+        if self.occupe or self._stop_demande:
+            return _refus(409, "un ordre ou un STOP est en cours : la pause attendra sa fin (STOP met aussi en pause)")
+        self.direct.file.clear()
+        self.previsualisation = None
+        self._lancer([Ordre("pause")])
+        return web.json_response({"accepte": True}, status=202)
 
     # --- pilotage direct par flèches ------------------------------------------
     # Seul chemin sans prévisualisation. Il n'accepte que les quatre ordres bornés de `fleches`,

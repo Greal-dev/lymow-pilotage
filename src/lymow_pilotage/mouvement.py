@@ -48,6 +48,8 @@ TACHES = {
     "reprendre": socle.USER_CTRL_RESUME,
     "base": socle.USER_CTRL_RECHARGE_DOCK,
     "annuler": socle.USER_CTRL_FORCE_REINIT,
+    # Mise en pause de la tâche, seule : la même pause que celle de `stop`, sans les consignes nulles.
+    "pause": socle.USER_CTRL_PAUSE,
 }
 ETAPES_SEQUENCE = (*MOUVEMENTS, *PLATEAUX, "stop")
 OPTIONS_MOUVEMENT = ("--vitesse", "--duree")
@@ -218,7 +220,9 @@ def simuler(ordre: Ordre, cal: Calibration, appareil: str | None) -> dict[str, A
         }
     else:
         trame = protocole.trame_tache(TACHES[ordre.nom], cal)
-        if ordre.nom != "annuler":
+        if ordre.nom == "pause":
+            resultat["variante"] = f"userCtrl {socle.USER_CTRL_PAUSE_DOCK} si le robot rentre à sa base"
+        elif ordre.nom != "annuler":
             sortie = protocole.trame_tache(socle.USER_CTRL_EXIT_REMOTE, cal)
             resultat["precede_si_telecommande"] = _decrire(sortie)
     resultat["trame"] = _decrire(trame)
@@ -606,7 +610,9 @@ async def executer_tache(session: Session, nom: str) -> dict[str, Any]:
         if nom == "reprendre" and etat.statut not in _STATUTS_REPRISE:
             libelle = LIBELLES_STATUT.get(etat.statut, str(etat.statut))
             raise RefusSecurite(f"« reprendre » refusé : rien à reprendre (statut : {libelle})")
-        if etat.statut == socle.WORK_STATUS_REMOTE_CONTROL:
+        if nom == "pause":
+            codes = [code_pause(etat.statut)]  # 21 pendant un retour à la base, 3 sinon : comme `stop`
+        elif etat.statut == socle.WORK_STATUS_REMOTE_CONTROL:
             codes.insert(0, socle.USER_CTRL_EXIT_REMOTE)
     avant = etat.pose
     instant = session.horloge()

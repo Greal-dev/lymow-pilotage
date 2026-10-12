@@ -8,119 +8,88 @@
   <link rel="stylesheet" href="/statique/style.css">
 </head>
 <body>
+  <div class="haut">
   <div id="bandeau-reel" class="bandeau-reel" hidden>MODE RÉEL — chaque ordre émis fait bouger le robot. Ne fermez pas la fenêtre du terminal pendant un mouvement.</div>
   <div id="bandeau-demo" class="bandeau-demo" hidden>DÉMONSTRATION — robot fictif : rien ne part vers un vrai robot</div>
-
   <div id="bandeau-direct" class="bandeau-direct" role="alert" hidden>PILOTAGE DIRECT ARMÉ — chaque flèche émet immédiatement, sans prévisualisation. STOP : Échap ou Espace.</div>
   <div id="bandeau-arret" class="bandeau-reel" hidden>Interface arrêtée — relancez le raccourci.</div>
-
   <header class="entete">
     <h1>Lymow <small id="appareil"></small></h1>
-    <p><span id="mode" class="pastille">…</span> <span id="liaison"></span>
+    <p><span id="mode" class="pastille">…</span> <strong id="etat-resume"></strong> <span id="liaison"></span>
       <small id="version-serveur" class="version"></small></p>
     <button id="stop" type="button" class="stop">STOP <small>Échap ou Espace</small></button>
   </header>
+  </div>
 
   <main>
-    <section id="bloc-compte" aria-labelledby="titre-compte">
-      <h2 id="titre-compte">Compte</h2>
-      <p id="compte-etat" class="note">…</p>
-      <p class="actions">
-        <label>Région <select id="compte-region"></select></label>
-        <button id="compte-connecter" type="button">Se connecter avec Google</button>
-        <button id="compte-deconnecter" type="button" hidden>Se déconnecter de ce poste</button>
-      </p>
-      <p class="actions">
-        <span id="un-clic-etat" class="note">connexion en un clic : …</span>
-        <button id="un-clic-activer" type="button" hidden>Activer la connexion en un clic</button>
-        <button id="un-clic-desactiver" type="button" hidden>Désactiver</button>
-      </p>
-      <p id="un-clic-attente" class="note" hidden>Windows va demander d'ouvrir Lymow : acceptez. Cette page se mettra
-        à jour seule dès la connexion faite.</p>
-      <div id="compte-marche" hidden>
-        <p class="note">Repli manuel, si la connexion en un clic est inactive ou n'aboutit pas :</p>
-        <ol>
-          <li>Dans l'onglet qui vient de s'ouvrir, ouvrez les outils de développement (F12), onglet « Réseau ».</li>
-          <li>Cochez « Conserver le journal » (« Preserve log ») <strong>avant</strong> de valider la connexion Google.</li>
-          <li>Connectez-vous avec le compte Google du robot. La page finale ne s'affiche pas : c'est normal.</li>
-          <li>Dans l'onglet Réseau, repérez la ligne qui commence par <code>myapp://callback/?code=</code> et copiez
-            son adresse complète.</li>
-          <li>Astuce : cette adresse apparaît aussi en rouge dans l'onglet « Console » des outils de
-            développement (message « Failed to launch 'myapp://callback/?code=…' »), souvent plus simple
-            à copier que dans « Réseau ».</li>
-          <li>Collez-la ci-dessous et validez sans attendre : le code expire en une minute environ.</li>
-        </ol>
-        <p><a id="compte-lien" target="_blank" rel="noopener noreferrer">Ouvrir de nouveau la page de connexion Google</a></p>
-        <form id="compte-formulaire">
-          <label>Adresse de rappel
-            <input id="compte-adresse" type="password" autocomplete="off" spellcheck="false" class="large">
-          </label>
-          <p class="actions"><button type="submit">Valider</button></p>
-        </form>
+    <section id="bloc-pilotage" class="large-bloc" aria-labelledby="titre-pilotage">
+      <h2 id="titre-pilotage" class="masque">Pilotage</h2>
+      <div id="bloc-fleches" class="cadre-pilotage" tabindex="0">
+        <div class="cadre-video" title="Cliquer dans la vidéo active les flèches">
+          <video id="video" muted playsinline></video>
+          <span id="video-etat" class="etat-video">arrêtée</span>
+          <div class="pave" role="group" aria-label="Flèches : avancer, reculer, tourner">
+            <button type="button" class="fleche haut" data-fleche="haut" aria-label="Avancer" disabled>↑</button>
+            <button type="button" class="fleche gauche" data-fleche="gauche" aria-label="Tourner à gauche" disabled>←</button>
+            <button type="button" class="fleche droite" data-fleche="droite" aria-label="Tourner à droite" disabled>→</button>
+            <button type="button" class="fleche bas" data-fleche="bas" aria-label="Reculer" disabled>↓</button>
+          </div>
+        </div>
+        <div class="barre-commande">
+          <button id="video-demarrer" type="button" title="Contacte le cloud Lymow et active la caméra du robot, même en simulation. Rien ne démarre tout seul.">Démarrer la vidéo</button>
+          <button id="video-arreter" type="button" disabled>Arrêter</button>
+          <button id="fleches-bascule" type="button" class="bascule" aria-pressed="false" title="Active les quatre flèches (boutons sur la vidéo et clavier). Chaque flèche ajoute une étape à la séquence ; rien n'est émis sans « Émettre ».">Flèches : activer</button>
+          <label title="Pas des flèches ↑ et ↓">↑↓ <select id="pave-distance"></select></label>
+          <label title="Pas des flèches ← et →">←→ <select id="pave-angle"></select></label>
+          <label class="case discret" title="Pilotage direct : chaque flèche émet tout de suite, sans prévisualisation. Confirmation demandée ; désarmé après 60 s sans action, sur STOP, sur tout refus."><input id="direct-interrupteur" type="checkbox"> Direct : armer</label>
+          <button id="pave-plateau" type="button" title="Ajoute « plateau au plus haut » à la séquence">Plateau haut</button>
+          <button id="pause-bouton" type="button" data-tache="pause" title="Met la tâche (ou le retour à la base) en pause : se prévisualise, puis « Émettre ».">Pause</button>
+        </div>
+        <p id="pave-focus" class="note ligne" role="status"></p>
+        <p class="actions ligne-etat">
+          <span id="ordres-etat" class="etat-ordres" role="status"></span>
+          <button id="pause-raccourci" type="button" class="raccourci" hidden>Mettre en pause</button>
+          <span id="pause-etat" class="note" role="status"></span>
+          <span id="reprendre-rappel" hidden>
+            <button id="reprendre-bouton" type="button" data-tache="reprendre">Reprendre la tâche</button>
+            <span class="note">les lames peuvent redémarrer</span>
+          </span>
+        </p>
+
+        <div class="ligne-sequence">
+          <svg id="pave-miniature" class="miniature" role="img" aria-label="Tracé schématique du trajet cumulé"></svg>
+          <div class="suite">
+            <ol id="pave-pastilles" class="pastilles" aria-label="Séquence en cours"></ol>
+            <p id="pave-total" class="note ligne"></p>
+            <p class="actions">
+              <button id="pave-previsualiser" type="button" disabled>Prévisualiser (Entrée)</button>
+              <button id="emettre" type="button" class="emettre" disabled>Émettre l'ordre</button>
+              <button id="pave-annuler" type="button" disabled title="Retour arrière">Annuler la dernière</button>
+              <button id="pave-vider" type="button" disabled>Vider</button>
+            </p>
+            <p id="emettre-note" class="note ligne" role="status">Prévisualisez un ordre ou la séquence : « Émettre » s'active ensuite.</p>
+            <p id="previsualisation-avertissement" class="avertissement ligne" role="alert" hidden></p>
+            <p id="pave-signal" class="avertissement ligne" role="alert"></p>
+            <ol id="pave-retours" class="retours" aria-label="Retour de la dernière étape"></ol>
+            <p id="pave-file" class="note ligne" role="status"></p>
+            <p id="pave-boutons-note" class="note ligne" role="status"></p>
+            <p id="direct-etat" class="note ligne" role="status"></p>
+            <p class="actions" id="reprise-bloc" hidden>
+              <button id="reprise" type="button" title="Recharge les étapes restantes dans la séquence et les prévisualise ; rien n'est émis sans « Émettre ».">Reprendre</button>
+            </p>
+          </div>
+        </div>
       </div>
-      <div id="compte-choix" hidden>
-        <p class="note">Plusieurs appareils sur ce compte : choisissez celui à piloter.</p>
-        <ul id="compte-appareils"></ul>
-      </div>
-      <p id="compte-message" class="note" role="status"></p>
+      <details id="volet-details" class="sous-volet" data-volet="details">
+        <summary>Détails de la prévisualisation</summary>
+        <p id="previsualisation-titre" class="note">Aucune prévisualisation.</p>
+        <ol id="previsualisation-etapes" class="etapes" aria-label="Étapes qui seront émises, dans cet ordre"></ol>
+        <div id="previsualisation-detail"></div>
+      </details>
     </section>
-
-    <section id="bloc-etat" aria-labelledby="titre-etat">
-      <h2 id="titre-etat">État du robot</h2>
-      <p id="etat-absent" class="note"></p>
-      <dl id="etat-liste" class="grille"></dl>
-      <button id="actualiser" type="button">Actualiser</button>
-    </section>
-
-    <div class="pilotage large-bloc">
-    <section aria-labelledby="titre-video">
-      <h2 id="titre-video">Vidéo</h2>
-      <p class="note">« Démarrer la vidéo » contacte le cloud Lymow et active la caméra du robot,
-        même en simulation. Rien ne démarre tout seul.</p>
-      <div class="cadre-video"><video id="video" muted playsinline></video></div>
-      <p>
-        <button id="video-demarrer" type="button">Démarrer la vidéo</button>
-        <button id="video-arreter" type="button" disabled>Arrêter</button>
-        <span id="video-etat" class="note">arrêtée</span>
-      </p>
-    </section>
-
-    <section id="bloc-fleches" tabindex="0" aria-labelledby="titre-fleches">
-      <h2 id="titre-fleches">Pilotage par flèches</h2>
-      <p class="note">Pour écrire vite une suite d'étapes (se dégager, rejoindre une zone couverte), pas pour piloter à vue.
-        Chaque flèche AJOUTE une étape à la séquence ; Entrée la prévisualise, puis « Émettre ».
-        <strong>STOP : Échap ou Espace, à tout moment.</strong></p>
-      <div class="pave" role="group" aria-label="Flèches : avancer, reculer, tourner">
-        <button type="button" class="fleche haut" data-fleche="haut" aria-label="Avancer">↑</button>
-        <button type="button" class="fleche gauche" data-fleche="gauche" aria-label="Tourner à gauche">←</button>
-        <button type="button" class="fleche droite" data-fleche="droite" aria-label="Tourner à droite">→</button>
-        <button type="button" class="fleche bas" data-fleche="bas" aria-label="Reculer">↓</button>
-      </div>
-      <p class="actions">
-        <button id="pave-clavier" type="button">Activer le clavier</button>
-        <span id="pave-focus" class="note" role="status"></span>
-      </p>
-      <label>Pas de ↑ et ↓ <select id="pave-distance"></select></label>
-      <label>Pas de ← et → <select id="pave-angle"></select></label>
-      <p class="actions">
-        <button id="pave-previsualiser" type="button" disabled>Prévisualiser la séquence (Entrée)</button>
-        <button id="pave-annuler" type="button" disabled>Annuler la dernière (Retour arrière)</button>
-        <button id="pave-vider" type="button" disabled>Vider</button>
-        <button id="pave-plateau" type="button">Plateau au plus haut</button>
-      </p>
-      <p id="pave-boutons-note" class="note" role="status"></p>
-      <svg id="pave-miniature" class="miniature" role="img" aria-label="Tracé schématique du trajet cumulé"></svg>
-      <p id="pave-total" class="note"></p>
-      <ol id="pave-retours" class="retours" aria-label="Retour des dernières étapes"></ol>
-      <p id="pave-file" class="note" role="status"></p>
-      <p id="pave-signal" class="avertissement" role="alert"></p>
-      <label class="case"><input id="direct-interrupteur" type="checkbox"> Pilotage direct : chaque flèche émet tout de suite, sans prévisualisation</label>
-      <p id="direct-etat" class="note" role="status"></p>
-    </section>
-    </div>
-
-    <section id="bloc-carte" class="large-bloc" aria-labelledby="titre-carte">
-      <h2 id="titre-carte">Carte</h2>
+    <details id="volet-carte" class="volet large-bloc" data-volet="carte">
+      <summary>Carte et ajustement de zone</summary>
+    <section id="bloc-carte" aria-label="Carte et ajustement de zone">
       <p class="actions">
         <button id="carte-actualiser" type="button">Actualiser la carte</button>
         <button id="carte-zoom-plus" type="button" aria-label="Zoomer">+</button>
@@ -144,10 +113,7 @@
       </ul>
       <form id="carte-ajustement" class="ordre">
         <h3>Ajuster la bordure d'une zone</h3>
-        <p class="note">Jamais essayé sur ce robot : commencez par +5 cm sur une zone sans enjeu. Choisissez la zone,
-          puis cliquez deux sommets de son contour sur la carte (début et fin de la portion). Molette : zoom ;
-          glisser : déplacer ; double-clic sur une zone : la choisir et cadrer dessus. Les sommets
-          apparaissent quand le zoom permet de les distinguer.</p>
+        <p class="note" title="Molette : zoom ; glisser : déplacer ; double-clic sur une zone : la choisir et cadrer dessus. Les sommets apparaissent quand le zoom permet de les distinguer.">Jamais essayé sur ce robot : commencez par +5 cm sur une zone sans enjeu. Choisissez la zone, puis cliquez deux sommets de son contour.</p>
         <label>Zone <select id="carte-zone"></select></label>
         <p id="carte-possible" class="note" role="status"></p>
         <label>Du sommet <input id="carte-de" inputmode="numeric" autocomplete="off"></label>
@@ -163,12 +129,13 @@
         <p class="actions"><button id="carte-previsualiser" type="submit">Prévisualiser l'ajustement</button></p>
       </form>
     </section>
+    </details>
+    <details id="volet-ordres" class="volet large-bloc" data-volet="ordres">
+      <summary>Ordres détaillés</summary>
+      <section aria-labelledby="titre-ordres">
+        <h2 id="titre-ordres" class="masque">Ordres</h2>
+      <p class="note" title="Le bouton « Prévisualiser » d'un formulaire ne prévisualise que SON ordre ; « Ajouter à la séquence » l'ajoute à la séquence du pilotage.">Angle ou distance, ou bien durée. « Ajouter à la séquence » alimente la même séquence que les flèches.</p>
 
-    <section aria-labelledby="titre-ordres">
-      <h2 id="titre-ordres">Ordres</h2>
-      <p class="note">Chaque ordre se prévisualise d'abord. Remplissez soit l'angle ou la distance, soit la durée.</p>
-
-      <p id="ordres-etat" class="etat-ordres" role="status"></p>
       <form class="ordre" data-ordre="tourner">
         <h3>Tourner</h3>
         <label>Sens
@@ -211,12 +178,29 @@
         <h3>Tâche</h3>
         <p class="note">Une confirmation est demandée avant l'émission. « Reprendre » peut relancer les lames.</p>
         <p class="actions">
+          <button type="button" data-tache="pause">Mettre en pause</button>
           <button type="button" data-tache="reprendre">Reprendre</button>
           <button type="button" data-tache="base">Retour à la base</button>
           <button type="button" data-tache="annuler">Annuler la tâche</button>
         </p>
       </div>
 
+        <div class="ordre">
+          <h3 id="titre-sequence">Séquence : ordre des étapes</h3>
+      <p id="sequence-vide" class="note">Aucune étape : « Prévisualiser la séquence » est indisponible. Utilisez
+        « Ajouter à la séquence » (le bouton « Prévisualiser » d'un formulaire ne prévisualise que SON ordre).</p>
+      <ol id="sequence-liste"></ol>
+      <p class="actions">
+        <button id="sequence-previsualiser" type="button" disabled>Prévisualiser la séquence</button>
+        <button id="sequence-vider" type="button" disabled>Vider</button>
+      </p>
+        </div>
+      </section>
+    </details>
+    <details id="volet-calibration" class="volet large-bloc" data-volet="calibration">
+      <summary>Calibration</summary>
+      <section aria-labelledby="titre-calibration">
+        <h2 id="titre-calibration" class="masque">Calibration</h2>
       <form class="ordre" data-ordre="essai-arret-auto">
         <h3>Essai d'arrêt automatique</h3>
         <p class="note">Calibration, robot à vue : une seule consigne avant, puis silence, puis arrêt.
@@ -225,45 +209,71 @@
         <label>Fenêtre (s) <input name="duree" inputmode="decimal" autocomplete="off"> <small data-borne="essai-fenetre"></small></label>
         <p class="actions"><button type="submit">Prévisualiser</button></p>
       </form>
-    </section>
-
-    <section aria-labelledby="titre-sequence">
-      <h2 id="titre-sequence">Séquence</h2>
-      <p id="sequence-vide" class="note">Aucune étape : « Prévisualiser la séquence » est indisponible. Utilisez
-        « Ajouter à la séquence » (le bouton « Prévisualiser » d'un formulaire ne prévisualise que SON ordre).</p>
-      <ol id="sequence-liste"></ol>
+      </section>
+    </details>
+    <details id="volet-compte" class="volet large-bloc" data-volet="compte">
+      <summary>Compte</summary>
+    <section id="bloc-compte" aria-labelledby="titre-compte">
+      <h2 id="titre-compte">Compte</h2>
+      <p id="compte-etat" class="note">…</p>
       <p class="actions">
-        <button id="sequence-previsualiser" type="button" disabled>Prévisualiser la séquence</button>
-        <button id="sequence-vider" type="button" disabled>Vider</button>
+        <label>Région <select id="compte-region"></select></label>
+        <button id="compte-connecter" type="button">Se connecter avec Google</button>
+        <button id="compte-deconnecter" type="button" hidden>Se déconnecter de ce poste</button>
       </p>
-    </section>
-
-    <section aria-labelledby="titre-previsualisation">
-      <h2 id="titre-previsualisation">Prévisualisation</h2>
-      <p id="previsualisation-titre" class="note">Aucune prévisualisation.</p>
-      <p id="previsualisation-avertissement" class="avertissement" role="alert" hidden></p>
-      <ol id="previsualisation-etapes" class="etapes" aria-label="Étapes qui seront émises, dans cet ordre"></ol>
-      <div id="previsualisation-detail"></div>
       <p class="actions">
-        <button id="emettre" type="button" class="emettre" disabled>Émettre l'ordre</button>
-        <span id="emettre-note" class="note" role="status">Prévisualisez un ordre ou la séquence : « Émettre » s'active ensuite.</span>
+        <span id="un-clic-etat" class="note">connexion en un clic : …</span>
+        <button id="un-clic-activer" type="button" hidden>Activer la connexion en un clic</button>
+        <button id="un-clic-desactiver" type="button" hidden>Désactiver</button>
       </p>
+      <p id="un-clic-attente" class="note" hidden>Windows va demander d'ouvrir Lymow : acceptez. Cette page se mettra
+        à jour seule dès la connexion faite.</p>
+      <div id="compte-marche" hidden>
+        <p class="note">Repli manuel, si la connexion en un clic est inactive ou n'aboutit pas :</p>
+        <ol>
+          <li>Dans l'onglet qui vient de s'ouvrir, ouvrez les outils de développement (F12), onglet « Réseau ».</li>
+          <li>Cochez « Conserver le journal » (« Preserve log ») <strong>avant</strong> de valider la connexion Google.</li>
+          <li>Connectez-vous avec le compte Google du robot. La page finale ne s'affiche pas : c'est normal.</li>
+          <li>Dans l'onglet Réseau, repérez la ligne qui commence par <code>myapp://callback/?code=</code> et copiez
+            son adresse complète.</li>
+          <li>Astuce : cette adresse apparaît aussi en rouge dans l'onglet « Console » des outils de
+            développement (message « Failed to launch 'myapp://callback/?code=…' »), souvent plus simple
+            à copier que dans « Réseau ».</li>
+          <li>Collez-la ci-dessous et validez sans attendre : le code expire en une minute environ.</li>
+        </ol>
+        <p><a id="compte-lien" target="_blank" rel="noopener noreferrer">Ouvrir de nouveau la page de connexion Google</a></p>
+        <form id="compte-formulaire">
+          <label>Adresse de rappel
+            <input id="compte-adresse" type="password" autocomplete="off" spellcheck="false" class="large">
+          </label>
+          <p class="actions"><button type="submit">Valider</button></p>
+        </form>
+      </div>
+      <div id="compte-choix" hidden>
+        <p class="note">Plusieurs appareils sur ce compte : choisissez celui à piloter.</p>
+        <ul id="compte-appareils"></ul>
+      </div>
+      <p id="compte-message" class="note" role="status"></p>
     </section>
-
+    </details>
+    <details id="volet-journal" class="volet large-bloc" data-volet="journal">
+      <summary>Journal et résultat détaillé</summary>
+    <section id="bloc-etat" aria-labelledby="titre-etat">
+      <h2 id="titre-etat">État détaillé du robot</h2>
+      <p id="etat-absent" class="note"></p>
+      <dl id="etat-liste" class="grille"></dl>
+      <button id="actualiser" type="button">Actualiser</button>
+    </section>
     <section aria-labelledby="titre-resultat">
       <h2 id="titre-resultat">Résultat du dernier ordre</h2>
       <p id="resultat-vide" class="note">Aucun ordre émis.</p>
-      <p class="actions" id="reprise-bloc" hidden>
-        <button id="reprise" type="button">Reprendre</button>
-        <span class="note">Recharge les étapes restantes dans la séquence et les prévisualise ; rien n'est émis sans « Émettre ».</span>
-      </p>
       <div id="resultat-detail"></div>
     </section>
-
     <section aria-labelledby="titre-journal">
       <h2 id="titre-journal">Journal de la session</h2>
       <ol id="journal" class="journal"></ol>
     </section>
+    </details>
   </main>
 
   <script src="/statique/signalisation.js"></script>
@@ -272,5 +282,6 @@
   <script src="/statique/app.js"></script>
   <script src="/statique/pave.js"></script>
   <script src="/statique/carte.js"></script>
+  <script src="/statique/volets.js"></script>
 </body>
 </html>

@@ -28,7 +28,7 @@ from .securite import RefusSecurite
 from .session import EchecOrdre
 from .vendor.ha_lymow.api import LymowApiClient
 
-_ORDRES_SIMPLES = ("plateau-haut", "stop", "reprendre", "base", "annuler")
+_ORDRES_SIMPLES = ("plateau-haut", "stop", "pause", "reprendre", "base", "annuler")
 _AUTORISEES_ORDRES = frozenset(Categorie)
 _LECTURE = frozenset({Categorie.REQUETE_PURE})
 PORT_UI = 8377  # même valeur que ui.PORT_DEFAUT, sans charger le serveur web pour les autres commandes
@@ -139,6 +139,7 @@ def construire_analyseur() -> argparse.ArgumentParser:
     aides = {
         "plateau-haut": "lever le plateau de coupe au maximum",
         "stop": "arrêt du pilotage manuel (sans précondition avec --reel)",
+        "pause": "mettre la tâche (ou le retour à la base) en pause, pour prendre la main",
         "reprendre": "reprendre la tâche en pause (les lames peuvent redémarrer)",
         "base": "retour à la base en conservant la tâche",
         "annuler": "annuler la tâche, arrêt sur place",

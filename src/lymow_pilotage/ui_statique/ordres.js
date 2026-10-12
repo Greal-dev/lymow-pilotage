@@ -50,8 +50,50 @@
     return ordres.mouvement_refuse ? texte + " — " + ordres.mouvement_refuse : texte;
   }
 
+  /* En-tête : l'état du robot en une ligne (en ligne, statut, batterie, RTK). */
+  function resumeEtat(etat) {
+    if (!etat) { return "état du robot inconnu"; }
+    var morceaux = [etat.en_ligne === true ? "en ligne" : etat.en_ligne === false ? "HORS LIGNE" : "présence inconnue"];
+    morceaux.push(etat.statut_libelle || "statut inconnu");
+    if (typeof etat.batterie_pct === "number") { morceaux.push("batterie " + etat.batterie_pct + " %"); }
+    if (etat.rtk) { morceaux.push("RTK " + etat.rtk); }
+    return morceaux.join(" · ") + (etat.perime ? " (état ancien)" : "");
+  }
+
+  /* Sections repliables : fermées par défaut, puis ce que le poste a mémorisé ; « compte » ouverte
+   * d'office si aucun compte n'est connecté. Une mémoire abîmée vaut « rien de mémorisé ». */
+  function voletsOuverts(memoire, noms, compteConnecte) {
+    var ouverts = {};
+    var valide = memoire && typeof memoire === "object" && !Array.isArray(memoire);
+    noms.forEach(function (nom) { ouverts[nom] = Boolean(valide && memoire[nom] === true); });
+    if (!compteConnecte && noms.indexOf("compte") >= 0) { ouverts.compte = true; }
+    return ouverts;
+  }
+
+  /* Pourquoi les flèches n'agissent pas maintenant ; chaîne vide si elles agissent. Après une pause
+   * demandée, elles attendent le statut « pause » frais — et rien ne part tout seul ensuite. */
+  function blocageDesFleches(ordres) {
+    if (ordres && ordres.pause && ordres.pause.etat === "en attente") {
+      return "Pause en attente de confirmation : les flèches reprendront ensuite.";
+    }
+    return "";
+  }
+
+  /* Ce que la page propose à côté d'un refus : le geste utile, s'il existe. */
+  function gestesProposes(ordres, occupe) {
+    return {
+      pause: Boolean(ordres && ordres.action === "pause" && !occupe),
+      reprendre: Boolean(ordres && ordres.reprise_possible && !occupe),
+      texte: ordres && ordres.pause ? ordres.pause.texte : ""
+    };
+  }
+
   var api = {
     texteOrdre: texteOrdre,
+    blocageDesFleches: blocageDesFleches,
+    gestesProposes: gestesProposes,
+    resumeEtat: resumeEtat,
+    voletsOuverts: voletsOuverts,
     libelleEmission: libelleEmission,
     avertissementOrdreSeul: avertissementOrdreSeul,
     motifEmissionIndisponible: motifEmissionIndisponible,

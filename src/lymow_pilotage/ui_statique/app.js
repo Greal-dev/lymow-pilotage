@@ -122,8 +122,16 @@
     $("ordres-etat").textContent = Ordres.texteEtatDesOrdres(image.ordres);
     $("ordres-etat").classList.toggle("refuse", Boolean(image.ordres && image.ordres.mouvement_refuse));
     occupe = Boolean(image.occupe);
+    // Refus actionnable : le geste utile est à côté du message (pause), et la reprise reste proposée.
+    var gestes = Ordres.gestesProposes(image.ordres, occupe);
+    $("pause-raccourci").hidden = !gestes.pause;
+    $("reprendre-rappel").hidden = !gestes.reprendre;
+    $("pause-etat").textContent = gestes.texte;
     afficherEmission();
     $("appareil").textContent = image.appareil || "";
+    $("etat-resume").textContent = Ordres.resumeEtat(image.etat);
+    // Aucun compte connecté (hors démonstration) : la section « Compte » s'ouvre d'elle-même.
+    if (window.LymowVolets && image.compte && !demonstration) { window.LymowVolets.compte(image.compte.connecte); }
     afficherCompte(image.compte);
     if (window.LymowCarte) { window.LymowCarte.robot(image.etat); }
     if (window.LymowPave) { window.LymowPave.appliquer(image); }
@@ -562,6 +570,16 @@
   $("sequence-previsualiser").addEventListener("click", function () { previsualiser(sequence.slice(), false); });
   $("sequence-vider").addEventListener("click", function () { sequence = []; afficherSequence(); });
   $("emettre").addEventListener("click", emettre);
+  $("pause-raccourci").addEventListener("click", async function () {
+    // Une confirmation, puis la pause seule. Aucun mouvement n'est enchaîné : c'est à vous de rappuyer.
+    if (!window.confirm("Mettre la tâche du robot en pause, pour prendre la main ?")) { return; }
+    try {
+      var reponse = await appeler("/api/pause", { confirmer: true });
+      $("pause-etat").textContent = reponse.simulation ? "Simulation : pause parcourue, rien n'est émis." : "Pause demandée…";
+    } catch (erreur) {
+      $("pause-etat").textContent = "Pause refusée : " + erreur.message;
+    }
+  });
   $("reprise").addEventListener("click", function () {
     if (!reprise) { return; }
     sequence = reprise.ordres.slice();
@@ -590,6 +608,12 @@
   }
   document.addEventListener("keydown", function (evenement) {
     if (!estToucheStop(evenement)) { return; }
+    // Échap : STOP prioritaire ; il retire seulement le focus des flèches si rien ne bouge ni n'est armé.
+    if (evenement.key === "Escape" && !evenement.repeat && window.LymowPave && window.LymowPave.echap(occupe)) {
+      evenement.preventDefault();
+      evenement.stopPropagation();
+      return;
+    }
     evenement.preventDefault();
     evenement.stopPropagation();
     if (!evenement.repeat) { stop(); }

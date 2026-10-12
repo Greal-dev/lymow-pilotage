@@ -86,7 +86,7 @@
   /* Clavier : ce que vaut un appui. Rien si le pavé n'a pas le focus, si la touche est maintenue
    * (`repeat`), ou pendant la saisie dans un champ ou une liste. */
   function actionClavier(evenement) {
-    if (!evenement.dansLePave || evenement.repeat) { return null; }
+    if (!evenement.dansLePave || evenement.actives === false || evenement.repeat) { return null; }
     var balise = String(evenement.balise || "").toUpperCase();
     if (balise === "INPUT" || balise === "SELECT" || balise === "TEXTAREA") { return null; }
     if (DIRECTIONS[evenement.key]) { return { type: "fleche", direction: DIRECTIONS[evenement.key] }; }
@@ -98,7 +98,7 @@
   /* Les flèches ne font pas défiler la page quand le pavé a le focus, même maintenues. */
   function retientLaTouche(evenement) {
     var balise = String(evenement.balise || "").toUpperCase();
-    if (!evenement.dansLePave || balise === "INPUT" || balise === "SELECT" || balise === "TEXTAREA") { return false; }
+    if (!evenement.dansLePave || evenement.actives === false || balise === "INPUT" || balise === "SELECT" || balise === "TEXTAREA") { return false; }
     return Boolean(DIRECTIONS[evenement.key]) || evenement.key === "Backspace";
   }
 
@@ -114,8 +114,29 @@
     return debut + "émise, arrêt acquitté" + (suite ? " — " + suite : "");
   }
 
+  /* Bascule unique des flèches : un seul état pour les boutons sur la vidéo ET le clavier. */
+  function basculer(actives, evenement) {
+    if (evenement === "bouton") { return !actives; }
+    if (evenement === "clic-video" || evenement === "armement") { return true; }
+    if (evenement === "sortie" || evenement === "echap") { return false; }
+    return actives;
+  }
+
+  function libelleBascule(actives) {
+    return actives ? "Flèches : ACTIVES" : "Flèches : activer";
+  }
+
+  /* Échap : STOP d'abord. Il ne fait que retirer le focus des flèches si rien ne bouge et rien n'est armé. */
+  function effetEchap(etat) {
+    if (etat.occupe || etat.directArme) { return "stop"; }
+    return etat.flechesActives ? "desactiver" : "stop";
+  }
+
   var api = {
     ordreDe: ordreDe,
+    basculer: basculer,
+    libelleBascule: libelleBascule,
+    effetEchap: effetEchap,
     directionDe: directionDe,
     symbole: symbole,
     trace: trace,
