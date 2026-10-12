@@ -11,6 +11,7 @@ socle (qui tolère les charges tronquées) et ne sert qu'à la carte.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import math
 import struct
@@ -93,6 +94,9 @@ class Zone:
     contour: list[Point]
     brut: bytes = field(repr=False)
     parent: str = ""  # zone interdite : zone de tonte de rattachement
+    # Constat du 2026-10-12 : une zone interdite réelle porte de 5 à 12 identifiants (champ 4),
+    # dont un à trois seulement sont des zones de la carte ; tous sont gardés ici.
+    rattachements: tuple[str, ...] = ()
 
     @property
     def libelle(self) -> str:
@@ -189,7 +193,7 @@ def _zone(brut: bytes) -> Zone:
     infos = champs_stricts(infos_brutes)
     return Zone(
         _texte(_premier(infos, 3, 2)), _texte(_premier(infos, 2, 2)), _points(_premier(infos, 5, 2)), brut,
-        _texte(_premier(champs, 4, 2)),
+        rattachements=tuple(_texte(v) for n, t, v in champs if n == 4 and t == 2),
     )
 
 
@@ -201,6 +205,15 @@ def _passage(brut: bytes) -> Passage:
     )
 
 
+def _zone_de_rattachement(interdite: Zone, contours: dict[str, list[Point]]) -> str:
+    """Parmi les identifiants du champ 4 qui désignent une zone de la carte, celle que la zone
+    interdite touche ; à défaut la première. Constat du 2026-10-12 : la zone qui contient la
+    zone interdite figure toujours dans la liste, mais ni seule ni forcément en tête."""
+    candidates = [i for i in interdite.rattachements if i in contours]
+    touchees = [i for i in candidates if geometrie.touche(contours[i], interdite.contour)]
+    return (touchees or candidates or [""])[0]
+
+
 def decoder(octets: bytes, recue: float = 0.0) -> Carte:
     """Contenu brut d'une carte (PbMap) → `Carte`. Lève `CarteIllisible` sur tout autre contenu."""
     try:
@@ -208,7 +221,11 @@ def decoder(octets: bytes, recue: float = 0.0) -> Carte:
         if any(numero in CHAMPS_SOCLE and type_ != 2 for numero, type_, _v in champs):
             raise CarteIllisible("structure inattendue : ce n'est pas une carte")
         zones = [_zone(v) for n, _t, v in champs if n == CHAMP_ZONES]
-        interdites = [_zone(v) for n, _t, v in champs if n == CHAMP_INTERDITES]
+        contours = {zone.identifiant: zone.contour for zone in zones}
+        interdites = [
+            dataclasses.replace(z, parent=_zone_de_rattachement(z, contours))
+            for z in (_zone(v) for n, _t, v in champs if n == CHAMP_INTERDITES)
+        ]
         passages = [_passage(v) for n, _t, v in champs if n == CHAMP_PASSAGES]
         station = None
         brute = _premier(champs, CHAMP_STATION, 2)
@@ -279,14 +296,50 @@ def en_memoire(session: Session) -> Carte | None:
 
 
 async def demander(session: Session, attente_s: float) -> Carte:
-    """Requête pure « carte entière », puis attente d'une carte reçue APRÈS la demande."""
-    instant = session.horloge()
-    await session.publier(protocole.trame_demande_carte(session.cal), 3.0)
-    fin = instant + attente_s
-    while True:
-        carte = en_memoire(session)
-        if carte is not None and carte.recue > instant:
-            return carte
-        if session.horloge() >= fin or not session.lien.connecte:
-            raise EchecOrdre("carte non reçue du robot dans le délai : réessayez")
-        await session.dormir(0.2)
+    """Requêtes pures « carte », tranche après tranche, puis décodage strict de l'ensemble.
+
+    Constat du 2026-10-12 : une réponse de 81 920 octets est une tranche coupée net ; la suite se
+    demande à l'index suivant (hypothèse non vérifiée en réel). Rien n'est affaibli : l'assemblage
+    passe par le même décodage strict, et une carte restée tronquée est refusée avec son motif,
+    aussitôt — plus d'attente muette jusqu'au délai.
+    """
+    fin = session.horloge() + attente_s
+    tranches: list[bytes] = []
+    recu: tuple[bytes, float] = (b"", 0.0)
+    for index in range(protocole.TRANCHES_CARTE_MAX):
+        instant = session.horloge()
+        trame = protocole.trame_demande_carte(session.cal, index)
+        await session.publier(trame, 3.0)
+        session.journaliser("requete-emise", sujet=session.sujet, trame=trame.description())
+        while True:
+            recu = session.tranche_carte or recu
+            if recu[1] > instant:
+                break
+            if session.horloge() >= fin or not session.lien.connecte:
+                if not tranches:
+                    raise EchecOrdre("carte non reçue du robot dans le délai : réessayez")
+                raise CarteIllisible(
+                    f"carte reçue mais refusée : {len(tranches)} tranche(s) de {protocole.TAILLE_TRANCHE_CARTE} octets "
+                    f"reçue(s), la suivante n'est pas arrivée dans le délai — carte incomplète"
+                )
+            await session.dormir(0.2)
+        if tranches and recu[0] == tranches[0]:
+            raise CarteIllisible(
+                "carte reçue mais refusée : le robot renvoie la même première tranche de "
+                f"{protocole.TAILLE_TRANCHE_CARTE} octets quel que soit l'index demandé — carte tronquée"
+            )
+        tranches.append(recu[0])
+        if len(recu[0]) < protocole.TAILLE_TRANCHE_CARTE:
+            break
+    else:
+        raise CarteIllisible(f"carte reçue mais refusée : plus de {protocole.TRANCHES_CARTE_MAX} tranches")
+    octets = b"".join(tranches)
+    try:
+        carte = decoder(octets, recu[1])
+    except CarteIllisible as erreur:
+        raise CarteIllisible(
+            f"carte reçue mais refusée : {erreur} ({len(octets)} octets en {len(tranches)} tranche(s))"
+        ) from None
+    session.carte_brute = (octets, recu[1])
+    session.journaliser("carte-assemblee", octets=len(octets), tranches=len(tranches), complete=carte.complete)
+    return carte

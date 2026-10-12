@@ -587,6 +587,9 @@ class ServeurUI:
             return _refus(503, f"robot injoignable : {self.etat_liaison}")
         try:
             await cartes.demander(self.session, securite.ATTENTE_CARTE_S)
+        except cartes.CarteIllisible as erreur:  # reçue, mais refusée : le motif exact, tout de suite
+            self._noter(str(erreur))
+            return _refus(422, masquer(str(erreur)))
         except Exception as erreur:  # noqa: BLE001
             return _refus(504, masquer(str(erreur)) or type(erreur).__name__)
         self.carte_heure = datetime.now().strftime("%H:%M:%S")

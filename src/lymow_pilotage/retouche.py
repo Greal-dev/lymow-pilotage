@@ -88,6 +88,13 @@ def controler(carte: Carte, zone: Zone, apres: list[Point], ecart_m: float | Non
         securite._nombre_fini(ecart_m, "écart")
         if ecart_m == 0 or abs(ecart_m) > borne:
             raise _refus(f"écart de {ecart_m * 100:g} cm hors bornes (jusqu'à {borne * 100:g} cm, non nul)")
+    if len(geometrie.sans_doublons(avant)) != len(avant):
+        # Constat du 2026-10-12 : des contours réels répètent leur premier point ou doublent un sommet.
+        # Les déplacer sans les désunir n'est pas pris en charge : refus, plutôt qu'un contour abîmé.
+        raise _refus(
+            "le contour de cette zone répète des sommets (fermé sur son premier point, ou points confondus) : "
+            "sa retouche n'est pas prise en charge"
+        )
     if len(avant) < 3 or not geometrie.est_simple(avant):
         raise _refus("le contour actuel de la zone n'est pas un polygone simple")
     if len(apres) != len(avant):
@@ -110,7 +117,7 @@ def controler(carte: Carte, zone: Zone, apres: list[Point], ecart_m: float | Non
     if ecart_m is not None and variation * ecart_m <= 0:
         raise _refus("la surface ne varie pas dans le sens de l'écart demandé")
     for interdite in carte.interdites:
-        rattachee = interdite.parent == zone.identifiant
+        rattachee = zone.identifiant in interdite.rattachements
         if not (rattachee or geometrie.strictement_dans(interdite.contour, avant)):
             continue
         if not geometrie.strictement_dans(interdite.contour, apres):

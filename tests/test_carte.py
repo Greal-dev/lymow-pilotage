@@ -75,7 +75,7 @@ def carte() -> cartes.Carte:
 def test_decodage_de_la_carte_zones_interdites_passages_station(carte):
     assert [(z.identifiant, z.nom) for z in carte.zones] == [("zoneA1", "Pelouse"), ("zoneB1", "Verger")]
     assert carte.zones[0].contour == PELOUSE
-    assert [(z.nom, z.parent) for z in carte.interdites] == [("Massif", "zoneA1")]
+    assert [(z.nom, z.parent, z.rattachements) for z in carte.interdites] == [("Massif", "zoneA1", ("zoneA1",))]
     assert [(p.identifiant, p.station) for p in carte.passages] == [("passAB", False), ("passSt", True)]
     assert carte.station == (1.0, 1.0, 0.0)
     lisible = cartes.vers_json(carte)
@@ -129,7 +129,8 @@ def test_demande_de_carte_requete_pure_octet_pour_octet():
 @pytest.mark.parametrize(
     "octets",
     [
-        "10 31 28 13 ba 01 04 08 01 20 01",  # autre index
+        "10 31 28 13 ba 01 04 08 08 20 01",  # index de tranche au-delà de la borne
+        "10 31 28 13 ba 01 0d 08 ff ff ff ff ff ff ff ff ff 01 20 01",  # index négatif
         "10 31 28 13 ba 01 04 08 00 20 00",  # drapeau à zéro
         "10 31 28 13 ba 01 06 08 00 20 01 28 01",  # champ en plus dans la demande
         "10 31 28 19 ba 01 04 08 00 20 01",  # userCtrl 25 : envoi de carte entière

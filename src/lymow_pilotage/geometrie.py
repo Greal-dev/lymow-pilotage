@@ -75,6 +75,14 @@ def _aretes(contour: list[Point], ferme: bool = True) -> list[tuple[Point, Point
     return list(zip(contour, suivants))
 
 
+def sans_doublons(contour: list[Point]) -> list[Point]:
+    """Sans les sommets confondus avec le suivant, fermeture comprise.
+
+    Constat du 2026-10-12 (carte réelle) : près d'un contour sur deux répète son premier point
+    à la fin, et quelques-uns doublent un sommet. Ces arêtes nulles ne changent pas la forme."""
+    return [a for a, b in zip(contour, contour[1:] + contour[:1]) if a != b]
+
+
 def est_simple(contour: list[Point]) -> bool:
     """Ni auto-intersection, ni arête repliée sur la précédente, ni arête nulle."""
     n = len(contour)

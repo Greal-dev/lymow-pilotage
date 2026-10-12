@@ -22,6 +22,12 @@ DEMANDE_CARTE = bytes.fromhex("10 31 28 13 ba 01 04 08 00 20 01")
 ENTETE_ECRITURE_CARTE = bytes.fromhex("10 31 28 09")
 
 
+def index_demande_carte(octets: bytes) -> int | None:
+    """Index de tranche d'une demande de carte ; rien si ce n'en est pas une."""
+    conforme = len(octets) == len(DEMANDE_CARTE) and octets[:8] == DEMANDE_CARTE[:8] and octets[9:] == DEMANDE_CARTE[9:]
+    return octets[8] if conforme else None
+
+
 class Horloge:
     """Temps virtuel : dormir avance l'horloge et rend la main à la boucle."""
 
@@ -65,6 +71,9 @@ class FauxLien:
         self.robot: dict | None = fragment()
         self.delai_robot = 0.0
         self.carte: bytes | None = None  # contenu brut renvoyé à chaque demande de carte
+        self.taille_tranche = 81920  # le robot coupe la carte à cette taille (constat du 2026-10-12)
+        self.tranches_servies: int | None = None  # None : toutes ; sinon le robot se tait au-delà
+        self.index_ignore = False  # le robot renvoie toujours la première tranche
         self.carte_apres: bytes | None = None  # carte du faux robot après une écriture (None : il l'ignore)
         self.ecritures: list[bytes] = []
         self.en_vol = 0
@@ -84,11 +93,14 @@ class FauxLien:
         finally:
             self.en_vol -= 1
         self.publies.append((sujet, octets))
-        if octets == DEMANDE_CARTE and self.carte is not None and self.session is not None:
+        index = index_demande_carte(octets)
+        servie = index is not None and (self.tranches_servies is None or index < self.tranches_servies)
+        if servie and self.carte is not None and self.session is not None:
             if self.delai_robot:
                 await asyncio.sleep(self.delai_robot)
             self.horloge.t += 0.01
-            self.session.recevoir_etat({"mapRaw": self.carte})
+            debut = 0 if self.index_ignore else index * self.taille_tranche
+            self.session.recevoir_etat({"mapRaw": self.carte[debut : debut + self.taille_tranche]})
         if octets.startswith(ENTETE_ECRITURE_CARTE):  # userCtrl 9 : le faux robot applique, ou non
             self.ecritures.append(octets)
             if self.carte_apres is not None:

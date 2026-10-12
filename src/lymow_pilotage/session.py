@@ -59,6 +59,7 @@ class Session:
         self.signaler = signaler
         self.etat = Etat()
         self.carte_brute: tuple[bytes, float] | None = None
+        self.tranche_carte: tuple[bytes, float] | None = None  # dernière réponse de carte, telle quelle
         self.arret_en_cours = False
         self._differes: list[tuple[str, dict[str, Any]]] = []
         self._identifiant = uuid.uuid4().hex
@@ -86,7 +87,10 @@ class Session:
         carte = fragment.pop("mapRaw", None)
         if isinstance(carte, bytes):
             # Octets gardés tels quels : la sauvegarde (SEC-09) et la comparaison (SEC-11) en dépendent.
-            self.carte_brute = (carte, instant)
+            self.tranche_carte = (carte, instant)
+            # Une réponse pleine (81 920 octets) n'est qu'une tranche : `carte.demander` assemble.
+            if len(carte) < protocole.TAILLE_TRANCHE_CARTE:
+                self.carte_brute = (carte, instant)
             self.journaliser("carte-recue", octets=len(carte))
         self.etat.appliquer(fragment, instant)
         # Un état émis à l'instant par le robot vaut preuve de présence.
