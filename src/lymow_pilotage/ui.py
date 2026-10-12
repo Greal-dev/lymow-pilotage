@@ -1738,7 +1738,7 @@ class ServeurUI:
         points, decalage = self._lecteur.points(jours=jours), self._recalage.decalage
         if decalage is None:
             return points
-        return [p | {"est_m": p["est_m"] + decalage[0], "nord_m": p["nord_m"] + decalage[1]} for p in points]
+        return [p | {"est_m": round(p["est_m"] + decalage[0], 2), "nord_m": round(p["nord_m"] + decalage[1], 2)} for p in points]
 
     async def _recalage_poser(self, requete: web.Request) -> web.StreamResponse:
         """« Le robot est ici » : l'opérateur indique l'endroit réel du robot sur la carte. Côté outil seulement —
