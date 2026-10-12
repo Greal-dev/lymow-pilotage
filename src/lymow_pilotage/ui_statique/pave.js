@@ -22,6 +22,12 @@
   var ordresDuRobot = null;
   var actives = false; // LA bascule : boutons sur la caméra et clavier, ensemble
   var modeSimulation = false;
+  var Ordres = window.LymowOrdres;
+  var prise = null; // « Prendre la main » en cours
+  var mainPrise = false;
+  var suspendue = false;
+  var connecte = false;
+  var occupeCourant = false;
 
   function $(id) { return document.getElementById(id); }
 
@@ -113,14 +119,10 @@
     if (armees) { try { await page.appeler("/api/direct/desarmer"); } catch (erreur) { signaler(erreur.message); } }
   }
 
-  /* UN geste : « Flèches : activer » arme aussi le pilotage direct (une confirmation), sauf en composition. */
+  /* Active les flèches (arme le pilotage direct, sauf en composition). La confirmation a déjà été donnée
+   * par « Prendre la main » : une seule pour tout le geste. */
   async function activer() {
     if (!enDirect()) { regler(true); signaler(""); return; }
-    var accord = window.confirm(
-      "Activer les flèches ?\n\nChaque flèche fera bouger le robot IMMÉDIATEMENT, sans prévisualisation. "
-      + "STOP : Échap ou Espace. Désactivation automatique après " + config.armement_s + " s sans action."
-    );
-    if (!accord) { return; }
     try {
       jeton = (await page.appeler("/api/direct/armer", { confirmer: true })).jeton;
       regler(true);
@@ -128,6 +130,57 @@
     } catch (erreur) {
       jeton = null;
       signaler("Activation refusée : " + erreur.message);
+    }
+  }
+
+  function contexte() {
+    return {
+      suspendue: suspendue, connecte: connecte, occupe: occupeCourant, ordres: ordresDuRobot, flechesActives: actives,
+      composer: $("composer").checked, simulation: modeSimulation, pauseDemandee: Boolean(prise && prise.pauseDemandee)
+    };
+  }
+
+  /* « Prendre la main » : UN geste, UNE confirmation — liaison rétablie, robot mis en pause s'il tond ou
+   * rentre (et pause attendue), puis flèches actives. Chaque pas attend l'état annoncé par le serveur. */
+  function prendreLaMain() {
+    if (prise) { return; }
+    if (occupeCourant) { signaler("Un ordre est en cours : attendez sa fin, ou STOP."); return; }
+    if (!window.confirm(Ordres.annoncePrendreLaMain(contexte()))) { return; }
+    prise = { pauseDemandee: false, enCours: false, echeance: Date.now() + 60000 };
+    mainPrise = true;
+    poursuivrePrise();
+  }
+
+  async function poursuivrePrise() {
+    if (!prise || prise.enCours) { return; }
+    var suite = Ordres.suitePrendreLaMain(contexte());
+    if (suite === "attendre" && Date.now() < prise.echeance) { return; }
+    var courante = prise;
+    courante.enCours = true;
+    try {
+      if (suite === "liaison") {
+        await page.appeler("/api/liaison/reprendre");
+        suspendue = false;
+      } else if (suite === "pause") {
+        courante.pauseDemandee = true;
+        await page.appeler("/api/pause", { confirmer: true });
+      } else if (suite === "fleches") {
+        await activer();
+        prise = null;
+      } else if (suite === "fait") {
+        prise = null;
+      } else {  // abandon, blocage ou délai dépassé : dit en clair, rien d'autre n'est tenté
+        prise = null;
+        signaler(suite === "bloque"
+          ? "Le robot n'est pas pilotable dans cet état : " + ((ordresDuRobot && ordresDuRobot.mouvement_refuse) || "statut inconnu")
+          : suite === "abandon" ? "Pause non confirmée par le robot : les flèches ne sont pas activées."
+            : "Prise en main interrompue : le robot ne répond pas comme attendu.");
+      }
+    } catch (erreur) {
+      prise = null;
+      signaler("Prise en main interrompue : " + erreur.message);
+    } finally {
+      courante.enCours = false;
     }
   }
 
@@ -216,9 +269,11 @@
   $("pave-annuler").addEventListener("click", page.annulerDerniere);
   $("pave-vider").addEventListener("click", page.viderSequence);
   $("pave-previsualiser").addEventListener("click", page.previsualiserSequence);
-  $("fleches-bascule").addEventListener("click", function () { if (actives) { desactiver(""); } else { activer(); } });
+  // « Flèches : activer » est le reflet de « Prendre la main » : le même geste.
+  $("fleches-bascule").addEventListener("click", function () { if (actives) { desactiver(""); } else { prendreLaMain(); } });
+  $("prendre-main").addEventListener("click", prendreLaMain);
   document.getElementById("vue-camera").addEventListener("click", function (evenement) {
-    if (!actives && !evenement.target.closest("button")) { activer(); }
+    if (!actives && !evenement.target.closest("button")) { prendreLaMain(); }
   });
   $("composer").addEventListener("change", function () {
     if (actives) { desactiver("Mode changé : réactivez les flèches."); }
@@ -260,6 +315,14 @@
       direct = image.direct || direct;
       ordresDuRobot = image.ordres || null;
       modeSimulation = image.mode === "simulation";
+      suspendue = Boolean(image.liaison_suspendue);
+      connecte = Boolean(image.connecte);
+      occupeCourant = Boolean(image.occupe);
+      if (suspendue) { mainPrise = false; }
+      var qui = Ordres.quiALaMain({ suspendue: suspendue, mainPrise: mainPrise, flechesActives: actives });
+      $("etat-main").textContent = Ordres.texteDeLaMain(qui);
+      $("prendre-main").classList.toggle("en-avant", qui !== "outil");
+      poursuivrePrise();
       if (!direct.arme && jeton) {  // expiré, STOP, refus ou échec : le serveur a désarmé — l'activation tombe
         jeton = null;
         regler(false);
@@ -284,6 +347,12 @@
       if (effet !== "desactiver") { return false; }
       desactiver("");
       return true;
+    },
+    /* « Rendre la main » et STOP : les flèches tombent ; « la main » n'est retirée que par « Rendre la main ». */
+    desactiverFleches: function (rendue) {
+      prise = null;
+      if (rendue) { mainPrise = false; }
+      return actives ? desactiver("") : Promise.resolve();
     },
     sequenceChangee: function () {
       faitesEnFile = 0;

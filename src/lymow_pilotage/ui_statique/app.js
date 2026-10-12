@@ -10,6 +10,7 @@
   var Ordres = window.LymowOrdres;
   var occupe = false;
   var liaisonSuspendue = false;
+  var dernieresOrdres = null;
   var dernierEtat = null;
   var recalageAvant = null;
   var recalageResultat = "";
@@ -146,7 +147,10 @@
       recalageAvant = null;
     }
     liaisonSuspendue = Boolean(image.liaison_suspendue);
-    $("rendre-main").textContent = Ordres.libelleLiaison(liaisonSuspendue);
+    dernieresOrdres = image.ordres || null;
+    $("rendre-main").disabled = liaisonSuspendue;
+    $("rendre-main").title = liaisonSuspendue ? "La main est déjà rendue : « Prendre la main » la reprend." : "";
+    avancerRendre();
     afficherAttestation(image.attestation);
     afficherEmission();
     $("appareil").textContent = image.appareil || "";
@@ -483,7 +487,14 @@
   }
 
   async function stop() {
+    // STOP annule TOUT : prévisualisation, séquence composée, flèches et file du direct — puis arrête le robot.
+    // Il ne rend pas la main : on peut repartir aussitôt en réactivant les flèches.
     oublierPrevisualisation("");
+    sequence = [];
+    objectifSequence = null;
+    afficherSequence();
+    $("rendre-choix").hidden = true;
+    if (window.LymowPave) { window.LymowPave.desactiverFleches(false); }
     try {
       var reponse = await appeler("/api/stop");
       if (reponse && reponse.bilan) {
@@ -492,7 +503,7 @@
         vider($("previsualisation-detail"));
         rendre(reponse.bilan, $("previsualisation-detail"));
       } else {
-        noteEmission = "STOP envoyé. Prévisualisez un ordre pour reprendre.";
+        noteEmission = "STOP envoyé : tout est annulé, le robot est arrêté et sa tâche mise en pause. Réactivez les flèches pour repartir.";
       }
     } catch (erreur) {
       noteEmission = "STOP refusé : " + erreur.message;
@@ -648,19 +659,51 @@
   }
   $("onglet-camera").addEventListener("click", function () { montrerOnglet("camera"); });
   $("onglet-carte").addEventListener("click", function () { montrerOnglet("carte"); });
-  $("rendre-main").addEventListener("click", async function () {
-    // Rendre la main : la liaison est fermée et ne se rouvre plus seule ; rien n'est émis vers le robot.
+  // « Rendre la main » : refusé pendant un mouvement ; flèches, direct et attestation tombent ; le robot en
+  // télécommande est attendu ; puis deux choix — laisser en pause, ou reprendre la tâche (garde SEC-12) —
+  // et la liaison est suspendue pour laisser l'application Lymow se connecter.
+  var rendreSansAttendre = false;
+  function avancerRendre() {
+    if ($("rendre-choix").hidden) { return; }
+    var etape = Ordres.etapeRendreLaMain({
+      suspendue: liaisonSuspendue, occupe: occupe, ordres: dernieresOrdres, sansAttendre: rendreSansAttendre
+    });
+    var attente = etape === "attendre";
+    $("rendre-message").textContent = attente
+      ? "Le robot est encore en télécommande : il revient seul en pause après une trentaine de secondes. Patientez…"
+      : (dernieresOrdres && dernieresOrdres.avertissement_position
+        ? dernieresOrdres.avertissement_position + " « Reprendre la tâche » sera refusé dans cet état."
+        : "Que doit faire le robot une fois la main rendue ? « Reprendre la tâche » redémarre les lames.");
+    $("rendre-pause").disabled = false;
+    $("rendre-pause").textContent = attente ? "Rendre la main sans attendre (robot laissé tel quel)" : "Laisser le robot en pause";
+    $("rendre-reprendre").disabled = attente || !(dernieresOrdres && dernieresOrdres.reprise_possible);
+  }
+  async function rendre(reprendre) {
+    rendreSansAttendre = true;
     try {
-      if (liaisonSuspendue) { await appeler("/api/liaison/reprendre"); return; }
-      var reponse = await appeler("/api/liaison/rendre", {});
-      if (reponse.attendre && window.confirm(reponse.message + "\n\nRendre la main sans attendre ?")) {
-        reponse = await appeler("/api/liaison/rendre", { sans_attendre: true });
+      var reponse = await appeler("/api/liaison/rendre", { sans_attendre: true, reprendre: reprendre });
+      if (reponse.suspendue) {
+        $("rendre-choix").hidden = true;
+        $("pause-etat").textContent = "";
+      } else {
+        $("rendre-message").textContent = "La main n'a pas été rendue : " + (reponse.refus || reponse.message || "refus");
       }
-      $("pause-etat").textContent = reponse.message || "";
     } catch (erreur) {
-      $("pause-etat").textContent = "Refusé : " + erreur.message;
+      $("rendre-message").textContent = "Refusé : " + erreur.message;
     }
+  }
+  $("rendre-main").addEventListener("click", async function () {
+    var etape = Ordres.etapeRendreLaMain({ suspendue: liaisonSuspendue, occupe: occupe, ordres: dernieresOrdres, sansAttendre: false });
+    if (etape === "deja") { $("pause-etat").textContent = "La main est déjà rendue : « Prendre la main » la reprend."; return; }
+    if (etape === "refus") { $("pause-etat").textContent = "Un mouvement est en cours : utilisez STOP, puis rendez la main."; return; }
+    if (window.LymowPave) { await window.LymowPave.desactiverFleches(true); }
+    rendreSansAttendre = false;
+    $("rendre-choix").hidden = false;
+    avancerRendre();
   });
+  $("rendre-pause").addEventListener("click", function () { rendre(false); });
+  $("rendre-reprendre").addEventListener("click", function () { rendre(true); });
+  $("rendre-annuler").addEventListener("click", function () { $("rendre-choix").hidden = true; });
   $("pause-raccourci").addEventListener("click", async function () {
     // Une confirmation, puis la pause seule. Aucun mouvement n'est enchaîné : c'est à vous de rappuyer.
     if (!window.confirm("Mettre la tâche du robot en pause, pour prendre la main ?")) { return; }

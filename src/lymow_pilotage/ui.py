@@ -649,6 +649,7 @@ class ServeurUI:
             "tache": etat.resume(session.horloge())["tache_libelle"],  # dite seulement si elle diffère du statut
             # Après un dégagement, la reprise reste proposée clairement (les lames peuvent redémarrer).
             "reprise_possible": etat.statut == socle.WORK_STATUS_PAUSE,
+            "telecommande": etat.statut == socle.WORK_STATUS_REMOTE_CONTROL,
             # SEC-12 : dit AVANT de reprendre ou de renvoyer à la base ; rien si la position est fiable.
             "avertissement_position": securite.avertissement_position(etat.precision_m, etat.ecart_pour_la_garde),
             # Signal revenu mais position calculée douteuse : le recalage assisté est proposé.
@@ -853,6 +854,10 @@ class ServeurUI:
                 bilan, _code = conduite.simuler_ordres([Ordre("stop")], self.cal, self.journal)
                 self._noter("STOP (simulation)")
                 return web.json_response({"bilan": bilan})
+            if self.suspendue:  # STOP reste disponible main rendue : il rétablit la liaison pour émettre
+                async with self._verrou_acces:
+                    self.suspendue = False
+                    await self._rouvrir_liaison()
             if self.session is None:
                 return _refus(503, f"robot injoignable : {self.etat_liaison}")
             self._noter("STOP demandé")
@@ -1307,6 +1312,20 @@ class ServeurUI:
         self.attestation.retirer("main rendue à l'application")
         self._desarmer("main rendue à l'application")
         self.previsualisation = None
+        if corps.get("reprendre") is True:
+            # « Reprendre la tâche » avant de rendre la main : le même ordre que le bouton, avec sa garde de
+            # localisation (SEC-12). Refusé ou en échec : la main n'est PAS rendue, le motif est affiché.
+            if not self.emet:
+                bilan, _code = conduite.simuler_ordres([Ordre("reprendre")], self.cal, self.journal, self._appareil_fictif())
+            elif session is None or not session.lien.connecte:
+                return _refus(503, f"robot injoignable : {self.etat_liaison}")
+            else:
+                self._lancer([Ordre("reprendre")])
+                await asyncio.gather(self.tache, return_exceptions=True)
+                resultat = self.resultat or {}
+                if resultat.get("code_sortie") != 0:
+                    motif = resultat.get("motif") or resultat.get("echec") or "reprise non confirmée"
+                    return web.json_response({"suspendue": False, "attendre": False, "refus": motif, "message": motif})
         async with self._verrou_acces:
             self.suspendue = True
             await self._pile.aclose()

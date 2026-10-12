@@ -171,8 +171,63 @@
     return texte;
   }
 
+  /* Qui a la main ? L'application quand la liaison est suspendue ; l'outil quand il l'a prise et que la
+   * liaison est active (STOP ne la retire pas) ; sinon personne en particulier. */
+  function quiALaMain(c) {
+    if (c.suspendue) { return "application"; }
+    return c.mainPrise || c.flechesActives ? "outil" : "personne";
+  }
+
+  function texteDeLaMain(qui) {
+    if (qui === "outil") { return "Vous avez la main"; }
+    return qui === "application" ? "L'application Lymow a la main — liaison suspendue" : "";
+  }
+
+  /* « Prendre la main » : ce que le geste va faire, dit dans SA confirmation unique. */
+  function annoncePrendreLaMain(c) {
+    var lignes = [];
+    if (c.suspendue) { lignes.push("La liaison avec le robot sera rétablie."); }
+    if (c.ordres && c.ordres.action === "pause") {
+      lignes.push(c.ordres.mouvement_refuse.replace(/ : .*$/, "") + " : il sera mis en pause.");
+    }
+    lignes.push(c.composer
+      ? "Les flèches composeront une séquence (rien ne part sans « Émettre »)."
+      : "Les flèches feront ensuite bouger le robot IMMÉDIATEMENT" + (c.simulation ? " (simulation : rien n'est émis)." : "."));
+    lignes.push("STOP : Échap ou Espace.");
+    return "Prendre la main ?\n\n" + lignes.join("\n");
+  }
+
+  /* « Prendre la main », pas à pas : la prochaine action, au vu de l'état que le serveur vient d'annoncer.
+   * Une seule à la fois ; rien n'est enchaîné à l'aveugle (la pause doit être CONFIRMÉE par le robot). */
+  function suitePrendreLaMain(c) {
+    if (c.suspendue) { return "liaison"; }
+    if (!c.connecte || c.occupe) { return "attendre"; }
+    var ordres = c.ordres || {};
+    var pause = ordres.pause ? ordres.pause.etat : null;
+    if (pause === "en attente") { return "attendre"; }
+    if (ordres.action === "pause") {
+      if (!c.pauseDemandee) { return "pause"; }
+      return pause === "non confirmée" ? "abandon" : "attendre";
+    }
+    if (ordres.mouvement_refuse) { return "bloque"; }  // statut non pilotable : l'attestation est alors proposée
+    return c.flechesActives ? "fait" : "fleches";
+  }
+
+  /* « Rendre la main » : refusé pendant un mouvement (STOP d'abord) ; attendre la fin de la télécommande. */
+  function etapeRendreLaMain(c) {
+    if (c.suspendue) { return "deja"; }
+    if (c.occupe) { return "refus"; }
+    if (c.ordres && c.ordres.telecommande && !c.sansAttendre) { return "attendre"; }
+    return "choisir";
+  }
+
   var api = {
     libelleLiaison: libelleLiaison,
+    quiALaMain: quiALaMain,
+    texteDeLaMain: texteDeLaMain,
+    annoncePrendreLaMain: annoncePrendreLaMain,
+    suitePrendreLaMain: suitePrendreLaMain,
+    etapeRendreLaMain: etapeRendreLaMain,
     sequenceDeRecalage: sequenceDeRecalage,
     bilanDeRecalage: bilanDeRecalage,
     texteSignal: texteSignal,

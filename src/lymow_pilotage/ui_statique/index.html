@@ -21,8 +21,23 @@
     <h1>Lymow <small id="appareil"></small></h1>
     <p><span id="mode" class="pastille">…</span> <strong id="etat-resume"></strong> <span id="liaison"></span>
       <small id="version-serveur" class="version"></small></p>
-    <button id="stop" type="button" class="stop">STOP <small>Échap ou Espace</small></button>
+    <div class="main-boutons">
+      <span id="etat-main" class="etat-main" role="status"></span>
+      <button id="prendre-main" type="button" class="prendre" title="Un seul geste : rétablit la liaison si elle est suspendue, met le robot en pause s'il tond ou rentre à sa base, puis active les flèches.">Prendre la main</button>
+      <button id="rendre-main" type="button" class="rendre" title="Désactive les flèches, propose de laisser le robot en pause ou de reprendre la tâche, puis suspend la liaison pour laisser l'application Lymow se connecter.">Rendre la main</button>
+      <button id="stop" type="button" class="stop" title="Annule tout — mouvement, file d'attente, séquence, prévisualisation — puis arrête le robot et met la tâche en pause.">STOP <small>Échap ou Espace</small></button>
+    </div>
   </header>
+  </div>
+
+  <div id="rendre-choix" class="rendre-choix" role="alertdialog" aria-labelledby="rendre-titre" hidden>
+    <p id="rendre-titre"><strong>Rendre la main à l'application Lymow</strong></p>
+    <p id="rendre-message" class="note"></p>
+    <p class="actions">
+      <button id="rendre-pause" type="button">Laisser le robot en pause</button>
+      <button id="rendre-reprendre" type="button">Reprendre la tâche</button>
+      <button id="rendre-annuler" type="button">Annuler</button>
+    </p>
   </div>
 
   <main>
@@ -47,7 +62,6 @@
             <button id="reprendre-bouton" type="button" data-tache="reprendre" title="Reprend la tâche en pause : les lames peuvent redémarrer. Se prévisualise, puis « Émettre ».">Reprendre</button>
             <button id="base-bouton" type="button" data-tache="base" title="Retour à la base, tâche conservée. Se prévisualise, puis « Émettre ».">Retour base</button>
             <button id="pave-plateau" type="button" title="Plateau de coupe au plus haut : ajouté à la séquence si elle est en composition, sinon prévisualisé.">Plateau haut</button>
-            <button id="rendre-main" type="button" title="Ferme la liaison de cet outil et suspend sa reconnexion : l'application Lymow reprend la main. Rien n'est émis vers le robot.">Rendre la main à l'application</button>
           </p>
           <div class="avis">
             <p class="ligne-etat">

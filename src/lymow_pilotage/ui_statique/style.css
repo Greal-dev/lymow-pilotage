@@ -56,6 +56,16 @@ section, .ordre {
   border-bottom: 1px solid var(--trait);
 }
 .entete p { margin: 0; grid-column: 1; color: var(--discret); font-size: 0.9rem; }
+/* Trois boutons toujours visibles : prendre la main, rendre la main, STOP (le plus gros). */
+.main-boutons { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; justify-content: flex-end; }
+.main-boutons button { min-height: 3.2rem; border-radius: 0.5rem; font-weight: 800; cursor: pointer; padding: 0 0.8rem; }
+.main-boutons .prendre { background: #1565c0; color: #ffffff; border: 0; }
+.main-boutons .prendre.en-avant { outline: 3px solid #ef6c00; }
+.main-boutons .rendre { border: 2px solid var(--trait); }
+.etat-main { font-weight: 700; font-size: 0.9rem; }
+.rendre-choix { margin: 0.5rem auto; max-width: 40rem; padding: 0.6rem 0.9rem; border: 3px solid #1565c0; border-radius: 0.5rem;
+  background: var(--carte); }
+.actions-robot #rendre-main { grid-column: auto; }
 .bandeau-reel {
   background: var(--danger);
   color: #ffffff;
@@ -104,9 +114,7 @@ section, .ordre {
   letter-spacing: 0.04em;
 }
 .stop {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-  min-width: 9rem;
+  min-width: 8rem;
   min-height: 3.6rem;
   background: var(--danger);
   color: #ffffff;
@@ -223,7 +231,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .pas label { display: inline-flex; align-items: center; gap: 0.3rem; margin: 0; }
 .pas select { width: auto; }
 .actions-robot { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.35rem; }
-.actions-robot #rendre-main { grid-column: span 2; }
 .avis p:empty { display: none; }
 .onglets { display: flex; gap: 0.4rem; margin: 0 0 0.3rem; align-items: center; }
 .onglets [role="tab"] { font-weight: 700; padding: 0.3rem 0.9rem; border-radius: 0.4rem 0.4rem 0 0; }

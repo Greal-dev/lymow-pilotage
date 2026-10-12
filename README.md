@@ -86,12 +86,31 @@ navigateur et s'arrête sur Ctrl+C. `lancer-lymow.cmd` (double-clic) lance
 `lymow ui` en simulation.
 
 La page tient en un écran de pilotage, sans défilement en 1366×768. En haut :
-mode, état du robot en une ligne, STOP toujours visible. Dessous, deux
+mode, état du robot en une ligne, et **trois boutons toujours visibles** :
+
+- **Prendre la main** — un seul geste, une seule confirmation : rétablit la
+  liaison si elle est suspendue ; si le robot tond ou rentre à sa base, le met
+  en pause et attend que le robot l'annonce ; puis active les flèches. Si le
+  robot reste non pilotable, rien n'est activé et l'attestation de
+  l'opérateur est proposée. « Flèches : activer » fait la même chose.
+- **Rendre la main** — refusé pendant un mouvement (STOP d'abord) ; les
+  flèches, le pilotage direct et l'attestation tombent ; si le robot est
+  encore en télécommande, la page attend son retour en pause ; puis deux
+  choix : « Laisser le robot en pause » ou « Reprendre la tâche » (garde de
+  localisation SEC-12 : refusée, la main n'est pas rendue) ; enfin la
+  liaison est suspendue pour laisser l'application Lymow se connecter.
+- **STOP** (Échap, Espace) — annule tout : mouvement en cours, file du
+  pilotage direct, séquence composée, prévisualisation, armement ; puis
+  émet l'arrêt (consignes nulles ×3) et la mise en pause de la tâche. Il ne
+  rend pas la main et reste disponible main rendue (il rétablit alors la
+  liaison pour émettre).
+
+Dessous, deux
 colonnes sur écran large (une seule, caméra d'abord, sur écran étroit) :
 
 - **à gauche, les commandes** : statut du robot et précision de position, le
   gros bouton « Flèches », les pas ↑↓ et ←→, les actions (Pause, Reprendre,
-  Retour base, Plateau haut, Rendre la main), les autorisations et refus avec
+  Retour base, Plateau haut), les autorisations et refus avec
   leurs boutons, la séquence et le retour des derniers pas ;
 - **à droite, un cadre à deux onglets** : « Caméra » (flèches en
   surimpression) et « Carte » (position du robot avec son cercle
