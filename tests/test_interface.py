@@ -87,15 +87,16 @@ def test_une_seule_bascule_pour_les_fleches_et_plus_de_bouton_clavier_separe():
     script = (ui.STATIQUE / "pave.js").read_text(encoding="utf-8")
     assert PAGE.count('id="fleches-bascule"') == 1 and "Flèches : activer" in PAGE and 'aria-pressed="false"' in PAGE
     assert "pave-clavier" not in PAGE + script and "Activer le clavier" not in PAGE
-    assert PAGE.count("data-fleche=") == 4 and PAGE.count('data-fleche="haut" aria-label="Avancer" disabled') == 1
+    assert PAGE.count("data-fleche=") == 8 and PAGE.count('data-fleche="haut" aria-label="Avancer"') == 2  # gauche + caméra
     cadre = PAGE[PAGE.index('id="vue-camera"') : PAGE.index('id="vue-carte"')]
     assert cadre.count("data-fleche=") == 4 and 'id="video"' in cadre  # flèches en surimpression de la caméra
     assert "bouton.disabled = !actives" in script and "if (!actives) { return; }" in script and "actives: actives" in script
     # UN geste : la bascule arme aussi le pilotage direct ; plus de second interrupteur.
     assert "direct-interrupteur" not in PAGE + script and 'id="composer" type="checkbox"' in PAGE
-    assert "Composer une séquence (ne pas émettre tout de suite)" in PAGE
+    assert '<input id="composer" type="checkbox"> Composer une séquence</label>' in PAGE
     activer = script[script.index("async function activer()") : script.index("function afficherPastilles")]
-    assert "window.confirm(" in activer and '"/api/direct/armer", { confirmer: true }' in activer and "regler(true)" in activer
+    assert "window.confirm(" in activer and "!dejaConfirme &&" in activer  # une confirmation par session de page
+    assert '"/api/direct/armer", { confirmer: true }' in activer and "regler(true)" in activer
     assert "if (!enDirect()) { regler(true);" in activer  # composition : aucune émission, donc aucun armement
     assert "Simulation : les flèches parcourent le même chemin, rien n'est émis" in activer
     style = (ui.STATIQUE / "style.css").read_text(encoding="utf-8")
@@ -364,8 +365,8 @@ def test_page_propose_pause_et_reprise_au_bon_endroit():
     assert 'id="pause-raccourci" type="button" class="raccourci" hidden>Mettre en pause' in principal
     assert "les lames peuvent redémarrer" in principal and 'id="reprendre-bouton" type="button" data-tache="reprendre"' in principal
     app = (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
-    raccourci = app[app.index('$("pause-raccourci").addEventListener') :][:700]
-    assert "window.confirm(" in raccourci and '"/api/pause", { confirmer: true }' in raccourci
+    raccourci = app[app.index('$("pause-raccourci").addEventListener') : app.index('$("reprise").addEventListener')]
+    assert "window.confirm(" not in raccourci and '"/api/pause", { confirmer: true }' in raccourci  # action immédiate
     assert "/api/emettre" not in raccourci and "previsualiser(" not in raccourci and "fleche" not in raccourci  # rien n'est enchaîné
     pave = (ui.STATIQUE / "pave.js").read_text(encoding="utf-8")
     assert "blocageDesFleches(ordresDuRobot)" in pave
@@ -434,7 +435,7 @@ def test_page_trois_boutons_toujours_visibles_en_tete_dans_l_ordre():
     app = (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
     # « Flèches : activer » est le reflet de « Prendre la main » : le même geste, UNE confirmation.
     assert '$("prendre-main").addEventListener("click", prendreLaMain)' in pave
-    assert "if (actives) { desactiver(\"\"); } else { prendreLaMain(); }" in pave and pave.count("window.confirm(") == 2  # prendre la main ; forcer ce pas
+    assert "if (actives) { desactiver(\"\"); } else { prendreLaMain(); }" in pave and pave.count("window.confirm(") == 1  # prendre la main, la première fois
     stop = app[app.index("  async function stop() {") :][:700]
     assert "sequence = [];" in stop and "oublierPrevisualisation" in stop and "desactiverFleches(false)" in stop
     assert '"/api/liaison/rendre", { sans_attendre: true, choix: choix }' in app

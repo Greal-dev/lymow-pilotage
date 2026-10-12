@@ -29,6 +29,7 @@
   var allures = { auto: null, lente: 0.10, normale: 0.25 };
   var Ordres = window.LymowOrdres;
   var prise = null; // « Prendre la main » en cours
+  var dejaConfirme = false; // la prise en main a été confirmée une fois sur cette page
   var mainPrise = false;
   var suspendue = false;
   var connecte = false;
@@ -113,11 +114,6 @@
     document.querySelectorAll("[data-fleche]").forEach(function (bouton) { bouton.disabled = !actives; });
     $("fleches-bascule").textContent = Fleches.libelleBascule(actives);
     $("fleches-bascule").setAttribute("aria-pressed", String(actives));
-    $("pave-focus").textContent = !actives
-      ? "Flèches inactives. Activées, elles font bouger le robot tout de suite (ou composent une séquence, case cochée)."
-      : enDirect()
-        ? "Flèches ACTIVES — pilotage direct : ↑ ↓ ← → font bouger le robot. Échap ou Espace : STOP."
-        : "Flèches ACTIVES — composition : ↑ ↓ ← → ajoutent une étape, Entrée prévisualise, Retour arrière annule.";
   }
 
   async function desactiver(motif) {
@@ -169,11 +165,13 @@
     if (suite === "attendre" && Date.now() < prise.echeance) { return; }
     var courante = prise;
     if (suite === "confirmer") {
-      if (!window.confirm(Ordres.annoncePrendreLaMain(contexte()))) {
+      // Une seule confirmation par session de page : réarmer après STOP = un clic, sans boîte de dialogue.
+      if (!dejaConfirme && !window.confirm(Ordres.annoncePrendreLaMain(contexte()))) {
         prise = null;
         signaler(courante.depuisSuspension ? "Liaison rétablie ; les flèches ne sont pas activées." : "");
         return;
       }
+      dejaConfirme = true;
       courante.confirme = true;
       mainPrise = true;
       suite = Ordres.suitePrendreLaMain(contexte());
@@ -234,9 +232,7 @@
 
   function afficherDirect() {
     $("bandeau-direct").hidden = !direct.arme;
-    $("direct-etat").textContent = direct.arme
-      ? "Pilotage direct : désactivation automatique dans " + direct.reste_s + " s sans action."
-      : "";
+    $("direct-etat").textContent = Ordres.texteInactivite(direct.arme, direct.reste_s);  // dernière minute seulement
     var composition = !enDirect();
     var vide = page.sequence().length === 0;
     // La séquence ne se manie qu'en composition ; hors composition, ces boutons disent pourquoi ils sont inactifs.
@@ -256,12 +252,11 @@
 
   // --- actions -------------------------------------------------------------------
 
-  /* « Forcer ce pas » : une confirmation, pour UN pas d'avance ou de recul ; la case se décoche aussitôt. */
+  /* « Forcer ce pas » : pour UN pas d'avance ou de recul ; la case se décoche aussitôt. */
   function forcerCePas(direction) {
     if ((direction !== "haut" && direction !== "bas") || !$("pave-forcer").checked) { return false; }
-    $("pave-forcer").checked = false;
-    return window.confirm("Forcer ce pas ? Le garde-fou carte ne le raccourcira pas et ne le refusera pas, même s'il sort "
-      + "de la zone ou entre dans une zone interdite. À faire robot à vue.");
+    $("pave-forcer").checked = false;  // la case cochée EST la demande : un pas, puis elle se décoche
+    return true;
   }
 
   async function flecheDirecte(direction) {
@@ -298,8 +293,8 @@
     bouton.addEventListener("click", function () { fleche(bouton.dataset.fleche); });
   });
   $("pave-plateau").addEventListener("click", function () {
-    // En composition : une étape de plus ; sinon : prévisualisé, puis « Émettre », comme tout ordre.
-    if (enDirect()) { page.previsualiser([{ nom: "plateau-haut" }]); } else { page.ajouterEtape({ nom: "plateau-haut" }); }
+    // En composition : une étape de plus ; sinon : émis tout de suite (ordre sans déplacement).
+    if (enDirect()) { page.lancerTache("plateau-haut"); } else { page.ajouterEtape({ nom: "plateau-haut" }); }
   });
   $("pave-annuler").addEventListener("click", page.annulerDerniere);
   $("pave-vider").addEventListener("click", page.viderSequence);
@@ -363,7 +358,7 @@
       $("pave-avertissement").textContent = [
         image.ordres && image.ordres.liaison_lente ? "Liaison lente : en attente d'une nouvelle trame du robot… (vos appuis restent en file ; STOP reste immédiat)" : "",
         image.ordres && image.ordres.avertissement_pas,
-        image.ordres && image.ordres.immobiles ? image.ordres.immobiles + " pas de suite sans déplacement constaté (désarmement au troisième)." : ""
+        image.ordres && image.ordres.immobiles ? "Pas d'avance : patinage ? (" + image.ordres.immobiles + " de suite) — la main est gardée, insistez ou changez de direction." : ""
       ].filter(Boolean).join(" ");
       connecte = Boolean(image.connecte);
       occupeCourant = Boolean(image.occupe);
@@ -375,7 +370,7 @@
       if (!direct.arme && jeton) {  // expiré, STOP, refus ou échec : le serveur a désarmé — l'activation tombe
         jeton = null;
         regler(false);
-        signaler("Flèches désactivées : pilotage direct désarmé (60 s sans action, STOP ou refus). Réactivez-les.");
+        signaler("Flèches désactivées (STOP, statut du robot, liaison perdue ou 5 min sans action) : un clic les réactive.");
       }
       cap = image.etat && typeof image.etat.cap_deg === "number" ? image.etat.cap_deg : null;
       var texte = JSON.stringify(image.resultat);

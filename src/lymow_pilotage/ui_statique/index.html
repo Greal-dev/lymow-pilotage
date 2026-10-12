@@ -28,6 +28,7 @@
       <button id="stop" type="button" class="stop" title="Annule tout — mouvement, file d'attente, séquence, prévisualisation — puis arrête le robot et met la tâche en pause.">STOP <small>Échap ou Espace</small></button>
     </div>
   </header>
+  <div id="toast" class="toast" role="status" hidden></div>
   </div>
 
   <div id="rendre-choix" class="rendre-choix" role="alertdialog" aria-labelledby="rendre-titre" hidden>
@@ -45,9 +46,10 @@
       <h2 id="titre-pilotage" class="masque">Pilotage</h2>
       <div class="deux-colonnes">
         <div id="bloc-fleches" class="colonne-commandes">
-          <p class="etat-robot">
-            <span id="ordres-etat" class="etat-ordres" role="status"></span>
-            <strong id="localisation" class="localisation" role="status" title="Qualité de localisation, jugée sur la précision horizontale annoncée par le robot : fiable jusqu'à 0,10 m, dégradée jusqu'à 0,50 m, perdue au-delà."></strong>
+          <div id="pastilles" class="pastilles-etat" role="status" aria-label="État du robot"></div>
+          <p class="etat-robot vers-pastilles">
+            <span id="ordres-etat" class="etat-ordres"></span>
+            <strong id="localisation" class="localisation"></strong>
           </p>
           <div id="erreur-robot" class="erreur-robot" role="alert" hidden>
             <p id="erreur-libelle"></p>
@@ -55,56 +57,86 @@
             <button id="erreur-annuler" type="button" title="Émet le seul ordre « annuler la tâche » : le robot s'arrête sur place et se remet en attente. La tâche en cours est abandonnée.">Annuler la tâche et remettre le robot en attente</button>
             <p id="erreur-suite" role="status"></p>
           </div>
-          <p id="localisation-detail" class="note" role="status"></p>
-          <p class="note diagnostic"><label title="Décoché par défaut. Coché : l'outil demande au robot, toutes les 5 s, le détail de sa localisation. Jamais pendant un mouvement, jamais main rendue."><input id="diagnostic-rtk" type="checkbox"> Diagnostic de localisation (interroge le robot toutes les 5 s)</label>
-            <span class="explication">Pour savoir si les corrections de la base arrivent, et de combien la position calculée s'écarte de la position satellite.</span>
-            <strong id="diagnostic-texte" role="status"></strong></p>
-          <button id="fleches-bascule" type="button" class="bascule" aria-pressed="false" title="Active les flèches du clavier et de la caméra. Par défaut chaque flèche fait bouger le robot tout de suite (une confirmation à l'activation ; désactivé après 60 s sans action, sur STOP ou sur un refus).">Flèches : activer</button>
-          <label class="case" title="Cochée : les flèches ajoutent des étapes à une séquence, qui ne part qu'avec « Prévisualiser » puis « Émettre »."><input id="composer" type="checkbox"> Composer une séquence (ne pas émettre tout de suite)</label>
-          <p id="pave-focus" class="note" role="status"></p>
-          <p class="pas">
-            <label title="Pas des flèches ↑ et ↓">Pas ↑↓ <select id="pave-distance"></select></label>
-            <label title="Pas des flèches ← et →">Pas ←→ <select id="pave-angle"></select></label>
-            <label title="Allure des flèches ↑ et ↓. Auto : lente près d'un bord de zone ou quand la position n'est pas fiable, normale sinon.">Allure <select id="pave-allure">
-              <option value="auto" selected>auto</option><option value="lente">lente 0,10 m/s</option><option value="normale">normale 0,25 m/s</option>
-            </select></label>
-            <label title="Décoché par défaut : la carte avertit seulement, le pas part en entier. Coché : un pas qui sortirait de la zone d'après la carte est raccourci ou refusé. Mémorisé sur ce poste."><input id="garde-carte" type="checkbox"> Arrêter aux bords de zone (d'après la carte)</label>
-            <label id="pave-forcer-libelle" hidden title="Lève le garde-fou carte pour le PROCHAIN pas seulement : la carte peut être fausse, et il faut pouvoir sortir d'une zone. Journalisé."><input id="pave-forcer" type="checkbox"> Forcer ce pas</label>
+          <p id="localisation-detail" class="vers-pastilles"></p>
+          <p class="options">
+            <label title="Décoché par défaut. Coché : l'outil demande au robot, toutes les 5 s, le détail de sa localisation (âge des corrections, état de la base). Jamais pendant un mouvement, jamais main rendue."><input id="diagnostic-rtk" type="checkbox"> Diagnostic de localisation</label>
+            <strong id="diagnostic-texte" class="vers-fil" role="status"></strong>
           </p>
-          <p id="bord-zone" class="note" role="status"></p>
-          <p id="recalage-mention" class="note recalage" role="status"></p>
-          <p id="pave-avertissement" class="avertissement" role="status"></p>
-          <p id="phares-etat" class="note" role="status"></p>
-          <p class="note plateau"><meter id="plateau-jauge" min="20" max="100" value="20" hidden></meter> <span id="plateau-etat" role="status"></span></p>
+          <p class="ligne-bascule">
+            <button id="fleches-bascule" type="button" class="bascule" aria-pressed="false" title="Active les flèches du clavier, de ce pavé et de la caméra. Chaque flèche fait bouger le robot tout de suite ; case « Séquence » cochée, elles composent une séquence à prévisualiser. Désactivées d'elles-mêmes après 5 minutes sans action.">Flèches : activer</button>
+            <label class="case" title="Cochée : les flèches ajoutent des étapes à une séquence, qui ne part qu'avec « Prévisualiser » puis « Émettre »."><input id="composer" type="checkbox"> Composer une séquence</label>
+          </p>
+          <p id="pave-focus" class="vers-pastilles"></p>
+          <div class="pilotage">
+            <div class="croix" role="group" aria-label="Flèches : avancer, reculer, tourner ; STOP au centre">
+              <button type="button" class="fleche haut" data-fleche="haut" aria-label="Avancer" title="Avancer (flèche haut)" disabled>↑</button>
+              <button type="button" class="fleche gauche" data-fleche="gauche" aria-label="Tourner à gauche" title="Tourner à gauche (flèche gauche)" disabled>←</button>
+              <button id="stop-centre" type="button" class="stop-centre" title="STOP : annule tout, arrête le robot (Échap ou Espace)">STOP</button>
+              <button type="button" class="fleche droite" data-fleche="droite" aria-label="Tourner à droite" title="Tourner à droite (flèche droite)" disabled>→</button>
+              <button type="button" class="fleche bas" data-fleche="bas" aria-label="Reculer" title="Reculer (flèche bas)" disabled>↓</button>
+            </div>
+            <div class="reglages">
+              <p class="pas">
+                <span class="segment-titre" title="Pas des flèches ↑ et ↓, en mètres. Clavier : touches 1 à 4.">↑↓ m</span>
+                <span id="segments-distance" class="segments" role="group" aria-label="Pas des flèches haut et bas"></span>
+                <select id="pave-distance" class="masque" aria-label="Pas des flèches haut et bas"></select>
+              </p>
+              <p class="pas">
+                <span class="segment-titre" title="Pas des flèches ← et →.">←→</span>
+                <span id="segments-angle" class="segments" role="group" aria-label="Pas des flèches gauche et droite"></span>
+                <select id="pave-angle" class="masque" aria-label="Pas des flèches gauche et droite"></select>
+              </p>
+              <p class="pas">
+                <span class="segment-titre" title="Allure des flèches ↑ et ↓. Auto : lente près d'un bord de zone quand la position est fiable, normale sinon. Lente : 0,10 m/s. Normale : 0,25 m/s.">Allure</span>
+                <span id="segments-allure" class="segments" role="group" aria-label="Allure"></span>
+                <select id="pave-allure" class="masque" aria-label="Allure">
+                  <option value="auto" selected>auto</option><option value="lente">lente</option><option value="normale">normale</option>
+                </select>
+              </p>
+              <p class="options">
+                <label title="Décoché par défaut : la carte avertit seulement, le pas part en entier. Coché : un pas qui sortirait de la zone d'après la carte est raccourci ou refusé. Mémorisé sur ce poste."><input id="garde-carte" type="checkbox"> Arrêter aux bords de zone (d'après la carte)</label>
+                <label id="pave-forcer-libelle" hidden title="Lève le garde-fou carte pour le PROCHAIN pas seulement : la carte peut être fausse, et il faut pouvoir sortir d'une zone. Journalisé."><input id="pave-forcer" type="checkbox"> Forcer ce pas</label>
+              </p>
+              <ol id="file-pastilles" class="pastilles file" aria-label="Pas en attente"></ol>
+            </div>
+          </div>
+          <p id="bord-zone" class="vers-pastilles"></p>
+          <p id="recalage-mention" class="vers-pastilles"></p>
+          <p id="pave-avertissement" class="vers-fil avertissement"></p>
+          <p id="phares-etat" class="vers-pastilles"></p>
+          <p class="vers-pastilles"><meter id="plateau-jauge" min="20" max="100" value="20" hidden></meter> <span id="plateau-etat"></span></p>
           <p class="actions-robot">
-            <button id="phares-bouton" type="button" title="Allume ou éteint les phares du robot : un clic, sans prévisualisation (ordre sans mouvement). Pendant un pas, l'ordre part à sa fin.">Phares : allumer</button>
-            <button id="pause-bouton" type="button" data-tache="pause" title="Met la tâche (ou le retour à la base) en pause : se prévisualise, puis « Émettre ».">Pause</button>
-            <button id="reprendre-bouton" type="button" data-tache="reprendre" title="Reprend la tâche en pause : les lames peuvent redémarrer. Se prévisualise, puis « Émettre ».">Reprendre</button>
-            <button id="base-bouton" type="button" data-tache="base" title="Retour à la base, tâche conservée. Se prévisualise, puis « Émettre ».">Retour base</button>
-            <button id="pave-plateau" type="button" title="Plateau de coupe au plus haut : ajouté à la séquence si elle est en composition, sinon prévisualisé.">Plateau haut</button>
+            <button id="pause-bouton" type="button" data-tache="pause" title="Met la tâche (ou le retour à la base) en pause, tout de suite."><span class="icone" aria-hidden="true">⏸</span> Pause</button>
+            <button id="reprendre-bouton" type="button" data-tache="reprendre" title="Reprend la tâche en pause : les lames peuvent redémarrer. Deux clics (le second confirme)."><span class="icone" aria-hidden="true">▶</span> Reprendre</button>
+            <button id="base-bouton" type="button" data-tache="base" title="Retour à la base, tâche conservée, tout de suite."><span class="icone" aria-hidden="true">⌂</span> Retour base</button>
+            <button id="annuler-bouton" type="button" data-tache="annuler" title="Annule la tâche : le robot s'arrête sur place et se remet en attente. Sur confirmation."><span class="icone" aria-hidden="true">✕</span> Annuler tâche</button>
+            <button id="pave-plateau" type="button" title="Plateau de coupe au plus haut, tout de suite (en composition : ajouté à la séquence)."><span class="icone" aria-hidden="true">⤒</span> Plateau haut</button>
+            <button id="phares-bouton" type="button" title="Allume ou éteint les phares du robot : un clic. Pendant un pas, l'ordre part à sa fin.">Phares : allumer</button>
+            <button id="recalage" type="button" title="Charge dans la séquence un aller-retour en ligne droite (deux pas en avant, deux en arrière, au pas choisi). À n'exécuter qu'en zone dégagée. Effet non garanti : jamais essayé sur ce robot."><span class="icone" aria-hidden="true">⟲</span> Recalage assisté</button>
+            <button id="bon-signal-bouton" type="button" title="Ouvre la carte et cherche l'endroit de bon signal le plus proche."><span class="icone" aria-hidden="true">◎</span> Bon signal</button>
           </p>
           <div class="avis">
             <p class="ligne-etat">
               <button id="pause-raccourci" type="button" class="raccourci" hidden>Mettre en pause</button>
-              <span id="pause-etat" class="note" role="status"></span>
+              <span id="pause-etat" class="vers-fil"></span>
             </p>
             <p class="ligne-etat">
               <span class="attestation-proposition" hidden>
-                <span class="avertissement" data-attestation="message" role="status"></span>
-                <button type="button" data-attestation="poser">Je vois le robot, lames à l'arrêt : autoriser le pilotage 10 min</button>
+                <span class="vers-fil avertissement" data-attestation="message"></span>
+                <button type="button" data-attestation="poser" title="À ne faire que si vous VOYEZ le robot, lames à l'arrêt. Valable 10 minutes.">Je vois le robot, lames à l'arrêt : autoriser le pilotage 10 min</button>
               </span>
-              <span id="attestation-erreur" class="avertissement" role="alert"></span>
+              <span id="attestation-erreur" class="vers-fil avertissement"></span>
             </p>
             <p class="ligne-etat" id="reprendre-rappel" hidden>
-              <span id="reprise-conseil" class="note">Robot en pause : « Reprendre » relance la tâche — les lames peuvent redémarrer.</span>
-              <span id="reprise-avertissement" class="avertissement" role="alert"></span>
+              <span id="reprise-conseil" class="vers-pastilles"></span>
+              <span id="reprise-avertissement" class="vers-fil avertissement"></span>
               <button id="reprendre-quand-meme" type="button" data-tache="reprendre-quand-meme" hidden>Reprendre quand même</button>
-              <button id="recalage" type="button" hidden title="Charge dans la séquence un aller-retour en ligne droite (deux pas en avant, deux en arrière, au pas choisi). À n'exécuter qu'en zone dégagée. Effet non garanti : jamais essayé sur ce robot.">Recalage assisté : aller-retour</button>
             </p>
-            <p id="pave-signal" class="avertissement" role="alert"></p>
+            <p id="pave-signal" class="vers-fil avertissement"></p>
             <p id="direct-etat" class="note" role="status"></p>
-            <p id="pave-file" class="note" role="status"></p>
+            <p id="pave-file" class="vers-pastilles"></p>
           </div>
+          <ol id="fil" class="fil" aria-label="Fil d'activité : les trois dernières lignes" aria-live="polite"></ol>
           <div class="ligne-sequence">
             <svg id="pave-miniature" class="miniature" role="img" aria-label="Tracé schématique du trajet cumulé"></svg>
             <div class="suite">
@@ -116,12 +148,12 @@
                 <button id="pave-annuler" type="button" disabled title="Retour arrière">Annuler la dernière</button>
                 <button id="pave-vider" type="button" disabled>Vider</button>
               </p>
-              <p id="emettre-note" class="note" role="status">Prévisualisez un ordre ou la séquence : « Émettre » s'active ensuite.</p>
+              <p id="emettre-note" class="note" role="status"></p>
               <p id="previsualisation-avertissement" class="avertissement" role="alert" hidden></p>
-              <p id="pave-boutons-note" class="note" role="status"></p>
+              <p id="pave-boutons-note" class="vers-fil"></p>
             </div>
           </div>
-          <ol id="pave-retours" class="retours" aria-label="Retour des derniers pas"></ol>
+          <ol id="pave-retours" class="vers-pastilles" aria-label="Retour des derniers pas"></ol>
           <p class="actions" id="reprise-bloc" hidden>
             <button id="reprise" type="button" title="Recharge les étapes restantes dans la séquence et les prévisualise ; rien n'est émis sans « Émettre ».">Reprendre</button>
           </p>
@@ -372,5 +404,6 @@
   <script src="/statique/pave.js"></script>
   <script src="/statique/carte.js"></script>
   <script src="/statique/volets.js"></script>
+  <script src="/statique/tableau.js"></script>
 </body>
 </html>

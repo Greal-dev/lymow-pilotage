@@ -277,10 +277,10 @@ def test_page_du_pave_etat_complet_et_garde_fous_visibles(tmp_path, monkeypatch)
     script = (ui.STATIQUE / "pave.js").read_text(encoding="utf-8")
     assert "PILOTAGE DIRECT ARMÉ" in page and 'id="bandeau-direct"' in page and "Échap ou Espace" in page
     # Commandes à gauche, puis la caméra à droite, flèches en surimpression de la caméra.
-    assert page.index('id="bloc-pilotage"') < page.index('id="bloc-fleches"') < page.index('id="video"') < page.index('data-fleche=')
+    assert page.index('id="bloc-pilotage"') < page.index('id="bloc-fleches"') < page.index('id="video"') < page.rindex('data-fleche=')
     for identifiant in ("pave-miniature", "pave-total", "pave-retours", "pave-file", "composer", "fleches-bascule"):
         assert f'id="{identifiant}"' in page and f'"{identifiant}"' in script
-    assert page.count("data-fleche=") == 4
+    assert page.count("data-fleche=") == 8  # pavé cliquable à gauche ET surimpression de la caméra
     # Mode file : la flèche écrit dans LA séquence de la page ; aucune émission sans les deux temps.
     assert "page.ajouterEtape(etape)" in script and "/api/emettre" not in script and "/api/previsualiser" not in script
     assert "window.confirm(" in script and '"/api/direct/armer", { confirmer: true }' in script

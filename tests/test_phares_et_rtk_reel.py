@@ -151,7 +151,8 @@ def test_phares_simulation_commande_et_page(capsys, tmp_path, monkeypatch):
 
     executer(scenario())
     page = (ui.STATIQUE / "index.html").read_text(encoding="utf-8")
-    assert page.index('id="phares-bouton"') < page.index('id="pause-bouton"')  # dans la barre d'actions du pilotage
+    grille = page[page.index('<p class="actions-robot">') :]
+    assert 'id="phares-bouton"' in grille[: grille.index("</p>")]  # dans la grille d'actions du pilotage
     if NODE is not None:
         script = ("const M = require(process.argv[1]); process.stdout.write(JSON.stringify(["
                   "M.boutonPhares(null).libelle, M.boutonPhares({allumes:true}).libelle, M.boutonPhares({allumes:false,en_attente:true}).libelle]));")

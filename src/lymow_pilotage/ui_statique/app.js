@@ -111,6 +111,14 @@
 
   // --- état -----------------------------------------------------------------
 
+  var titresDOrigine = {};
+  function griser(id, raison) {
+    var bouton = $(id);
+    if (!(id in titresDOrigine)) { titresDOrigine[id] = bouton.title; }
+    bouton.disabled = Boolean(raison);
+    bouton.title = raison || titresDOrigine[id];
+  }
+
   function appliquer(image) {
     modeReel = image.mode === "réel";
     var demonstration = image.mode === "démonstration";
@@ -141,7 +149,14 @@
     $("localisation").textContent = image.etat ? image.etat.localisation_texte : "";
     $("localisation").className = "localisation " + (image.etat ? image.etat.localisation : "perdue");
     $("localisation-detail").textContent = image.etat ? image.etat.localisation_detail : "";
-    $("recalage").hidden = !(image.ordres && image.ordres.recalage_conseille && !occupe);
+    // Boutons indisponibles : grisés, leur raison en info-bulle — jamais un texte permanent.
+    griser("recalage", !(image.ordres && image.ordres.recalage_conseille) ? "Proposé quand le signal est revenu mais que la position calculée s'écarte de la position satellite." : occupe ? "Un ordre est en cours." : "");
+    griser("reprendre-bouton", image.ordres && image.ordres.reprise_possible ? "" : "Le robot n'est pas en pause : rien à reprendre.");
+    griser("bon-signal-bouton", image.carte_connue ? "" : "Aucune carte connue.");
+    griser("phares-bouton", image.liaison_suspendue ? "La main est rendue à l'application Lymow." : "");
+    ["pause-bouton", "base-bouton", "annuler-bouton", "pave-plateau"].forEach(function (id) {
+      griser(id, image.liaison_suspendue ? "La main est rendue à l'application Lymow." : occupe ? "Un ordre est en cours : attendez sa fin, ou STOP." : "");
+    });
     dernierEtat = image.etat;
     if (recalageAvant && image.resultat && !occupe && JSON.stringify(image.resultat) !== recalageResultat) {
       $("pause-etat").textContent = Ordres.bilanDeRecalage(recalageAvant, image.etat);  // après l'aller-retour
@@ -185,6 +200,10 @@
     // Aucun compte connecté (hors démonstration) : la section « Compte » s'ouvre d'elle-même.
     if (window.LymowVolets && image.compte && !demonstration) { window.LymowVolets.compte(image.compte.connecte); }
     afficherCompte(image.compte);
+    if (window.LymowTableau) {
+      image.alerteBord = $("bord-zone").classList.contains("alerte-carte");
+      window.LymowTableau.afficher(image);
+    }
     if (window.LymowCarte) {
       window.LymowCarte.robot(image.etat, image.ordres && image.ordres.bord ? image.ordres.bord.texte : "");
       window.LymowCarte.connue(Boolean(image.carte_connue));
@@ -665,8 +684,32 @@
       });
     });
   });
+  // Tâches : action immédiate, sans prévisualisation ni boîte de dialogue — sauf « annuler » et « reprendre quand
+  // même » (confirmation), et « reprendre », qui relance les lames : deux clics, le second dans les 5 s.
+  var reprendreArme = 0;
+  async function lancerTache(nom, bouton) {
+    if ((nom === "annuler" || nom === "reprendre-quand-meme") && !window.confirm(nom === "annuler"
+      ? "Annuler la tâche en cours ? Elle est ABANDONNÉE : le robot s'arrête sur place et se remet en attente."
+      : "Reprendre quand même ? La position du robot est imprécise : la tonte reprise ainsi peut être erratique.")) { return; }
+    if (nom === "reprendre" && !Ordres.secondClic(reprendreArme, Date.now())) {
+      reprendreArme = Date.now();
+      dire("Reprendre relance les lames : cliquez une seconde fois pour confirmer (5 s).", "alerte");
+      if (bouton) { bouton.classList.add("a-confirmer"); window.setTimeout(function () { bouton.classList.remove("a-confirmer"); }, 5000); }
+      return;
+    }
+    reprendreArme = 0;
+    try {
+      var reponse = await appeler("/api/tache", { nom: nom, confirmer: true });
+      if (reponse.simulation) { dire("Simulation : « " + nom + " » parcouru, rien n'est émis.", "info"); }
+    } catch (erreur) {
+      dire("« " + nom + " » refusé : " + erreur.message, "alerte");
+    }
+  }
+  function dire(texte, gravite) {
+    if (window.LymowTableau) { window.LymowTableau.dire(texte, gravite); }
+  }
   document.querySelectorAll("[data-tache]").forEach(function (bouton) {
-    bouton.addEventListener("click", function () { previsualiser([{ nom: bouton.dataset.tache }], true); });
+    bouton.addEventListener("click", function () { lancerTache(bouton.dataset.tache, bouton); });
   });
   $("sequence-previsualiser").addEventListener("click", function () { previsualiser(sequence.slice(), false, objectifSequence); });
   $("sequence-vider").addEventListener("click", function () { sequence = []; afficherSequence(); });
@@ -790,8 +833,7 @@
   $("rendre-reprendre").addEventListener("click", function (evenement) { if (clicExplicite(evenement)) { rendreLaMain("reprendre"); } });
   $("rendre-annuler").addEventListener("click", function () { $("rendre-choix").hidden = true; });
   $("pause-raccourci").addEventListener("click", async function () {
-    // Une confirmation, puis la pause seule. Aucun mouvement n'est enchaîné : c'est à vous de rappuyer.
-    if (!window.confirm("Mettre la tâche du robot en pause, pour prendre la main ?")) { return; }
+    // La pause seule, tout de suite. Aucun mouvement n'est enchaîné : c'est à vous de rappuyer.
     try {
       var reponse = await appeler("/api/pause", { confirmer: true });
       $("pause-etat").textContent = reponse.simulation ? "Simulation : pause parcourue, rien n'est émis." : "Pause demandée…";
@@ -870,6 +912,7 @@
     previsualiserSequence: function () { if (sequence.length) { previsualiser(sequence.slice(), false, objectifSequence); } },
     // Trajet vers le bon signal : chargé dans LA séquence, avec son objectif (arrêt dès que la précision est fiable).
     chargerSequence: function (ordres, objectif) { sequence = ordres.slice(); objectifSequence = objectif || null; afficherSequence(); },
-    previsualiser: function (ordres) { previsualiser(ordres, false); }
+    previsualiser: function (ordres) { previsualiser(ordres, false); },
+    lancerTache: function (nom) { return lancerTache(nom, null); }
   };
 })();

@@ -56,7 +56,12 @@ FICHIERS = {
     "fleches.js": "text/javascript",
     "pave.js": "text/javascript",
     "volets.js": "text/javascript",
+    "tableau.js": "text/javascript",
 }
+# Ordres sans mouvement émis d'un clic depuis le tableau de bord (retour du propriétaire, 2026-10-12 : moins
+# d'étapes). La page garde deux clics pour « reprendre » (les lames peuvent redémarrer) et une confirmation
+# pour « annuler » et « reprendre quand même ».
+TACHES_IMMEDIATES = ("pause", "reprendre", "base", "annuler", "plateau-haut", mouvement.REPRISE_FORCEE)
 NOMS_ORDRES = (*mouvement.ETAPES_SEQUENCE, mouvement.ESSAI, *mouvement.TACHES)
 NON_CONNECTE = "non connecté — utilisez le panneau « Compte » de cette page"
 ROUTE_REOUVERTURE = "/api/instance/rouvrir"
@@ -288,6 +293,7 @@ class ServeurUI:
                 web.post("/api/emettre", self._emettre),
                 web.post("/api/stop", self._stop),
                 web.post("/api/pause", self._pause_raccourci),
+                web.post("/api/tache", self._tache_immediate),
                 web.post("/api/erreur/annuler", self._erreur_annuler),
                 web.post("/api/plateau/essai", self._plateau_essai),
                 web.post("/api/phares", self._phares),
@@ -1135,6 +1141,33 @@ class ServeurUI:
             finally:
                 self._stop_demande = False
             return web.json_response({"accepte": True}, status=202)
+
+    async def _tache_immediate(self, requete: web.Request) -> web.StreamResponse:
+        """Un ordre sans mouvement, émis d'un clic : mêmes règles que par la prévisualisation (SEC-01, SEC-02,
+        SEC-12 jugés à l'émission), sans l'étape « Émettre ». Jamais un mouvement ni une séquence."""
+        corps = await self._corps(requete)
+        nom = corps.get("nom") if isinstance(corps, dict) else None
+        if nom not in TACHES_IMMEDIATES or corps.get("confirmer") is not True or set(corps) != {"nom", "confirmer"}:
+            raise ErreurSaisie("tâche inconnue, ou confirmation explicite absente")
+        self._refuser_si_main_rendue()
+        ordres = [Ordre(nom)]
+        if not self.emet:  # SEC-05
+            bilan, _code = conduite.simuler_ordres(ordres, self.cal, self.journal, self._appareil_fictif())
+            self._noter(f"{nom} (simulation)")
+            return web.json_response({"accepte": True, "simulation": True, "bilan": bilan})
+        if self.session is None or not self.session.lien.connecte:
+            return _refus(503, f"robot injoignable : {self.etat_liaison}")
+        if self.occupe or self._stop_demande:
+            return _refus(409, "un ordre ou un STOP est en cours : attendez sa fin")
+        refus = conduite.refuser(ordres, self.cal, self.journal, self.mode)
+        if refus:
+            return _refus(400, str(refus.get("motif") or "ordre refusé"))
+        self.direct.file.clear()
+        self.previsualisation = None
+        self._lancer(ordres)
+        if self.direct.arme:
+            self.direct.prolonger()  # la main reste prise
+        return web.json_response({"accepte": True}, status=202)
 
     async def _pause_raccourci(self, requete: web.Request) -> web.StreamResponse:
         """« Mettre en pause » : UNE confirmation de la page, puis le seul ordre « pause » — rien d'autre,
