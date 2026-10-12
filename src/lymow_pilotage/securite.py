@@ -202,7 +202,9 @@ def _vitesse(demande: float | None, plafond: float, plancher: float, nom: str, s
     return demande
 
 
-def _duree(consigne: float, vitesse: float, facteur: float, plafond: float) -> float:
+def _duree(
+    consigne: float, vitesse: float, facteur: float, plafond: float, affichage: tuple[float, str, int] | None = None
+) -> float:
     """Durée d'émission ; `consigne` et `plafond` dans la même unité (m ou rad)."""
     facteur = _nombre_fini(facteur, "facteur de calibration")
     if facteur <= 0:
@@ -211,9 +213,20 @@ def _duree(consigne: float, vitesse: float, facteur: float, plafond: float) -> f
     commande = consigne / facteur
     if commande > plafond * (1 + 1e-9):
         raise RefusSecurite(
-            "déplacement commandé au-dessus du plafond une fois le facteur de calibration appliqué (SEC-02)"
+            "déplacement commandé au-dessus du plafond une fois le facteur de calibration appliqué"
+            + _maximum_demandable(facteur, affichage)
+            + " (SEC-02)"
         )
     return _duree_bornee(commande / vitesse)
+
+
+def _maximum_demandable(facteur: float, affichage: tuple[float, str, int] | None) -> str:
+    """« … le maximum demandable par ordre est 142° » : plafond × facteur, arrondi vers le bas."""
+    if affichage is None:
+        return ""
+    plafond, unite, pas_par_unite = affichage
+    valeur = math.floor(plafond * facteur * pas_par_unite + 1e-9) / pas_par_unite
+    return f" : avec le facteur {facteur:g}, le maximum demandable par ordre est {valeur:g}{unite}"
 
 
 def _duree_bornee(duree: float) -> float:
@@ -257,7 +270,10 @@ def consigne_translation(
     metres = _nombre_fini(metres, "distance")
     if metres == 0 or abs(metres) > DISTANCE_MAX_M:
         raise RefusSecurite(f"distance refusée : entre 0 (exclu) et {DISTANCE_MAX_M:g} m par ordre (SEC-02)")
-    tenue = _duree(abs(metres), v, facteur_distance, DISTANCE_MAX_M)
+    tenue = _duree(
+        abs(metres), v, facteur_distance, DISTANCE_MAX_M,
+        (DISTANCE_MAX_M, " m", 100),
+    )
     return Consigne(math.copysign(v, metres), 0.0, tenue, "translation", metres)
 
 
@@ -285,7 +301,10 @@ def consigne_rotation(
     degres = _nombre_fini(degres, "angle")
     if degres == 0 or abs(degres) > ANGLE_MAX_DEG:
         raise RefusSecurite(f"angle refusé : entre 0 (exclu) et {ANGLE_MAX_DEG:g}° par ordre (SEC-02)")
-    tenue = _duree(math.radians(abs(degres)), v, facteur_angle, math.radians(ANGLE_MAX_DEG))
+    tenue = _duree(
+        math.radians(abs(degres)), v, facteur_angle, math.radians(ANGLE_MAX_DEG),
+        (ANGLE_MAX_DEG, "°", 1),
+    )
     return Consigne(0.0, math.copysign(v, degres) * signe, tenue, "rotation", degres)
 
 

@@ -350,17 +350,49 @@ def test_constat_de_calibration_rapport_mesure_sur_commande_par_vitesse(tmp_path
     resultat = calibrage.constat(tmp_path, Calibration())
     lent, angle, distance = resultat["constats"]  # triés par grandeur, puis par vitesse
     assert (angle["grandeur"], angle["vitesse"], angle["mesures"]) == ("angle", "0.35 rad/s", 4)
-    assert angle["rapport_mesure_sur_commande"] == pytest.approx(0.787, abs=0.001) and angle["facteur_angle_suggere"] == 1.271
+    assert angle["rapport_mesure_sur_commande"] == pytest.approx(0.787, abs=0.001) and angle["facteur_angle_suggere"] == 0.787
     assert angle["etendue"] == [0.756, 0.807] and angle["dispersion"] == pytest.approx(0.022, abs=0.002)
     assert (lent["vitesse"], lent["mesures"]) == ("0.2 rad/s", 1) and "facteur_angle_suggere" not in lent and "aucune" in lent["suggestion"]
-    assert (distance["grandeur"], distance["mesures"]) == ("distance", 3) and distance["facteur_distance_suggere"] == 1.031
+    assert (distance["grandeur"], distance["mesures"]) == ("distance", 3) and distance["facteur_distance_suggere"] == 0.97
     assert "calibration.toml n'est pas modifié" in resultat["note"]
-    deja = calibrage.constat(tmp_path, Calibration(facteur_angle=1.27))  # facteur déjà appliqué : la suggestion en part
-    assert deja["constats"][1]["facteur_angle_suggere"] == pytest.approx(1.27 / 0.787, abs=0.003)
+    # Le facteur est le rapport réel / consigne : un rapport constaté AVEC un facteur le corrige par produit.
+    deja = calibrage.constat(tmp_path, Calibration(facteur_angle=0.9))
+    assert deja["constats"][1]["facteur_angle_suggere"] == pytest.approx(0.9 * 0.787, abs=0.002)
 
     assert cli.main(["calibration-constat", "--json", "--donnees", str(tmp_path)]) == 0
-    assert json.loads(capsys.readouterr().out)["constats"][1]["facteur_angle_suggere"] == 1.271
+    assert json.loads(capsys.readouterr().out)["constats"][1]["facteur_angle_suggere"] == 0.787
     vide = tmp_path / "vide"
     vide.mkdir()
     assert cli.main(["calibration-constat", "--json", "--donnees", str(vide)]) == 1
     assert "aucun constat" in json.loads(capsys.readouterr().out)["note"]
+
+
+# --- calibration de rotation appliquée (décision du propriétaire, 2026-10-12) -----------------
+
+
+def test_calibration_du_depot_facteur_d_angle_applique_et_distance_inchangee():
+    from lymow_pilotage import config
+
+    cal = config.charger_calibration(ui.STATIQUE.parents[2])
+    assert (cal.facteur_angle, cal.facteur_distance) == (0.79, 1.0)
+    texte = (ui.STATIQUE.parents[2] / "calibration.toml").read_text(encoding="utf-8")
+    assert "2026-10-12" in texte and "calibration-constat" in texte and "NON appliqué" in texte
+
+
+def test_tourner_45_commande_plus_longtemps_et_le_plafond_sec02_tient():
+    sans, avec = securite.consigne_rotation(45.0, 1.0), securite.consigne_rotation(45.0, 0.79)
+    assert avec.duree == pytest.approx(sans.duree / 0.79) and avec.duree > sans.duree  # 2,84 s au lieu de 2,24 s
+    import math
+
+    assert math.degrees(abs(avec.angulaire) * avec.duree) == pytest.approx(45 / 0.79)  # ≈ 57° commandés pour 45° réels
+    for degres in (15.0, 45.0, 90.0, 142.0, -142.0):  # les pas des flèches, et la borne
+        consigne = securite.consigne_rotation(degres, 0.79)
+        assert math.degrees(abs(consigne.angulaire) * consigne.duree) <= 180.0 + 1e-6  # SEC-02 : jamais plus de 180° commandés
+    for degres in (180.0, 143.0, -150.0):
+        with pytest.raises(RefusSecurite) as refus:
+            securite.consigne_rotation(degres, 0.79)
+        assert "avec le facteur 0.79, le maximum demandable par ordre est 142°" in str(refus.value)
+        assert str(refus.value).endswith("(SEC-02)")
+    with pytest.raises(RefusSecurite, match="le maximum demandable par ordre est 1.6 m"):
+        securite.consigne_translation(2.0, facteur_distance=0.8)
+    securite.consigne_rotation(180.0, 1.0)  # sans facteur, 180° reste admis

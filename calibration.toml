@@ -13,7 +13,12 @@ signe_angulaire = 1
 # -> mettre 0.8. Le déplacement commandé (vitesse × durée) reste plafonné à
 # 2 m et 180° : avec 0.5, « avancer 1.5 » est refusé (il commanderait 3 m).
 facteur_distance = 1.0
-facteur_angle = 1.0
+# Constat du 2026-10-12 (journal réel, commande `lymow calibration-constat`) : 12 rotations de 45°
+# commandées à 0,35 rad/s, 30 à 42° mesurés par le robot, rapport mesuré / commandé moyen 0,788
+# (dispersion 0,077). Décision du propriétaire : facteur appliqué, arrondi à deux décimales.
+# Conséquence : l'angle maximal demandable par ordre devient 142° (180° commandés au plus).
+# Distance : rapport constaté 0,94 sur 11 pas à 0,25 m/s — NON appliqué, facteur laissé à 1.0.
+facteur_angle = 0.79
 
 # Disposition de la trame de pilotage manuel :
 #   "mqtt" : PbInput{version, remoteControl (champ 10)}        (Lymow-HA)

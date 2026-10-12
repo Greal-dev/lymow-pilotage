@@ -290,7 +290,16 @@ réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même
    à 0,25 m/s a produit environ 2 m réels, mesurés à l'œil par le
    propriétaire — facteur de distance voisin de 1,0 à cette vitesse, trame
    variante `mqtt`, version 49. `calibration.toml` n'a pas été modifié ;
-   rotation et autres vitesses restent à mesurer.
+   Constat du même jour, 15 h 32 à 15 h 39 (`lymow calibration-constat` sur le
+   journal réel) : 12 rotations de 45° commandées à 0,35 rad/s, 30 à 42°
+   mesurés, rapport mesuré / commandé 0,788 → **`facteur_angle = 0.79`
+   appliqué** dans `calibration.toml` (décision du propriétaire). « tourner
+   45 » dure donc 2,84 s au lieu de 2,24 s, et l'angle maximal demandable par
+   ordre devient 142° : « tourner 180 » est refusé avec ce maximum (SEC-02 :
+   jamais plus de 180° commandés). Distance : rapport 0,94 sur 11 pas à
+   0,25 m/s (0,81 à 1,02), **non appliqué** — `facteur_distance` reste 1.0.
+   Réserve : ces mesures sont la position annoncée par le robot, alors
+   imprécise de plus d'un mètre ; à reprendre position fiable.
 4. Vérifier à l'œil que les lames sont à l'arrêt dans les statuts pause (3),
    erreur (7) et télécommande (6).
 5. `lymow plateau 60 --reel` puis `lymow plateau-haut --reel` : effet réel de

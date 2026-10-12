@@ -80,9 +80,10 @@ def test_avance_signee_le_long_du_cap_de_depart():
 # --- calibration ------------------------------------------------------------
 
 
-def test_calibration_du_depot_egale_les_valeurs_par_defaut():
+def test_calibration_du_depot_ne_differe_des_valeurs_par_defaut_que_par_le_facteur_d_angle():
     racine = Path(__file__).resolve().parents[1]
-    assert config.charger_calibration(racine) == config.Calibration()
+    # Facteur d'angle 0,79 : constat réel du 2026-10-12, décision du propriétaire.
+    assert config.charger_calibration(racine) == config.Calibration(facteur_angle=0.79)
 
 
 def test_calibration_absente_valeurs_par_defaut(tmp_path):

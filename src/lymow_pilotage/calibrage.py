@@ -81,7 +81,9 @@ def constat(dossier: Path, cal: Calibration) -> dict[str, Any]:
             "facteur_actuel": actuels[grandeur],
         }
         if len(rapports) >= MESURES_MIN:
-            ligne[f"facteur_{grandeur}_suggere"] = round(actuels[grandeur] / moyenne, 3)
+            # Le facteur EST le rapport réel / consigne (calibration.toml) : mesuré avec le facteur
+            # actuel, le rapport constaté le corrige par un produit, pas par un quotient.
+            ligne[f"facteur_{grandeur}_suggere"] = round(actuels[grandeur] * moyenne, 3)
         else:
             ligne["suggestion"] = f"aucune : moins de {MESURES_MIN} constats"
         lignes.append(ligne)
