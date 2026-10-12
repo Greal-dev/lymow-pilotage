@@ -79,6 +79,16 @@ def exiger_complete(carte: Carte) -> None:
         raise RefusSecurite(f"carte incomplète ({' ; '.join(carte.manques)}) : aucune retouche possible (SEC-09)")
 
 
+def empechement(carte: Carte, zone: Zone) -> str | None:
+    """Pourquoi cette zone ne peut pas être retouchée (carte ou contour), ou rien si elle le peut."""
+    if not carte.complete:
+        return f"carte incomplète ({' ; '.join(carte.manques)})"
+    reduit, _rangs = geometrie.reduire(zone.contour)
+    if len(reduit) < 3 or not geometrie.est_simple(reduit):
+        return "le contour actuel de la zone n'est pas un polygone simple"
+    return None
+
+
 def controler(carte: Carte, zone: Zone, apres: list[Point], ecart_m: float | None) -> dict[str, Any]:
     """SEC-10 : bornes dures. Un seul manquement lève, avec le motif exact. Rend les mesures."""
     exiger_complete(carte)
@@ -88,17 +98,18 @@ def controler(carte: Carte, zone: Zone, apres: list[Point], ecart_m: float | Non
         securite._nombre_fini(ecart_m, "écart")
         if ecart_m == 0 or abs(ecart_m) > borne:
             raise _refus(f"écart de {ecart_m * 100:g} cm hors bornes (jusqu'à {borne * 100:g} cm, non nul)")
-    if len(geometrie.sans_doublons(avant)) != len(avant):
-        # Constat du 2026-10-12 : des contours réels répètent leur premier point ou doublent un sommet.
-        # Les déplacer sans les désunir n'est pas pris en charge : refus, plutôt qu'un contour abîmé.
-        raise _refus(
-            "le contour de cette zone répète des sommets (fermé sur son premier point, ou points confondus) : "
-            "sa retouche n'est pas prise en charge"
-        )
-    if len(avant) < 3 or not geometrie.est_simple(avant):
-        raise _refus("le contour actuel de la zone n'est pas un polygone simple")
+    motif = empechement(carte, zone)
+    if motif:
+        raise _refus(motif)
     if len(apres) != len(avant):
         raise _refus(f"nombre de sommets modifié ({len(avant)} avant, {len(apres)} après)")
+    # Constat du 2026-10-12 : 25 contours réels répètent leur premier point à la fin et 3 doublent un
+    # sommet. Ces sommets confondus bougent ENSEMBLE et la structure renvoyée au robot est la même,
+    # point pour point ; la géométrie, elle, se juge sur le contour sans ses arêtes nulles.
+    avant, rangs = geometrie.reduire(avant)
+    complet, apres = apres, [apres[rangs.index(rang)] for rang in range(len(avant))]
+    if any(point != apres[rang] for point, rang in zip(complet, rangs)):
+        raise _refus("des sommets confondus du contour seraient désunis")
     if any(geometrie.longueur(a, b) < 1e-4 for a, b in zip(apres, apres[1:] + apres[:1])):
         raise _refus("deux sommets consécutifs confondus")
     if not geometrie.est_simple(apres):
@@ -117,7 +128,9 @@ def controler(carte: Carte, zone: Zone, apres: list[Point], ecart_m: float | Non
     if ecart_m is not None and variation * ecart_m <= 0:
         raise _refus("la surface ne varie pas dans le sens de l'écart demandé")
     for interdite in carte.interdites:
-        rattachee = zone.identifiant in interdite.rattachements
+        # La zone de rattachement est celle que la zone interdite touche (`carte.decoder`) : les autres
+        # identifiants de sa liste désignent des zones voisines, qu'elle ne doit pas bloquer (2026-10-12).
+        rattachee = interdite.parent == zone.identifiant
         if not (rattachee or geometrie.strictement_dans(interdite.contour, avant)):
             continue
         if not geometrie.strictement_dans(interdite.contour, apres):
@@ -137,7 +150,7 @@ def controler(carte: Carte, zone: Zone, apres: list[Point], ecart_m: float | Non
         if geometrie.touche(avant, point) and not geometrie.touche(apres, point):
             raise _refus("la station de charge ne serait plus dans la zone")
     return {
-        "sommets": len(avant), "sommets_deplaces": deplaces,
+        "sommets": len(complet), "sommets_confondus": len(complet) - len(avant), "sommets_deplaces": deplaces,
         "deplacement_max_cm": round(max(ecarts) * 100, 1),
         "surface_avant_m2": round(abs(aire_avant), 2), "surface_apres_m2": round(abs(aire_apres), 2),
         "variation_m2": round(variation, 2),
@@ -157,13 +170,23 @@ def preparer_ajustement(
     ecart = securite._nombre_fini(cm, "écart") / 100.0
     if ecart == 0 or abs(ecart) > securite.AJUSTEMENT_MAX_M:
         raise _refus(f"écart de {cm:g} cm hors bornes (jusqu'à {securite.AJUSTEMENT_MAX_M * 100:g} cm, non nul)")
+    if not (0 <= de < len(zone.contour) and 0 <= a < len(zone.contour)):
+        raise ErreurSaisie(f"indices de sommet attendus entre 0 et {len(zone.contour) - 1}")
+    # Sommets confondus : le calcul se fait sur le contour réduit, puis chaque sommet d'origine
+    # reprend la position de son représentant — même nombre de points, mêmes doublons.
+    reduit, rangs = geometrie.reduire(zone.contour)
     try:
-        indices = geometrie.portion(zone.contour, de, a, cote)
+        indices = geometrie.portion(reduit, rangs[de], rangs[a], cote)
     except ValueError as erreur:
         raise ErreurSaisie(str(erreur)) from None
-    apres = geometrie.en_f32(geometrie.ajuster(zone.contour, indices, ecart, raccord))
+    deplace = geometrie.ajuster(reduit, indices, ecart, raccord) if len(reduit) >= 3 else reduit
+    apres = geometrie.en_f32([deplace[rang] for rang in rangs])
     mesures = controler(carte, zone, apres, ecart)
     avertissements = ["la bande suit les sommets existants : aux angles elle est plus mince que l'écart demandé"]
+    if mesures["sommets_confondus"]:
+        avertissements.append(
+            f"{mesures['sommets_confondus']} sommet(s) confondu(s) avec leur voisin : ils sont déplacés ensemble"
+        )
     if mesures["deplacement_max_cm"] < abs(cm) * 0.99:
         avertissements.append("raccords plus longs que la portion : le déplacement maximal reste sous l'écart demandé")
     sens = "élargir" if cm > 0 else "rogner"

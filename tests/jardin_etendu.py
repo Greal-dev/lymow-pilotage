@@ -8,10 +8,11 @@ grille. Seule la structure observée est reprise (compteurs et ordres de grandeu
 - 19 zones interdites, de 15 à 45 sommets, 14 fermées sur leur premier point ; chacune porte
   de 5 à 12 identifiants (champ 4), dont un à trois seulement sont des zones de la carte, pas
   toujours en tête ; quatre ne sont pas strictement à l'intérieur d'une zone ;
-- des passages {1, 2, 3, 5} de 5 à 9 points, qui touchent leurs deux zones ;
-- un contenu de plus de 81 920 octets : le robot le livre coupé à cette taille.
-La station, l'origine (valeur fictive) et les réglages finaux n'ont PAS été vus en réel
-(ils se trouveraient au-delà de la coupure) : leur présence ici est une hypothèse.
+- des passages {1, 2, 3, 5} de 4 à 10 points et plus, qui touchent leurs deux zones, et UN
+  passage de station {1, 2, 3, 5, 6} dont la seconde extrémité n'est pas une zone ;
+- puis la station (hors de toute zone), deux points (champ 6), l'origine (valeur fictive
+  ici) et des réglages (champs 8, 11, 12) ; pas de champ 5 ni de champ 13 ;
+- un contenu de plus de 81 920 octets : le robot le livre en deux tranches.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ LARGEUR, HAUTEUR = 50.0, 25.0
 NOMMEES = {3: "Zone fictive A", 17: "Zone fictive B", 28: "Zone fictive C", 41: "Zone fictive D", 50: "Zone E"}
 DOUBLEES = (7, 19, 40)
 NOMBRE_INTERDITES = 19
+STATION = (-2.0, 12.5)  # à l'ouest de la zone 0, hors de toute zone
 RATTACHEMENTS = [6] * 6 + [12] * 5 + [11] * 4 + [10] * 2 + [9, 5]
 
 
@@ -126,7 +128,10 @@ def contenu() -> bytes:
     brut = b"".join(pb._field_bytes(1, _zone(k, alea)) for k in range(COLONNES * LIGNES))
     brut += b"".join(pb._field_bytes(2, _interdite(j)) for j in range(NOMBRE_INTERDITES))
     brut += b"".join(pb._field_bytes(3, _passage(numero, a, b)) for numero, (a, b) in enumerate(voisins()))
-    station = pb._field_f32(1, 2.0) + pb._field_f32(2, 12.5) + pb._field_f32(3, 0.0)
-    brut += pb._field_bytes(4, station)
+    quai = [(STATION[0] + (25.0 - STATION[0]) * i / 4, STATION[1]) for i in range(5)]  # de la station à la zone 0
+    de_station = pb._field_str(1, "ps99fict") + pb._field_str(2, identifiant_zone(0)) + pb._field_str(3, "st00fict")
+    brut += pb._field_bytes(3, de_station + pb._field_bytes(5, _polygone(quai)) + pb._field_i32(6, 1))
+    brut += pb._field_bytes(4, pb._field_f32(1, STATION[0]) + pb._field_f32(2, STATION[1]) + pb._field_f32(3, 0.0))
+    brut += pb._field_bytes(6, _point(0.0, 0.0)) + pb._field_bytes(6, _point(550.0, 125.0))
     brut += pb._field_bytes(7, pb._field_f32(1, 10.0) + pb._field_f32(2, 20.0))  # origine fictive
-    return brut + pb._field_bytes(8, pb._field_i32(2, 1)) + pb._field_bytes(13, pb._field_i32(1, 60))
+    return brut + pb._field_bytes(8, pb._field_i32(2, 1)) + pb._field_bytes(11, b"\x08\x32") + pb._field_bytes(12, b"\x08\x01")

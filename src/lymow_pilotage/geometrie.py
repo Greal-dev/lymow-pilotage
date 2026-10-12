@@ -75,12 +75,23 @@ def _aretes(contour: list[Point], ferme: bool = True) -> list[tuple[Point, Point
     return list(zip(contour, suivants))
 
 
-def sans_doublons(contour: list[Point]) -> list[Point]:
-    """Sans les sommets confondus avec le suivant, fermeture comprise.
+def reduire(contour: list[Point]) -> tuple[list[Point], list[int]]:
+    """Contour sans ses arêtes nulles, et pour chaque sommet d'origine le rang de son représentant.
 
-    Constat du 2026-10-12 (carte réelle) : près d'un contour sur deux répète son premier point
-    à la fin, et quelques-uns doublent un sommet. Ces arêtes nulles ne changent pas la forme."""
-    return [a for a, b in zip(contour, contour[1:] + contour[:1]) if a != b]
+    Seuls les sommets EXACTEMENT confondus et consécutifs (fermeture comprise) sont réunis : ce
+    sont les deux seules répétitions vues sur la carte réelle (2026-10-12). Un point repris plus
+    loin dans le contour reste distinct, et le contour réduit n'est alors pas simple."""
+    reduit: list[Point] = []
+    rangs: list[int] = []
+    for i, point in enumerate(contour):
+        if not (i and point == contour[i - 1]):
+            reduit.append(point)
+        rangs.append(len(reduit) - 1)
+    if len(reduit) > 1 and reduit[-1] == reduit[0]:
+        dernier = len(reduit) - 1
+        reduit.pop()
+        rangs = [0 if rang == dernier else rang for rang in rangs]
+    return reduit, rangs
 
 
 def est_simple(contour: list[Point]) -> bool:
