@@ -28,7 +28,7 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
-from . import auth, bon_signal, capture, config, diagnostic, garde_carte, coffre, compte, conduite, demo, fleches, geometrie, liaison, reference, releve, mouvement, rappel, retouche, securite
+from . import auth, bon_signal, capture, config, diagnostic, garde_carte, recalage, coffre, compte, conduite, demo, fleches, geometrie, liaison, reference, releve, mouvement, rappel, retouche, securite
 from . import carte as cartes
 from .config import Calibration
 from .journal import Journal, assainir, declarer_secret, masquer
@@ -36,7 +36,7 @@ from .mouvement import ErreurSaisie, Ordre
 from .securite import RefusSecurite
 from . import protocole
 from .protocole import Categorie
-from .session import Session
+from .session import EchecOrdre, Session
 from .vendor.ha_lymow import const as socle
 
 HOTE = "127.0.0.1"  # jamais 0.0.0.0 : aucune option ne change cette valeur
@@ -71,6 +71,9 @@ DELAI_LIBERATION_S = 10.0
 SUITE_CAPTURE_S = 20.0
 # Après « Mettre en pause » : temps laissé au robot pour annoncer son statut « pause ».
 DELAI_PAUSE_S = 15.0
+# Liaison lente (constat réel du 2026-10-12, 20:23 et 20:25) : sans trame fraîche après un pas, la main est
+# gardée et le pas suivant attend ; elle n'est retirée qu'après ce délai sans AUCUNE trame.
+SANS_TRAME_MAX_S = 45.0
 ATTENTE_DIAGNOSTIC_S = 20.0  # sans réponse du robot au diagnostic de localisation au-delà : c'est dit
 DELAI_ANNULATION_S = 15.0  # après « annuler la tâche », le statut « prêt » est attendu ce temps-là
 # Pas de suite sans déplacement constaté avant de désarmer le pilotage direct (essai réel du 2026-10-12 :
@@ -134,6 +137,20 @@ def _nombre(valeur: Any, entier: bool = False) -> float | int | None:
     if not math.isfinite(valeur) or abs(valeur) > NOMBRE_MAX:
         raise ErreurSaisie("valeur numérique finie attendue")
     return valeur
+
+
+def suite_du_plateau(avant: tuple[int, str] | None, apres: tuple[int, str] | None) -> str:
+    """Après un ordre de plateau et la relecture de la carte : ce que la consigne enregistrée est devenue."""
+    if apres is None:
+        return "hauteur inconnue après l'ordre : le robot ne l'a pas transmise"
+    if avant is None:
+        return f"consigne relue après l'ordre : {apres[0]} mm"
+    if avant[0] != apres[0]:
+        return f"consigne passée de {avant[0]} à {apres[0]} mm"
+    return (
+        f"valeur relue inchangée ({apres[0]} mm) : l'ordre n'a pas été pris en compte, "
+        "ou cette lecture ne reflète pas la position du plateau"
+    )
 
 
 def ordres_depuis(corps: Any) -> list[Ordre]:
@@ -225,6 +242,11 @@ class ServeurUI:
         # SEC-13 : avertissement par défaut ; la case « Arrêter aux bords de zone » est mémorisée sur ce poste.
         self.arret_aux_bords = config.arret_aux_bords(self.dossier)
         self._diagnostic_depuis: float | None = None
+        # Décalage carte / robot : mesure à la station, et recalage d'affichage de l'opérateur (mémorisé).
+        self._recalage = recalage.Memoire(self.dossier)
+        self._station = recalage.SuiviStation()
+        self._liaison_lente = False  # pilotage direct : en attente d'une trame fraîche du robot
+        self._plateau_suite: str | None = None  # ce que la relecture a montré après le dernier ordre de plateau
         self._direct_en_cours = False
         # « Rendre la main à l'application » : liaison fermée, reconnexion automatique suspendue.
         self.suspendue = False
@@ -268,10 +290,14 @@ class ServeurUI:
                 web.post("/api/stop", self._stop),
                 web.post("/api/pause", self._pause_raccourci),
                 web.post("/api/erreur/annuler", self._erreur_annuler),
+                web.post("/api/plateau/essai", self._plateau_essai),
                 web.post("/api/liaison/rendre", self._liaison_rendre),
                 web.post("/api/liaison/reprendre", self._liaison_reprendre),
                 web.post("/api/diagnostic-rtk", self._diagnostic_rtk),
                 web.post("/api/garde-carte", self._garde_carte),
+                web.post("/api/recalage", self._recalage_poser),
+                web.post("/api/recalage/station", self._recalage_station),
+                web.post("/api/recalage/annuler", self._recalage_annuler),
                 web.get("/api/releve", self._releve_lire),
                 web.get("/api/signal", self._signal_proposer),
                 web.post("/api/direct/armer", self._direct_armer),
@@ -528,9 +554,9 @@ class ServeurUI:
         pose, carte = session.etat.pose, session.carte_reference
         age = None if session.etat.recu_pose is None else session.horloge() - session.etat.recu_pose
         fraiche = age is not None and age <= garde_carte.AGE_POSE_MAX_S
-        cle = (None if carte is None else carte.octets, pose, fraiche)
+        cle = (None if carte is None else carte.octets, pose, fraiche, self._recalage.decalage)
         if self._bord[0] != cle:
-            point = None if pose is None else (pose.est_m, pose.nord_m)
+            point = self._sur_la_carte(pose)
             cap = None if pose is None else pose.cap_deg
             devant, derriere = (garde_carte.bord_devant(carte, point, cap, sens) if fraiche else None for sens in (1.0, -1.0))
             inconnue = garde_carte.juger_pas(carte, point, cap, 1.0, session.etat.precision_m, age).motif if devant is None else None
@@ -703,6 +729,7 @@ class ServeurUI:
         etat = None
         if session is not None:
             etat = session.etat.resume(session.horloge())
+            self._recaler_l_affichage(etat)
             age = etat["age_etat_s"]
             etat["perime"] = age is None or age > securite.AGE_MAX_ETAT_S
         image: dict[str, Any] = {
@@ -716,6 +743,8 @@ class ServeurUI:
             "diagnostic_rtk": self.diagnostic_rtk,
             "diagnostic_texte": self._texte_du_diagnostic(),
             "arret_aux_bords": self.arret_aux_bords,
+            "recalage": self._recalage.resume(),
+            "plateau": self._etat_du_plateau(),
             "carte_connue": self._carte_affichee()[0] is not None,  # la page la charge alors d'elle-même
             "direct": {
                 "arme": self.direct.arme, "reste_s": self.direct.reste_s,
@@ -774,6 +803,7 @@ class ServeurUI:
             # Dit AVANT le pas, pas après : le pas reste possible, le propriétaire décide.
             "avertissement_pas": diagnostic.AVERTISSEMENT_PAS if diagnostic.en_erreur(etat.statut) else None,
             "immobiles": self._immobiles,
+            "liaison_lente": self._liaison_lente,
             "bord": self._bord_sans_echec(session),  # SEC-13
             # SEC-12 : dit AVANT de reprendre ou de renvoyer à la base ; rien si la position est fiable.
             "avertissement_position": securite.avertissement_position(etat.precision_m, etat.ecart_pour_la_garde),
@@ -920,7 +950,7 @@ class ServeurUI:
             etat = self.session.etat
             age = None if etat.recu_pose is None else self.session.horloge() - etat.recu_pose
             annonces = garde_carte.annoncer(
-                self.session.carte_reference, None if etat.pose is None else (etat.pose.est_m, etat.pose.nord_m),
+                self.session.carte_reference, self._sur_la_carte(etat.pose),
                 None if etat.pose is None else etat.pose.cap_deg, etat.precision_m, age,
                 [(o.nom, o.valeur) for o in ordres if not o.force], self.arret_aux_bords,
             ) if any(o.nom in ("avancer", "reculer") and not o.force for o in ordres) else []
@@ -963,11 +993,51 @@ class ServeurUI:
             self._objectif_signal = False
         return web.json_response({"accepte": True}, status=202)
 
+    def _hauteur_lue(self) -> tuple[int, str] | None:
+        carte, _meta = self._carte_affichee()
+        return None if carte is None else cartes.hauteur_de_coupe(carte)
+
+    def _etat_du_plateau(self) -> dict[str, Any]:
+        """Ce que l'outil sait de la hauteur du plateau : une CONSIGNE lue dans la carte, datée — ou rien."""
+        try:
+            carte, meta = self._carte_affichee()
+            lue = None if carte is None else cartes.hauteur_de_coupe(carte)
+        except Exception:  # noqa: BLE001 — un affichage ne fait jamais tomber l'état servi à la page
+            lue, meta = None, None
+        if lue is None:
+            return {"mm": None, "maximum_mm": securite.HAUTEUR_MAX_MM, "minimum_mm": securite.HAUTEUR_MIN_MM,
+                    "au_maximum": False, "nature": None, "date": None, "suite": self._plateau_suite}
+        date = reference.libelle(meta) if meta is not None else f"carte reçue à {self.carte_heure or '?'}"
+        return {
+            "mm": lue[0], "maximum_mm": securite.HAUTEUR_MAX_MM, "minimum_mm": securite.HAUTEUR_MIN_MM,
+            "au_maximum": lue[0] >= securite.HAUTEUR_MAX_MM, "nature": lue[1], "date": date, "suite": self._plateau_suite,
+        }
+
+    async def _emettre_puis_relire_le_plateau(self, ordres: list[Ordre], objectif_signal: bool) -> tuple[dict[str, Any], int]:
+        """Après un ordre de plateau : la carte est relue (requête pure déjà permise) et l'outil dit si la consigne
+        enregistrée a changé. La relecture vient APRÈS les ordres, jamais pendant un mouvement."""
+        avant = self._hauteur_lue()
+        bilan, code = await conduite.emettre_ordres(self.session, ordres, self.journal, objectif_signal)
+        try:
+            if self.suspendue or self.session is None or not self.session.lien.connecte:
+                raise RuntimeError("liaison indisponible")
+            await self._charger_la_carte()
+            apres = self._hauteur_lue()
+        except Exception:  # noqa: BLE001 — la relecture est un service, pas une condition de l'ordre
+            self._plateau_suite = "relecture impossible après l'ordre de plateau : hauteur non vérifiée"
+        else:
+            self._plateau_suite = suite_du_plateau(avant, apres)
+        self.journal.ecrire("plateau-relu", avant=avant and avant[0], apres=self._hauteur_lue() and self._hauteur_lue()[0], constat=self._plateau_suite)
+        bilan["plateau_relu"] = self._plateau_suite
+        return bilan, code
+
     def _lancer(self, ordres: list[Ordre], objectif_signal: bool = False) -> None:
         self._munir_du_garde_fou(ordres)
+        plateau = any(ordre.nom in mouvement.PLATEAUX for ordre in ordres)
         self._lancer_travail(
             " ; ".join(str(ordre) for ordre in ordres) + (" (vers le bon signal)" if objectif_signal else ""),
-            lambda: conduite.emettre_ordres(self.session, ordres, self.journal, objectif_signal),
+            (lambda: self._emettre_puis_relire_le_plateau(ordres, objectif_signal)) if plateau
+            else (lambda: conduite.emettre_ordres(self.session, ordres, self.journal, objectif_signal)),
         )
         if ordres == [Ordre("pause")]:  # la page attendra le statut « pause » frais avant de rendre les flèches
             instant = self.session.horloge()
@@ -981,6 +1051,7 @@ class ServeurUI:
         if not any(ordre.nom in ("avancer", "reculer") for ordre in ordres):
             return
         self.session.arret_aux_bords = self.arret_aux_bords
+        self.session.decalage_carte = self._recalage.decalage
         try:
             self._poser_origine(self.session)
         except Exception:  # noqa: BLE001
@@ -1070,6 +1141,38 @@ class ServeurUI:
         self.direct.file.clear()
         self.previsualisation = None
         self._lancer([Ordre("pause")])
+        return web.json_response({"accepte": True}, status=202)
+
+    async def _plateau_essai(self, requete: web.Request) -> web.StreamResponse:
+        """ESSAI — « Plateau : position de nettoyage » / « redescendre » : mode réel seulement, sur confirmation
+        explicite, jamais en séquence. Ordre jamais essayé par le nuage sur ce robot."""
+        corps = await self._corps(requete)
+        nom = corps.get("ordre") if isinstance(corps, dict) else None
+        if nom not in protocole.SIGNAUX_PLATEAU or corps.get("confirmer") is not True or set(corps) != {"ordre", "confirmer"}:
+            raise ErreurSaisie("essai de plateau : « nettoyage » ou « redescendre », avec confirmation explicite")
+        if not self.reel:  # ni simulation, ni démonstration : il n'y a rien à simuler d'un ordre jamais observé
+            return _refus(403, "essai de plateau : en mode réel seulement")
+        self._refuser_si_main_rendue()
+        if self.session is None or not self.session.lien.connecte:
+            return _refus(503, f"robot injoignable : {self.etat_liaison}")
+        if self.occupe or self._stop_demande:
+            return _refus(409, "un ordre ou un STOP est en cours : attendez sa fin")
+        session = self.session
+
+        async def essai() -> tuple[dict[str, Any], int]:
+            self.journal.ecrire("session-reelle", strict=True, ordres=[protocole.LIBELLES_SIGNAUX_PLATEAU[nom]])
+            try:
+                rapport = await mouvement.executer_signal_plateau(session, nom)
+            except (securite.RefusSecurite, EchecOrdre, OSError) as erreur:
+                self.journal.ecrire("ordre-refuse", ordre=protocole.LIBELLES_SIGNAUX_PLATEAU[nom], echec=str(erreur))
+                motif = f"« {protocole.LIBELLES_SIGNAUX_PLATEAU[nom]} » a échoué : {erreur}"
+                return {"mode": "réel", "etapes": [], "interrompue": True, "motif": motif}, 1
+            self.journal.ecrire("ordre-constate", **rapport)
+            return {"mode": "réel", "etapes": [rapport], "interrompue": False, "verdict": rapport["observation"]}, 0
+
+        self.direct.file.clear()
+        self.previsualisation = None
+        self._lancer_travail(protocole.LIBELLES_SIGNAUX_PLATEAU[nom], essai)
         return web.json_response({"accepte": True}, status=202)
 
     async def _erreur_annuler(self, requete: web.Request) -> web.StreamResponse:
@@ -1228,6 +1331,33 @@ class ServeurUI:
             {"accepte": True, "jeton": jeton, "file": [str(o) for o in self.direct.file], "allure": annonce}, status=202
         )
 
+    async def _attendre_une_trame(self) -> bool:
+        """Liaison lente : attend une trame d'état fraîche du robot ; faux si rien n'arrive (45 s depuis l'ordre)."""
+        session = self.session
+        depuis = session.horloge() - mouvement.ATTENTE_CONSTAT_S  # le constat a déjà attendu ce temps-là
+        limite = depuis + SANS_TRAME_MAX_S
+        self._liaison_lente = True
+        self.version += 1
+        try:
+            prochaine = 0.0
+            while session.horloge() < limite:
+                recu = session.etat.recu_statut
+                if recu is not None and recu > depuis:
+                    return True
+                if not session.lien.connecte:
+                    return False
+                if session.horloge() >= prochaine:  # une demande d'état de temps en temps (requête pure)
+                    prochaine = session.horloge() + 3.0
+                    try:
+                        await session.solliciter()
+                    except Exception:  # noqa: BLE001 — la liaison est justement lente
+                        pass
+                await asyncio.sleep(0.2)
+            return False
+        finally:
+            self._liaison_lente = False
+            self.version += 1
+
     async def _derouler_file(self) -> tuple[dict[str, Any], int]:
         """Émet la file, un pas après l'autre ; le premier refus, échec ou constat contraire l'arrête et désarme."""
         etapes: list[dict[str, Any]] = []
@@ -1245,6 +1375,15 @@ class ServeurUI:
                 del self.direct.faites[:-20]
                 self.version += 1
                 contraire = rapport.get("verification") in (mouvement.ANOMALIE, mouvement.AUCUN_ETAT)
+                if code == 0 and rapport.get("verification") == mouvement.AUCUN_ETAT:
+                    # Aucune trame fraîche après le pas : liaison lente. La main est gardée, les appuis restent en
+                    # file ; le pas suivant ne part qu'à l'arrivée d'une trame. 45 s sans aucune : désarmé.
+                    if await self._attendre_une_trame():
+                        self.direct.prolonger()
+                        continue
+                    motif = f"{SANS_TRAME_MAX_S:g} s sans aucune trame du robot : liaison perdue"
+                    code = 1
+                    break
                 # « Le robot n'a pas bougé » : dit en clair, la main est gardée ; désarmé au troisième de suite.
                 immobile = code == 0 and rapport.get("constat") == mouvement.IMMOBILE
                 self._immobiles = self._immobiles + 1 if immobile else 0
@@ -1647,7 +1786,89 @@ class ServeurUI:
     def _relever(self, etat: Any, instant: float) -> None:
         pose, precision = etat.pose, etat.precision_m
         if pose is not None and precision is not None and etat.recu_pose == instant and not self.demonstration:
-            self._releve.noter(pose.est_m, pose.nord_m, precision, etat.donnees.get("rtkSatellites"), instant)
+            self._releve.noter(
+                pose.est_m, pose.nord_m, precision, etat.donnees.get("rtkSatellites"), instant, self._recalage.decalage
+            )
+        self._mesurer_a_la_station(etat, instant)
+
+    def _mesurer_a_la_station(self, etat: Any, instant: float) -> None:
+        """À chaque arrivée à la station : écart entre la position annoncée et la station de la carte, journalisé."""
+        if self.demonstration:
+            return
+        carte, _meta = self._carte_affichee()
+        station = None if carte is None or carte.station is None else (carte.station[0], carte.station[1])
+        pose = etat.pose
+        mesure = self._station.observer(
+            etat.statut, None if pose is None else (pose.est_m, pose.nord_m), etat.recu_pose, etat.precision_m, station, instant,
+        )
+        if mesure is not None:
+            self._recalage.noter_mesure(mesure)
+            self.journal.ecrire("ecart-station", **mesure)
+            self._noter(recalage.texte_mesure(mesure))
+
+    def _sur_la_carte(self, pose: Any) -> tuple[float, float] | None:
+        """La pose annoncée, située sur la carte avec le recalage d'affichage de l'opérateur."""
+        return None if pose is None else recalage.appliquer((pose.est_m, pose.nord_m), self._recalage.decalage)
+
+    def _recaler_l_affichage(self, etat: dict[str, Any]) -> None:
+        """Tout ce que la page place sur la carte passe par ici : marqueur, cercle, position satellite brute."""
+        decalage = self._recalage.decalage
+        if decalage is None:
+            return
+        if etat.get("position_est_m") is not None:
+            etat["position_annoncee"] = [etat["position_est_m"], etat["position_nord_m"]]  # brute, pour mémoire
+            etat["position_est_m"] = round(etat["position_est_m"] + decalage[0], 3)
+            etat["position_nord_m"] = round(etat["position_nord_m"] + decalage[1], 3)
+        if etat.get("position_brute"):
+            etat["position_brute"] = [round(etat["position_brute"][0] + decalage[0], 2), round(etat["position_brute"][1] + decalage[1], 2)]
+
+    def _releve_recale(self, jours: int | None) -> list[dict[str, Any]]:
+        """Le relevé tel qu'il se place sur la carte : valeurs brutes du disque, plus le recalage en cours."""
+        points, decalage = self._lecteur.points(jours=jours), self._recalage.decalage
+        if decalage is None:
+            return points
+        return [p | {"est_m": round(p["est_m"] + decalage[0], 2), "nord_m": round(p["nord_m"] + decalage[1], 2)} for p in points]
+
+    async def _recalage_poser(self, requete: web.Request) -> web.StreamResponse:
+        """« Le robot est ici » : l'opérateur indique l'endroit réel du robot sur la carte. Côté outil seulement —
+        rien n'est envoyé au robot."""
+        corps = await self._corps(requete)
+        if not isinstance(corps, dict) or set(corps) != {"est", "nord"}:
+            raise ErreurSaisie("endroit attendu : « est » et « nord », en mètres dans le repère de la carte")
+        indiquee = (_nombre(corps["est"]), _nombre(corps["nord"]))
+        if indiquee[0] is None or indiquee[1] is None:
+            raise ErreurSaisie("endroit attendu : « est » et « nord », en mètres dans le repère de la carte")
+        etat = self.session.etat if self.session is not None else None
+        age = None if etat is None or etat.recu_pose is None else self.session.horloge() - etat.recu_pose
+        if etat is None or etat.pose is None or age is None or age > recalage.POSE_RECENTE_S:
+            return _refus(409, "position du robot inconnue ou trop ancienne : impossible de mesurer un décalage")
+        try:
+            decalage = recalage.decalage_vers((etat.pose.est_m, etat.pose.nord_m), indiquee)
+        except ValueError as erreur:
+            return _refus(400, str(erreur))
+        return self._recalage_applique(decalage, "indiqué par l'opérateur")
+
+    async def _recalage_station(self, _requete: web.Request) -> web.StreamResponse:
+        decalage = self._recalage.decalage_de_la_mesure()
+        if decalage is None:
+            return _refus(409, "aucun écart n'a encore été mesuré à la station")
+        return self._recalage_applique((round(decalage[0], 2), round(decalage[1], 2)), "écart mesuré à la station")
+
+    def _recalage_applique(self, decalage: tuple[float, float], source: str) -> web.Response:
+        memorise = self._recalage.poser(decalage, source)
+        self.journal.ecrire("recalage-affichage", est_m=decalage[0], nord_m=decalage[1], source=source, memorise=memorise)
+        self._noter(f"carte recalée par l'opérateur : {recalage.texte(decalage)}")
+        self.previsualisation = None  # elle a été jugée avec l'ancienne position
+        self.version += 1
+        return web.json_response(self._recalage.resume() | {"memorise": memorise})
+
+    async def _recalage_annuler(self, _requete: web.Request) -> web.StreamResponse:
+        memorise = self._recalage.annuler()
+        self.journal.ecrire("recalage-affichage-annule", memorise=memorise)
+        self._noter("décalage de carte annulé")
+        self.previsualisation = None
+        self.version += 1
+        return web.json_response(self._recalage.resume() | {"memorise": memorise})
 
     @staticmethod
     def _jours(requete: web.Request) -> int | None:
@@ -1657,7 +1878,7 @@ class ServeurUI:
     async def _releve_lire(self, requete: web.Request) -> web.StreamResponse:
         points = [
             [p["est_m"], p["nord_m"], p["precision_m"], securite.qualite_position(float(p["precision_m"]))]
-            for p in self._lecteur.points(jours=self._jours(requete))
+            for p in self._releve_recale(self._jours(requete))
         ]
         return web.json_response({"points": points})
 
@@ -1672,8 +1893,8 @@ class ServeurUI:
         # Hors de la boucle d'évènements : STOP, l'homme mort et l'écoute du robot restent servis pendant le calcul.
         proposition = await asyncio.to_thread(
             bon_signal.proposer,
-            carte, self._lecteur.points(jours=self._jours(requete)),
-            None if pose is None else (pose.est_m, pose.nord_m), None if pose is None else pose.cap_deg,
+            carte, self._releve_recale(self._jours(requete)),
+            self._sur_la_carte(pose), None if pose is None else pose.cap_deg,
             None if etat is None else etat.precision_m, self.cal.facteur_angle, None, self.cal.facteur_distance,
         )
         return web.json_response(proposition)

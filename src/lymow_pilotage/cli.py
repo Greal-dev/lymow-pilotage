@@ -19,7 +19,7 @@ from typing import Any
 
 import aiohttp
 
-from . import auth, calibrage, capture, carte, compte, conduite, config, journal, liaison, mouvement, protocole, rappel, reference, retouche, securite
+from . import auth, calibrage, capture, carte, compte, conduite, config, journal, liaison, mouvement, protocole, rappel, recalage, reference, retouche, securite
 from .conduite import CODE_ARRET_NON_CONFIRME, CODE_REFUS
 from .journal import Journal, masquer
 from .mouvement import ErreurSaisie, Ordre
@@ -281,6 +281,7 @@ async def _emettre(ordres: list[Ordre], ctx: Contexte, attestee: bool = False) -
             lue = None if ctx.dossier is None else reference.charger(ctx.dossier, session.appareil)
             session.carte_reference = None if lue is None else lue[0]  # SEC-13
             session.arret_aux_bords = config.arret_aux_bords(ctx.dossier)  # même préférence que la page
+            session.decalage_carte = recalage.Memoire(ctx.dossier).decalage  # même recalage d'affichage
             if not attestee:
                 return await conduite.emettre_ordres(session, ordres, ctx.journal)
             # SEC-01b : attestation de cette invocation seulement ; elle meurt avec la commande.

@@ -121,7 +121,7 @@
     var rayon = etat && typeof etat.precision_m === "number" ? etat.precision_m : null;
     if (etat && typeof etat.position_est_m === "number" && typeof etat.position_nord_m === "number") {
       // Position ancienne : le marqueur reste où il était, et c'est dit — le robot ne la transmet plus.
-      var age = typeof etat.age_pose_s === "number" ? etat.age_pose_s : 0;
+      var age = typeof etat.age_position_s === "number" ? etat.age_position_s : 0;
       var note = age > 5
         ? "position reçue il y a " + (age < 90 ? Math.round(age) + " s" : Math.round(age / 60) + " min") + " : le robot ne la transmet plus, le marqueur n'est plus à jour"
         : "";
@@ -182,6 +182,39 @@
   function alerteBord(bord, pas) {
     if (!bord || typeof pas !== "number") { return false; }
     return (typeof bord.devant_m === "number" && bord.devant_m < pas) || (typeof bord.derriere_m === "number" && bord.derriere_m < pas);
+  }
+
+  /* Recalage d'affichage : ce que la page en dit, et ce qu'elle propose. */
+  function etatDuRecalage(recalage, attenteDuClic) {
+    var r = recalage || {};
+    return {
+      texte: attenteDuClic ? "Cliquez sur la carte l'endroit où se trouve réellement le robot (Échap : STOP, comme toujours)." : (r.texte || ""),
+      annuler: Boolean(r.actif),
+      mesure: r.mesure_station || "",
+      utiliserLaMesure: Boolean(r.mesure_station) && !r.actif
+    };
+  }
+
+  /* Hauteur du plateau : une CONSIGNE enregistrée par le robot (lue dans la carte), jamais une mesure — le
+   * robot ne transmet aucune hauteur mesurée. Inconnue : dit tel quel. */
+  function textePlateau(plateau) {
+    var p = plateau || {};
+    var suite = p.suite ? " — " + p.suite : "";
+    if (typeof p.mm !== "number") {
+      return { texte: "Plateau : hauteur inconnue : le robot ne l'a pas transmise" + suite, jauge: null };
+    }
+    var valeur = p.au_maximum ? p.mm + " mm — au maximum" : p.mm + " mm (maximum " + p.maximum_mm + ")";
+    var nature = "consigne enregistrée par le robot (" + (p.nature || "réglage") + (p.date ? ", " + p.date : "") + "), pas une hauteur mesurée";
+    return { texte: "Plateau : " + valeur + " — " + nature + suite, jauge: { min: p.minimum_mm, max: p.maximum_mm, valeur: Math.min(p.mm, p.maximum_mm) } };
+  }
+
+  var CONFIRMATION_ESSAI_PLATEAU = "Ordre jamais essayé par le cloud sur ce robot. À faire robot à vue, mains éloignées du plateau.";
+
+  /* Essais de plateau : proposés en mode réel seulement, hors de tout ordre en cours. */
+  function essaiPlateauPossible(c) {
+    if (c.mode !== "réel") { return { possible: false, motif: "Essais de plateau : en mode réel seulement." }; }
+    if (c.occupe) { return { possible: false, motif: "Un ordre est en cours." }; }
+    return { possible: true, motif: "" };
   }
 
   function enErreur(ordres) {
@@ -271,6 +304,10 @@
     clicRendreAccepte: clicRendreAccepte,
     diagnosticErreur: diagnosticErreur,
     alerteBord: alerteBord,
+    etatDuRecalage: etatDuRecalage,
+    textePlateau: textePlateau,
+    essaiPlateauPossible: essaiPlateauPossible,
+    CONFIRMATION_ESSAI_PLATEAU: CONFIRMATION_ESSAI_PLATEAU,
     texteDeLaMain: texteDeLaMain,
     annoncePrendreLaMain: annoncePrendreLaMain,
     suitePrendreLaMain: suitePrendreLaMain,

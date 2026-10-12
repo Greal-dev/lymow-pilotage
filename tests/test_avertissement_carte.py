@@ -161,7 +161,7 @@ def test_page_bord_en_orange_quand_il_est_avant_la_fin_du_pas_et_forcer_masque_p
 def test_page_le_marqueur_du_robot_suit_chaque_nouvelle_pose():
     position = lambda est, nord, age=0.6: js(  # noqa: E731
         "ordres.js", "M.positionAffichee(a[0], a[1])",
-        {"position_est_m": est, "position_nord_m": nord, "cap_deg": 30.0, "precision_m": 0.02, "age_pose_s": age},
+        {"position_est_m": est, "position_nord_m": nord, "cap_deg": 30.0, "precision_m": 0.02, "age_position_s": age},
         {"est_m": 0.0, "nord_m": 0.0},
     )
     premiere, seconde = position(3.0, 2.0), position(4.5, 2.5)

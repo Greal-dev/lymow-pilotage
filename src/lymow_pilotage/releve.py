@@ -27,7 +27,10 @@ class Releve:
         self.chemin = dossier / FICHIER
         self._dernier: tuple[float, float, float] | None = None  # est, nord, instant
 
-    def noter(self, est: float, nord: float, precision_m: float, satellites: Any, instant: float) -> bool:
+    def noter(
+        self, est: float, nord: float, precision_m: float, satellites: Any, instant: float,
+        decalage: tuple[float, float] | None = None,
+    ) -> bool:
         """Écrit un point s'il est assez loin, ou assez tard, du précédent. Vrai s'il a été écrit."""
         if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (est, nord, precision_m)):
             return False
@@ -39,6 +42,8 @@ class Releve:
             "horodatage": datetime.now().isoformat(timespec="seconds"), "est_m": round(est, 2), "nord_m": round(nord, 2),
             "precision_m": round(precision_m, 2), "satellites": satellites if isinstance(satellites, int) else None,
         }
+        if decalage is not None:  # les valeurs restent BRUTES ; le recalage d'affichage du moment est noté à côté
+            point |= {"decalage_est_m": decalage[0], "decalage_nord_m": decalage[1]}
         try:
             self.chemin.parent.mkdir(parents=True, exist_ok=True)
             if self.chemin.exists() and self.chemin.stat().st_size > TAILLE_MAX_OCTETS:

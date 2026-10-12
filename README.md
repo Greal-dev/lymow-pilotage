@@ -416,6 +416,111 @@ de lui-même avant ou au contact, sa détection reste active en pilotage
 manuel ; noter alors le code affiché. S'il pousse le carton, elle ne l'est
 pas : seuls les garde-fous ci-dessus protègent.
 
+## Hauteur du plateau
+
+Le robot **ne transmet aucune hauteur mesurée du plateau** : dans les
+trames reçues le 2026-10-12, ni la sortie de base (qui porterait la hauteur
+de coupe), ni la hauteur de la configuration du robot ne sont présentes ; et
+le « plateau 100 » réel émis ce jour-là n'a été suivi d'aucune hauteur.
+
+Ce qui se lit : la **consigne enregistrée par le robot**, dans la carte
+(réglages globaux de tonte, hauteur de coupe confirmée par le socle contre
+l'application ; ou réglages de la tâche en cours, s'ils sont présents). La
+carte de référence du 12/10 à 19:38 donne 96 mm. La page l'affiche à gauche,
+avec une jauge : « Plateau : 96 mm (maximum 100) — consigne enregistrée par
+le robot (…), pas une hauteur mesurée », « au maximum » quand c'est le cas,
+« hauteur inconnue : le robot ne l'a pas transmise » sans carte.
+
+Après un ordre de plateau, la carte est relue (requête pure déjà permise,
+après l'ordre, jamais pendant un mouvement) et la page dit : « consigne
+passée de 60 à 100 mm », ou « valeur relue inchangée : l'ordre n'a pas été
+pris en compte, ou cette lecture ne reflète pas la position du plateau ».
+On ne sait pas encore lequel des deux : à constater au premier essai réel.
+
+Aucune demande de lecture nouvelle n'a été ajoutée : le socle sait émettre
+la demande 51 (réglages en cours) mais dit lui-même ne pas en décoder la
+réponse, et aucune capture ne l'atteste.
+
+### Levée de nettoyage du plateau (essai)
+
+L'application sait lever le plateau au-delà de sa course de coupe, pour
+nettoyer les lames. Ce que les sources en disent :
+
+- **attesté** : l'application connaît deux signaux, « levée en un geste »
+  (8) et « redescente » (9), dans la même énumération que les phares ; et
+  la forme du message des phares par le nuage a été capturée par le socle
+  (`10 31 6a 02 40 0a` : configuration du robot, signal 10) ;
+- **supposé** : que le robot accepte les signaux 8 et 9 par le nuage. Deux
+  autres sources les rangent parmi les signaux « Bluetooth seulement » ; le
+  socle ne les émet jamais ;
+- **absent** : tout essai réel par leurs auteurs, la hauteur atteinte, le
+  comportement du robot dans cette position (peut-il rouler ? erreurs de
+  capteur de soulèvement 7 et 8 ?), la façon dont il en sort.
+
+L'outil propose donc deux ordres **expérimentaux**, dans la section repliée
+« Calibration » : « Plateau : position de nettoyage (essai) » et « Plateau :
+redescendre (essai) ». Mode réel seulement ; statut du robot sur la liste
+blanche SEC-01, sans attestation possible ; confirmation au texte
+explicite ; journalisés ; suivis d'une relecture de l'état et d'un constat
+(le plus souvent « aucun changement observable par l'outil » : regardez le
+plateau). Seuls les numéros 8 et 9 peuvent sortir : la même énumération
+porte l'extinction du robot. Aucune séquence automatique « lever, avancer,
+rabaisser » : enchaînez à la main (lever, une flèche de 0,25 m,
+redescendre) après avoir constaté l'effet réel. Si rien ne se passe, c'est
+que le geste est bien réservé au Bluetooth : il faudrait alors capturer ce
+que l'application envoie quand on appuie sur sa levée de nettoyage.
+
+## Carte décalée : mesure et recalage d'affichage
+
+Constat du propriétaire sur place (2026-10-12) : la position affichée est
+décalée d'environ un mètre par rapport au robot réel.
+
+**Mesure à la station.** À chaque arrivée à la station (statut « en
+charge »), l'outil compare la dernière position annoncée à la station de la
+carte, journalise l'écart (`ecart-station`) et l'affiche : « écart
+carte/robot mesuré à la station : 0,9 m vers l'est, le 12/10 à 20:40 ». Un
+écart stable et non nul, d'arrivée en arrivée, mesurerait un décalage de
+carte.
+
+Ce que disent les données du 2026-10-12, relues hors ligne : **une seule**
+présence sur la station (11:12–11:23, batterie de 96 à 99 %, 42 positions
+identiques) ; écart position − station : 0,46 m vers l'ouest, 0,04 m vers
+le nord. L'écart est dans l'axe de la station (latéralement : 4 cm) ; il
+peut tenir à la géométrie de l'accostage (point de référence du robot,
+point de la station) autant qu'à un décalage de carte. Aucune arrivée « en
+charge » n'a été enregistrée ce jour-là, et la précision n'était pas encore
+relevée le matin. **Un décalage stable n'est donc pas établi** : il faut
+plusieurs arrivées. Le mètre constaté le soir suit une perte de signal
+(précision de 1 à 4,7 m l'après-midi) ; il peut venir de l'estimation du
+robot plutôt que de la carte.
+
+**« Le robot est ici »** (onglet Carte) : cliquez le bouton, puis l'endroit
+réel du robot sur la carte. L'outil enregistre le décalage entre la
+position annoncée et l'endroit indiqué (« décalage appliqué : 1,2 m vers
+l'est, 0,4 m vers le nord »), le mémorise avec sa date (`recalage.json` du
+dossier de données, lu aussi par la commande) et l'applique partout où il
+place le robot : marqueur et cercle d'incertitude, avertissement de bord de
+zone, cible et trajet « bon signal », relevé affiché (le fichier du relevé
+garde les valeurs brutes, avec le décalage du moment). La mention « carte
+recalée par l'opérateur » reste affichée ; « Annuler le décalage » le
+retire. Si un écart a été mesuré à la station, « Utiliser l'écart mesuré à
+la station » l'applique en un clic. 20 m au plus ; une position annoncée de
+plus de 60 s ne sert pas de repère.
+
+**Ce recalage ne concerne que l'affichage de l'outil : rien n'est envoyé au
+robot.** Si la carte du robot est réellement décalée, le robot lui-même
+navigue et tond avec cette carte décalée. L'outil ne peut pas corriger la
+carte interne en bloc : seul le contour d'UNE zone est modifiable, les
+zones interdites et les passages ne le sont pas. La correction durable
+passe par l'application Lymow (recalage de la station, ou nouvelle
+cartographie).
+
+**Liaison lente.** Si aucune trame d'état fraîche n'arrive dans les 12 s qui
+suivent un pas direct, la main n'est plus retirée : la page affiche
+« liaison lente : en attente d'une nouvelle trame du robot… », les appuis
+restent en file et le pas suivant ne part qu'à l'arrivée d'une trame. La
+main n'est retirée qu'après 45 s sans aucune trame. STOP reste immédiat.
+
 ## Retour vers le bon signal
 
 But : quand le robot a perdu sa position précise, le ramener là où le signal

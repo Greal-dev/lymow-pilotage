@@ -170,6 +170,28 @@ def trame_arret(cal: Calibration) -> Trame:
     return trame_consigne(0.0, 0.0, cal)
 
 
+# ESSAI — levée de nettoyage du plateau. Ce qui est attesté par le socle : l'enveloppe
+# PbInput{version, robotConfig(13){signal(8)}} (phares du robot, capturée : 10 31 6a 02 40 0a / 0b) et les
+# numéros 8 (levée en un geste) et 9 (redescente), lus dans l'énumération de l'application. Ce qui est
+# SUPPOSÉ : que le robot les accepte par le nuage — deux autres sources les disent « Bluetooth seulement ».
+# Jamais essayé. Seuls ces deux numéros sortent d'ici : la même énumération porte l'extinction du robot.
+CHAMP_ROBOT_CONFIG, CHAMP_SIGNAL = 13, 8
+SIGNAUX_PLATEAU: dict[str, int] = {"nettoyage": 8, "redescendre": 9}
+LIBELLES_SIGNAUX_PLATEAU = {
+    "nettoyage": "plateau : position de nettoyage (essai)", "redescendre": "plateau : redescendre (essai)",
+}
+
+
+def trame_signal_plateau(nom: str, cal: Calibration) -> Trame:
+    """L'un des deux signaux de plateau, et rien d'autre : tout autre nom est refusé."""
+    if nom not in SIGNAUX_PLATEAU:
+        raise ValueError("signal de plateau inconnu : nettoyage ou redescendre")
+    signal = SIGNAUX_PLATEAU[nom]
+    octets = _version(cal.version_protocole) + pb._field_bytes(CHAMP_ROBOT_CONFIG, pb._field_i32(CHAMP_SIGNAL, signal))
+    champs = {"version": cal.version_protocole, "robotConfig": {"signal": signal}, "essai": "jamais émis par le nuage sur ce robot"}
+    return Trame(LIBELLES_SIGNAUX_PLATEAU[nom], Categorie.REGLAGE, octets, champs)
+
+
 def trame_hauteur(millimetres: int, cal: Calibration) -> Trame:
     octets = encode_set_cut_height(
         millimetres, variante=cal.variante_hauteur, version=cal.version_protocole

@@ -72,7 +72,9 @@
             <label id="pave-forcer-libelle" hidden title="Lève le garde-fou carte pour le PROCHAIN pas seulement : la carte peut être fausse, et il faut pouvoir sortir d'une zone. Journalisé."><input id="pave-forcer" type="checkbox"> Forcer ce pas</label>
           </p>
           <p id="bord-zone" class="note" role="status"></p>
+          <p id="recalage-mention" class="note recalage" role="status"></p>
           <p id="pave-avertissement" class="avertissement" role="status"></p>
+          <p class="note plateau"><meter id="plateau-jauge" min="20" max="100" value="20" hidden></meter> <span id="plateau-etat" role="status"></span></p>
           <p class="actions-robot">
             <button id="pause-bouton" type="button" data-tache="pause" title="Met la tâche (ou le retour à la base) en pause : se prévisualise, puis « Émettre ».">Pause</button>
             <button id="reprendre-bouton" type="button" data-tache="reprendre" title="Reprend la tâche en pause : les lames peuvent redémarrer. Se prévisualise, puis « Émettre ».">Reprendre</button>
@@ -146,6 +148,9 @@
               <button id="carte-zoom-moins" type="button" aria-label="Dézoomer">−</button>
               <button id="carte-recadrer" type="button">Tout voir</button>
               <button id="carte-robot-cadrer" type="button" disabled title="position du robot inconnue">Cadrer sur le robot</button>
+              <button id="recalage-ici" type="button" title="La position affichée est décalée ? Cliquez ici, puis cliquez sur la carte l'endroit où se trouve réellement le robot. L'outil décale alors son affichage (marqueur, bords de zone, trajets). Rien n'est envoyé au robot.">Le robot est ici</button>
+              <button id="recalage-annuler" type="button" hidden>Annuler le décalage</button>
+              <button id="recalage-station" type="button" hidden title="Applique comme décalage d'affichage l'écart mesuré quand le robot est arrivé à sa station.">Utiliser l'écart mesuré à la station</button>
               <label class="case" title="La carte reste centrée sur le robot"><input id="carte-suivre" type="checkbox" checked> suivre le robot</label>
               <label class="case"><input id="carte-noms" type="checkbox" checked> noms</label>
               <label class="case" title="Précision de position relevée au fil des passages : vert jusqu'à 0,10 m, orange jusqu'à 0,50 m, rouge au-delà."><input id="carte-precision" type="checkbox"> précision relevée</label>
@@ -170,6 +175,7 @@
               <span id="signal-etat" class="note" role="status"></span>
             </p>
             <p class="note"><span id="carte-note" role="status"></span> <span id="carte-position" role="status"></span></p>
+            <p class="note"><strong id="recalage-texte" class="recalage" role="status"></strong> <span id="recalage-mesure" role="status"></span></p>
           </div>
         </div>
       </div>
@@ -273,6 +279,15 @@
       <summary>Calibration</summary>
       <section aria-labelledby="titre-calibration">
         <h2 id="titre-calibration" class="masque">Calibration</h2>
+      <div id="plateau-essais" class="ordre">
+        <h3>Plateau : position de nettoyage (essai)</h3>
+        <p class="note">Ordres EXPÉRIMENTAUX, en mode réel seulement. L'application lève le plateau au-delà de sa course de coupe pour nettoyer les lames ; les sources disent ce geste réservé au Bluetooth. La forme émise ici est celle des phares du robot, avec le numéro de la levée : <strong>jamais essayée par le nuage sur ce robot</strong>. Rien ne dit que le robot peut rouler dans cette position. Enchaînez à la main : lever, une flèche de 0,25 m, redescendre — après avoir vu l'effet réel.</p>
+        <p class="actions">
+          <button type="button" data-plateau-essai="nettoyage">Plateau : position de nettoyage (essai)</button>
+          <button type="button" data-plateau-essai="redescendre">Plateau : redescendre (essai)</button>
+        </p>
+        <p id="plateau-essai-etat" class="note" role="status"></p>
+      </div>
       <form class="ordre" data-ordre="essai-arret-auto">
         <h3>Essai d'arrêt automatique</h3>
         <p class="note">Calibration, robot à vue : une seule consigne avant, puis silence, puis arrêt.

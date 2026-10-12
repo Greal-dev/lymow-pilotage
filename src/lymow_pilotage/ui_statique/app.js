@@ -155,6 +155,18 @@
       $("erreur-annuler").disabled = occupe;
       $("erreur-suite").textContent = erreur.suite;
     }
+    $("recalage-mention").textContent = image.recalage && image.recalage.actif ? image.recalage.texte : "";
+    var essai = Ordres.essaiPlateauPossible({ mode: image.mode, occupe: occupe });
+    document.querySelectorAll("[data-plateau-essai]").forEach(function (bouton) { bouton.disabled = !essai.possible; });
+    if (!essai.possible) { $("plateau-essai-etat").textContent = essai.motif; }
+    var plateau = Ordres.textePlateau(image.plateau);
+    $("plateau-etat").textContent = plateau.texte;
+    $("plateau-jauge").hidden = !plateau.jauge;
+    if (plateau.jauge) {
+      $("plateau-jauge").min = plateau.jauge.min;
+      $("plateau-jauge").max = plateau.jauge.max;
+      $("plateau-jauge").value = plateau.jauge.valeur;
+    }
     liaisonSuspendue = Boolean(image.liaison_suspendue);
     $("diagnostic-rtk").checked = Boolean(image.diagnostic_rtk);
     $("diagnostic-texte").textContent = image.diagnostic_texte || "";
@@ -172,6 +184,7 @@
     if (window.LymowCarte) {
       window.LymowCarte.robot(image.etat, image.ordres && image.ordres.bord ? image.ordres.bord.texte : "");
       window.LymowCarte.connue(Boolean(image.carte_connue));
+      window.LymowCarte.recalage(image.recalage);
     }
     if (window.LymowPave) { window.LymowPave.appliquer(image); }
     var bloc = $("bloc-etat");
@@ -654,6 +667,17 @@
   $("sequence-previsualiser").addEventListener("click", function () { previsualiser(sequence.slice(), false, objectifSequence); });
   $("sequence-vider").addEventListener("click", function () { sequence = []; afficherSequence(); });
   $("emettre").addEventListener("click", emettre);
+  document.querySelectorAll("[data-plateau-essai]").forEach(function (bouton) {
+    bouton.addEventListener("click", async function () {
+      if (!window.confirm(bouton.textContent + "\n\n" + Ordres.CONFIRMATION_ESSAI_PLATEAU)) { return; }
+      try {
+        await appeler("/api/plateau/essai", { ordre: bouton.dataset.plateauEssai, confirmer: true });
+        $("plateau-essai-etat").textContent = "Ordre émis : le résultat s'affiche dans « Résultat ». Regardez le plateau.";
+      } catch (erreur) {
+        $("plateau-essai-etat").textContent = "Refusé : " + erreur.message;
+      }
+    });
+  });
   $("garde-carte").addEventListener("change", async function () {
     try {
       await appeler("/api/garde-carte", { arreter: $("garde-carte").checked });

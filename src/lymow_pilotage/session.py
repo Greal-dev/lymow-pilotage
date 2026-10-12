@@ -66,6 +66,9 @@ class Session:
         self.carte_reference: Any = None
         # SEC-13 : faux (défaut) = la carte avertit seulement ; vrai = elle raccourcit ou refuse. Posé par l'appelant.
         self.arret_aux_bords = False
+        # Recalage d'affichage de l'opérateur (est, nord), posé par l'appelant : ajouté à la pose pour la situer
+        # sur la carte. Rien n'en part vers le robot.
+        self.decalage_carte: tuple[float, float] | None = None
         # SEC-01b : posée par l'appelant (page ou commande), jamais par la session elle-même.
         self.attestation: Attestation | None = None
         self._differes: list[tuple[str, dict[str, Any]]] = []

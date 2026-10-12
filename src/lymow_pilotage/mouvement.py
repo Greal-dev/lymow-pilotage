@@ -19,7 +19,7 @@ from collections.abc import Coroutine
 from dataclasses import dataclass
 from typing import Any
 
-from . import diagnostic, garde_carte, protocole, securite
+from . import diagnostic, garde_carte, protocole, recalage, securite
 from .config import Calibration
 from .etat import LIBELLES_STATUT, Pose
 from .securite import Consigne, RefusSecurite
@@ -460,6 +460,11 @@ def _surveiller(session: Session, attestable: bool = False) -> None:
         raise EchecOrdre(f"mouvement interrompu en cours de route : {refus}") from None
 
 
+def _sur_la_carte(session: Session, pose: Pose | None) -> tuple[float, float] | None:
+    """La pose annoncée, située sur la carte : avec le recalage d'affichage de l'opérateur s'il y en a un."""
+    return None if pose is None else recalage.appliquer((pose.est_m, pose.nord_m), session.decalage_carte)
+
+
 def _age_de_la_pose(session: Session) -> float | None:
     recue = session.etat.recu_pose
     return None if recue is None else session.horloge() - recue
@@ -480,7 +485,7 @@ def _garder_le_pas(session: Session, ordre: Ordre) -> tuple[Ordre, dict[str, Any
     pose, precision = session.etat.pose, session.etat.precision_m
     sens = 1.0 if ordre.nom == "avancer" else -1.0
     jugement = garde_carte.juger_pas(
-        session.carte_reference, None if pose is None else (pose.est_m, pose.nord_m),
+        session.carte_reference, _sur_la_carte(session, pose),
         None if pose is None else pose.cap_deg, sens * ordre.valeur, precision, _age_de_la_pose(session),
     )
     infos: dict[str, Any] = {"garde_carte": jugement.motif}
@@ -586,7 +591,7 @@ async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
     if "garde_carte" in garde_fou and not session.arret_aux_bords:  # la carte, après le pas aussi
         apres = session.etat.pose
         suite = garde_carte.juger_pas(
-            session.carte_reference, None if apres is None else (apres.est_m, apres.nord_m),
+            session.carte_reference, _sur_la_carte(session, apres),
             None if apres is None else apres.cap_deg, math.copysign(1.0, consigne.lineaire), session.etat.precision_m,
             _age_de_la_pose(session),
         )
@@ -710,6 +715,36 @@ async def executer_plateau(session: Session, ordre: Ordre = Ordre("plateau-haut"
         "hauteur_avant_mm": hauteur_avant,
         "hauteur_apres_mm": session.etat.hauteur_coupe_mm if rapport["etat_rafraichi"] else None,
     } | rapport
+
+
+async def executer_signal_plateau(session: Session, nom: str) -> dict[str, Any]:
+    """ESSAI : levée de nettoyage du plateau, ou redescente (voir `protocole.trame_signal_plateau`).
+
+    SEC-01 strict : état frais, liste blanche, AUCUNE attestation (le plateau est un organe mobile). Après
+    l'ordre, l'état est relu et l'outil dit ce qu'il a pu observer — le plus souvent rien : il ne reçoit
+    aucune hauteur mesurée."""
+    trame = protocole.trame_signal_plateau(nom, session.cal)
+    avant = await _exiger_lames_arret(session)  # SEC-01, sans attestation
+    etat = session.etat
+    vu_avant = (etat.statut, tuple(etat.donnees.get("errorCodes") or ()), tuple(etat.donnees.get("warningCodes") or ()))
+    session.journal.ecrire(
+        "ordre-emis", strict=True, ordre=trame.nom, sujet=session.sujet, trame=trame.description(), essai=True,
+    )
+    instant = session.horloge()
+    await session.publier(trame, securite.DELAI_ARRET_S)
+    rapport = await constater(session, avant, instant, None)
+    vu_apres = (etat.statut, tuple(etat.donnees.get("errorCodes") or ()), tuple(etat.donnees.get("warningCodes") or ()))
+    if not rapport["etat_rafraichi"]:
+        observe = "aucun état relu après l'ordre : effet inconnu"
+    elif vu_apres == vu_avant:
+        observe = "aucun changement observable par l'outil (il ne reçoit aucune hauteur mesurée) : regardez le plateau"
+    else:
+        resume = etat.resume(session.horloge())
+        observe = (
+            f"changement observé — statut : {resume['statut_libelle']} ; erreurs : {', '.join(resume['erreurs']) or 'aucune'} ; "
+            f"avertissements : {', '.join(resume['avertissements']) or 'aucun'}"
+        )
+    return {"mode": "réel", "ordre": trame.nom, "essai": True, "observation": observe} | rapport
 
 
 async def executer_tache(session: Session, nom: str) -> dict[str, Any]:
