@@ -161,6 +161,17 @@
       dessin.appendChild(titre(svg("circle", "carte-brute", { cx: brute[0], cy: -brute[1], r: 4 * parPixel }),
         "position satellite brute — " + (etatRobot.localisation_detail || "")));
     }
+    var annoncee = etatRobot && etatRobot.position_annoncee;
+    if (robot && robot.source === "pose" && annoncee) {
+      dessin.appendChild(svg("line", "carte-decalage", { x1: annoncee[0], y1: -annoncee[1], x2: robot.est, y2: -robot.nord }));
+      dessin.appendChild(titre(svg("circle", "carte-annoncee", { cx: annoncee[0], cy: -annoncee[1], r: 5 * parPixel }),
+        "position annoncée par le robot (avant recalage)"));
+      var valeur = svg("text", "carte-decalage-texte", {
+        x: (annoncee[0] + robot.est) / 2, y: -(annoncee[1] + robot.nord) / 2 - 6 * parPixel, "font-size": 13 * parPixel, "text-anchor": "middle"
+      });
+      valeur.textContent = window.LymowOrdres.distanceDuDecalage(annoncee, [robot.est, robot.nord]);
+      dessin.appendChild(valeur);
+    }
     if (robot && robot.rayon) {  // cercle d'incertitude, au rayon annoncé par le robot
       dessin.appendChild(titre(svg("circle", "carte-incertitude", {
         cx: robot.est, cy: -robot.nord, r: robot.rayon
@@ -421,7 +432,7 @@
     dessin.setPointerCapture(evenement.pointerId);
   });
   dessin.addEventListener("pointermove", function (evenement) {
-    if (!glisse) { return; }
+    if (!glisse || attenteIci) { return; }  // en pointage, la carte ne glisse pas
     var dx = evenement.clientX - glisse.x, dy = evenement.clientY - glisse.y;
     if (Math.abs(dx) + Math.abs(dy) > 4) { glisse.bouge = true; }
     if (!glisse.bouge) { return; }
@@ -433,7 +444,8 @@
   dessin.addEventListener("pointerup", function (evenement) {
     var etait = glisse;
     glisse = null;
-    if (etait && !etait.bouge && attenteIci) { indiquerLeRobot(versCarte(evenement)); return; }
+    // Pointage : l'endroit du relâchement compte, même si la main a bougé de quelques pixels (ou fait glisser).
+    if (attenteIci) { indiquerLeRobot(versCarte(evenement)); return; }
     if (etait && !etait.bouge) { choisirSommet(versCarte(evenement)); } // un clic sans glisser, sur un sommet
   });
   dessin.addEventListener("dblclick", function (evenement) {
@@ -450,17 +462,25 @@
     $("recalage-annuler").hidden = !dit.annuler;
     $("recalage-station").hidden = !dit.utiliserLaMesure;
     $("recalage-ici").textContent = attenteIci ? "Annuler le pointage" : "Le robot est ici";
+    $("recalage-bandeau").hidden = !attenteIci;
     dessin.classList.toggle("attente-clic", attenteIci);
   }
   function recaler(route, corps) {
     page.appeler(route, corps).then(function (reponse) { dernierRecalage = reponse; afficherRecalage(); })
-      .catch(function (erreur) { $("recalage-texte").textContent = "Recalage refusé : " + erreur.message; });
+      .catch(function (erreur) {
+        $("recalage-texte").textContent = "Recalage refusé : " + erreur.message;
+        if (window.LymowTableau) { window.LymowTableau.dire("Recalage refusé : " + erreur.message, "alerte"); }
+      });
   }
   function indiquerLeRobot(position) {
     attenteIci = false;
     recaler("/api/recalage", { est: position.x, nord: -position.y });  // l'axe vertical de l'écran est inversé
   }
   $("recalage-ici").addEventListener("click", function () { attenteIci = !attenteIci; afficherRecalage(); });
+  // Échap annule le pointage (et reste un STOP, comme partout : la page le traite de son côté).
+  document.addEventListener("keydown", function (evenement) {
+    if (evenement.key === "Escape" && attenteIci) { attenteIci = false; afficherRecalage(); }
+  }, true);  // en phase de capture : la page retient Échap pour STOP avant la phase de remontée
   $("recalage-annuler").addEventListener("click", function () { recaler("/api/recalage/annuler", {}); });
   $("recalage-station").addEventListener("click", function () { recaler("/api/recalage/station", {}); });
 

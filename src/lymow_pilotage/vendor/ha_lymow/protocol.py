@@ -12,7 +12,8 @@ Modifications par rapport à l'original :
   diagnostics RTK retirés ; du profil d'appareil seules les versions logicielles
   sont lues (adresse IP, adresse MAC, numéro de série, SSID jamais décodés) ;
   de la configuration robot seules la hauteur de coupe (``rcCutHeight``) et, depuis le
-  2026-10-12, l'état des phares (``isOpenLed``, champ 7) sont lus ;
+  2026-10-12, l'éclairage (``camLedStatus`` champ 12, ``vehLedStatus`` champ 13, plage horaire des
+  phares champs 14 et 15) sont lus ;
 - ``encode_query_robot_config`` : version de protocole en paramètre (défaut
   inchangé : 49) ;
 - ``encode_userctrl`` (générique, tout code) non recopié : les seuls codes
@@ -268,8 +269,21 @@ def decode_pboutput(pb_bytes: bytes) -> dict[str, Any]:
         cut_height = _first(_decode_fields(robot_config_raw), 3)
         if isinstance(cut_height, int):
             state["rcCutHeight"] = _signed32(cut_height)
-        # Phares du robot : champ 7 (booléen). Un booléen faux n'est pas transmis : absent = éteints.
-        state["isOpenLed"] = _first(_decode_fields(robot_config_raw), 7) == 1
+        # Éclairage (constat sur trames réelles, 2026-10-12) : champ 12 = phares de la caméra, champ 13 = voyants
+        # LED ; niveaux 1 à 3 = allumé, 4 = éteint. Champs 14 et 15 : plage d'allumage des phares, heure et
+        # minute en temps universel. Une réponse partielle ne porte pas tous ces champs : seuls les présents comptent.
+        config = _decode_fields(robot_config_raw)
+        for field_no, key in ((12, "camLedStatus"), (13, "vehLedStatus")):
+            level = _first(config, field_no)
+            if isinstance(level, int) and 0 <= level <= 4:
+                state[key] = level
+        for field_no, key in ((14, "openLedTime"), (15, "closeLedTime")):
+            raw_time = _first(config, field_no)
+            if isinstance(raw_time, bytes):
+                hm = _decode_fields(raw_time)
+                hour, minute = _first(hm, 1) or 0, _first(hm, 2) or 0
+                if isinstance(hour, int) and isinstance(minute, int) and 0 <= hour < 24 and 0 <= minute < 60:
+                    state[key] = [hour, minute]
 
     # GPS / RTK (field 6 of outer PbOutput):
     #   f1=satellites(int), f2=eastM(float32), f3=northM(float32), f4=rtkStatus(int)

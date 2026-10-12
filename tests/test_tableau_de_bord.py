@@ -68,7 +68,7 @@ def test_actions_en_grille_de_boutons_et_cibles_d_au_moins_quarante_pixels():
     grille = GAUCHE[GAUCHE.index('<p class="actions-robot">') :]
     grille = grille[: grille.index("</p>")]
     libelles = [re.sub(r"<[^>]+>", "", b).strip() for b in re.findall(r"<button[^>]*>(.*?)</button>", grille)]
-    assert [re.sub(r"^\S+\s", "", libelle) if not libelle.startswith("Phares") else libelle for libelle in libelles] == [
+    assert [re.sub(r"^\S+\s", "", libelle) for libelle in libelles] == [
         "Pause", "Reprendre", "Retour base", "Annuler tâche", "Plateau haut", "Phares : allumer", "Recalage assisté", "Bon signal",
     ]
     assert "Plateau bas" not in PAGE  # ambigu : n'existe pas

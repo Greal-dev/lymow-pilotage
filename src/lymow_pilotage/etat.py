@@ -7,6 +7,7 @@ réception, fournir libellés et résumé affichable. N'émet rien.
 from __future__ import annotations
 
 import math
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -181,11 +182,34 @@ class Etat:
             morceaux.append(texte if ecart[1] else texte + " (indicatif : coordonnées en simple précision)")
         return " ; ".join(morceaux)
 
+    def _eclairage(self, cle: str) -> bool | None:
+        """Niveau d'éclairage annoncé par le robot : 1 à 3 = allumé, 4 = éteint ; sinon inconnu."""
+        niveau = self.donnees.get(cle)
+        if niveau in (1, 2, 3):
+            return True
+        return False if niveau == 4 else None
+
     @property
     def phares(self) -> bool | None:
-        """Phares du robot d'après sa configuration ; inconnu tant qu'aucune configuration n'a été reçue."""
-        valeur = self.donnees.get("isOpenLed")
-        return valeur if isinstance(valeur, bool) else None
+        """Phares (éclairage de la caméra), d'après la configuration du robot."""
+        return self._eclairage("camLedStatus")
+
+    @property
+    def voyants(self) -> bool | None:
+        """Voyants LED du robot, d'après sa configuration."""
+        return self._eclairage("vehLedStatus")
+
+    @property
+    def plage_des_phares(self) -> str | None:
+        """Plage d'allumage des phares, en heure locale (« 20:30–21:30 ») ; chaîne vide si aucune ; rien si inconnue."""
+        debut, fin = self.donnees.get("openLedTime"), self.donnees.get("closeLedTime")
+        if not (isinstance(debut, list) and isinstance(fin, list)):
+            return None
+        if debut == fin:
+            return ""
+        base = datetime.now(timezone.utc)
+        locales = [base.replace(hour=h, minute=m).astimezone().strftime("%H:%M") for h, m in (debut, fin)]
+        return "–".join(locales)
 
     @property
     def hauteur_coupe_mm(self) -> int | None:
@@ -229,6 +253,7 @@ class Etat:
             "wifi_rssi_dbm": d.get("wifiRssiDbm"),
             "hauteur_coupe_mm": self.hauteur_coupe_mm,
             "phares": self.phares,
+            "voyants": self.voyants,
             "micrologiciel": d.get("softwareVersion") or d.get("fwVersion"),
             "age_etat_s": None if age is None else round(age, 1),
         }

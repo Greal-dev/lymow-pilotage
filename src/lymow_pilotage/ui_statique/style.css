@@ -235,14 +235,16 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .pas { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; margin: 0.2rem 0; }
 .pas label { display: inline-flex; align-items: center; gap: 0.3rem; margin: 0; white-space: nowrap; }
 #bord-zone { margin: 0; }
-#phares-etat { margin: 0; }
-#phares-etat:empty { display: none; }
 .plateau { margin: 0.15rem 0; }
 .plateau meter { width: 4.5rem; vertical-align: middle; }
 .recalage { color: #ef6c00; }  /* carte recalée par l'opérateur : mention permanente */
 #recalage-mention { margin: 0; }
 #recalage-mention:empty { display: none; }
-.vue-carte svg.attente-clic { cursor: crosshair; }
+.cadre-carte svg.attente-clic { cursor: crosshair; }  /* mode pointage : une croix, et rien ne glisse */
+.bandeau-pointage { margin: 0 0 0.3rem; padding: 0.4rem 0.7rem; border-radius: 0.4rem; background: #ef6c00; color: #ffffff; font-weight: 700; }
+.carte-decalage { stroke: #ef6c00; stroke-width: 2px; stroke-dasharray: 6 4; }
+.carte-annoncee { fill: none; stroke: #ef6c00; stroke-width: 2px; }
+.carte-decalage-texte { fill: #ef6c00; font-weight: 700; }
 #bord-zone.alerte-carte { color: #ef6c00; font-weight: 700; }  /* le bord est avant la fin du pas demandé */
 .diagnostic .explication { display: block; }
 .diagnostic strong:empty { display: none; }
@@ -360,3 +362,5 @@ button.pastille-etat { cursor: pointer; min-height: 2.5rem; }
 .toast.erreur { border-left-color: var(--danger); }
 #bloc-pilotage:not(.composition) .ligne-sequence, #bloc-pilotage:not(.composition) #volet-details { display: none; }
 #direct-etat:empty { display: none; }
+.vue-carte input[type="checkbox"] { width: auto; margin: 0; }
+.actions-robot { grid-template-columns: repeat(4, minmax(0, 1fr)); }

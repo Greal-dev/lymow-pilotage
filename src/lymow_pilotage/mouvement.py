@@ -45,7 +45,8 @@ EXPOSITION_ESSAI = (
 )
 RAPPEL_ESSAI = "l'observation visuelle fait foi : cette lecture n'est qu'un indice"
 PLATEAUX = ("plateau", "plateau-haut")
-PHARES = {"phares-allumer": True, "phares-eteindre": False}  # ordres sans mouvement
+PHARES = {"phares-allumer": True, "phares-eteindre": False}  # éclairage de la caméra : ordres sans mouvement
+VOYANTS = {"voyants-allumer": True, "voyants-eteindre": False}  # ordres sans mouvement
 TACHES = {
     "reprendre": socle.USER_CTRL_RESUME,
     "base": socle.USER_CTRL_RECHARGE_DOCK,
@@ -220,6 +221,8 @@ def simuler(ordre: Ordre, cal: Calibration, appareil: str | None) -> dict[str, A
         }
     elif ordre.nom in PLATEAUX:
         trame = protocole.trame_hauteur(hauteur_de(ordre, cal), cal)
+    elif ordre.nom in VOYANTS:
+        trame = protocole.trame_voyants(VOYANTS[ordre.nom], cal)
     elif ordre.nom in PHARES:
         trame = protocole.trame_phares(PHARES[ordre.nom], cal)
     elif ordre.nom == "stop":
@@ -720,8 +723,8 @@ async def executer_plateau(session: Session, ordre: Ordre = Ordre("plateau-haut"
     } | rapport
 
 
-def texte_phares(transmis: bool | None, dernier: bool | None) -> str:
-    """L'état des phares tel qu'il est connu : transmis par le robot, sinon le dernier ordre envoyé."""
+def texte_voyants(transmis: bool | None, dernier: bool | None) -> str:
+    """L'état des voyants LED tel qu'il est connu : transmis par le robot, sinon le dernier ordre envoyé."""
     if transmis is not None:
         return "allumés (d'après la configuration du robot)" if transmis else "éteints (d'après la configuration du robot)"
     if dernier is not None:
@@ -729,10 +732,39 @@ def texte_phares(transmis: bool | None, dernier: bool | None) -> str:
     return "état inconnu (non transmis)"
 
 
-async def executer_phares(session: Session, allumer: bool, relire: bool = True) -> dict[str, Any]:
-    """Phares du robot : un ordre sans mouvement, sans précondition de statut. `relire` : la configuration du
-    robot est redemandée ensuite (requête pure) pour dire l'état qu'il annonce ; sans relecture, un seul message."""
+ATTENTE_PHARES_S = 4.0  # le robot annonce le nouveau niveau dans sa configuration, relue après l'ordre
+
+
+def constat_phares(demande: bool, avant: bool | None, apres: bool | None) -> str:
+    """Le robot a-t-il obéi ? D'après le niveau d'éclairage qu'il annonce lui-même."""
+    if apres is None:
+        return "phares : état non transmis après l'ordre — regardez le robot"
+    etat = "allumés" if apres else "éteints"
+    if apres == demande:
+        return f"phares : {etat} d'après le robot"
+    return f"phares : aucun changement ({etat} d'après le robot)"
+
+
+async def executer_phares(session: Session, allumer: bool) -> dict[str, Any]:
+    """Phares (éclairage de la caméra) : ordre sans mouvement, sans précondition de statut ; puis la
+    configuration du robot est relue (requête pure) pour dire s'il a obéi."""
     trame = protocole.trame_phares(allumer, session.cal)
+    avant = session.etat.phares
+    session.journal.ecrire("ordre-emis", strict=True, ordre=trame.nom, sujet=session.sujet, trame=trame.description())
+    instant = session.horloge()
+    await session.publier(trame, securite.DELAI_ARRET_S)
+    await session.solliciter()
+    relu = await session.attendre("statut", instant, ATTENTE_PHARES_S)
+    while relu and session.etat.phares != allumer and session.horloge() - instant < ATTENTE_PHARES_S:
+        await session.dormir(0.4)  # la configuration peut suivre la trame d'état de peu
+    apres = session.etat.phares if relu else None
+    return {"mode": "réel", "ordre": trame.nom, "emis": True, "etat_rafraichi": relu, "constat": constat_phares(allumer, avant, apres)}
+
+
+async def executer_voyants(session: Session, allumer: bool, relire: bool = True) -> dict[str, Any]:
+    """Voyants LED du robot : un ordre sans mouvement, sans précondition de statut. `relire` : la configuration du
+    robot est redemandée ensuite (requête pure) pour dire l'état qu'il annonce ; sans relecture, un seul message."""
+    trame = protocole.trame_voyants(allumer, session.cal)
     session.journal.ecrire("ordre-emis", strict=True, ordre=trame.nom, sujet=session.sujet, trame=trame.description())
     instant = session.horloge()
     await session.publier(trame, securite.DELAI_ARRET_S)
@@ -740,8 +772,8 @@ async def executer_phares(session: Session, allumer: bool, relire: bool = True) 
     if relire:
         await session.solliciter()
         relu = await session.attendre("statut", instant, 3.0)
-        transmis = session.etat.phares if relu else None
-        rapport |= {"etat_rafraichi": relu, "phares": texte_phares(transmis, allumer)}
+        transmis = session.etat.voyants if relu else None
+        rapport |= {"etat_rafraichi": relu, "voyants": texte_voyants(transmis, allumer)}
         if relu and transmis is not None and transmis != allumer:
             rapport["constat"] = "la configuration relue n'a pas (encore) changé : regardez le robot"
     return rapport
@@ -919,6 +951,8 @@ async def executer(session: Session, ordre: Ordre) -> dict[str, Any]:
         return await executer_plateau(session, ordre)
     if ordre.nom == "stop":
         return await executer_arret(session)
+    if ordre.nom in VOYANTS:
+        return await executer_voyants(session, VOYANTS[ordre.nom])
     if ordre.nom in PHARES:
         return await executer_phares(session, PHARES[ordre.nom])
     return await executer_tache(session, ordre.nom)

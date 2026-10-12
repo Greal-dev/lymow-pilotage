@@ -153,7 +153,6 @@
     griser("recalage", !(image.ordres && image.ordres.recalage_conseille) ? "Proposé quand le signal est revenu mais que la position calculée s'écarte de la position satellite." : occupe ? "Un ordre est en cours." : "");
     griser("reprendre-bouton", image.ordres && image.ordres.reprise_possible ? "" : "Le robot n'est pas en pause : rien à reprendre.");
     griser("bon-signal-bouton", image.carte_connue ? "" : "Aucune carte connue.");
-    griser("phares-bouton", image.liaison_suspendue ? "La main est rendue à l'application Lymow." : "");
     ["pause-bouton", "base-bouton", "annuler-bouton", "pave-plateau"].forEach(function (id) {
       griser(id, image.liaison_suspendue ? "La main est rendue à l'application Lymow." : occupe ? "Un ordre est en cours : attendez sa fin, ou STOP." : "");
     });
@@ -175,9 +174,10 @@
     var essai = Ordres.essaiPlateauPossible({ mode: image.mode, occupe: occupe });
     document.querySelectorAll("[data-plateau-essai]").forEach(function (bouton) { bouton.disabled = !essai.possible; });
     if (!essai.possible) { $("plateau-essai-etat").textContent = essai.motif; }
+    $("voyants-etat").textContent = image.voyants ? image.voyants.texte : "";
     dernierPhares = Ordres.boutonPhares(image.phares);
-    $("phares-bouton").textContent = dernierPhares.libelle;
-    $("phares-etat").textContent = dernierPhares.texte;
+    $("phares-libelle").textContent = dernierPhares.libelle;
+    griser("phares-bouton", image.liaison_suspendue ? "La main est rendue à l'application Lymow." : occupe ? "Un ordre est en cours : rappuyez à la fin du pas." : "");
     var plateau = Ordres.textePlateau(image.plateau);
     $("plateau-etat").textContent = plateau.texte;
     $("plateau-jauge").hidden = !plateau.jauge;
@@ -715,13 +715,24 @@
   $("sequence-vider").addEventListener("click", function () { sequence = []; afficherSequence(); });
   $("emettre").addEventListener("click", emettre);
   $("phares-bouton").addEventListener("click", async function () {
-    // Un clic, sans prévisualisation : ordre sans mouvement. Pendant un pas, le serveur le met en attente.
+    // Un clic, sans prévisualisation : ordre sans mouvement. Le serveur dit ensuite, dans le fil, si le robot a obéi.
     try {
       var reponse = await appeler("/api/phares", { allumer: dernierPhares.allumer });
-      if (reponse.simulation) { $("phares-etat").textContent = "Phares : simulation, rien n'est émis."; }
+      if (reponse.simulation) { dire("Phares : simulation, rien n'est émis.", "info"); }
     } catch (erreur) {
-      $("phares-etat").textContent = "Phares : refusé — " + erreur.message;
+      dire("Phares : refusé — " + erreur.message, "alerte");
     }
+  });
+  document.querySelectorAll("[data-voyants]").forEach(function (bouton) {
+    bouton.addEventListener("click", async function () {
+      // Voyants LED (pas les phares) : un clic, sans prévisualisation ; pendant un pas, le serveur met en attente.
+      try {
+        var reponse = await appeler("/api/voyants", { allumer: bouton.dataset.voyants === "allumer" });
+        if (reponse.simulation) { $("voyants-etat").textContent = "Simulation : rien n'est émis."; }
+      } catch (erreur) {
+        $("voyants-etat").textContent = "Refusé : " + erreur.message;
+      }
+    });
   });
   document.querySelectorAll("[data-plateau-essai]").forEach(function (bouton) {
     bouton.addEventListener("click", async function () {

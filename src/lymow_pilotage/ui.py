@@ -248,8 +248,8 @@ class ServeurUI:
         self._recalage = recalage.Memoire(self.dossier)
         self._station = recalage.SuiviStation()
         self._liaison_lente = False  # pilotage direct : en attente d'une trame fraîche du robot
-        self._phares_dernier: bool | None = None  # dernier ordre de phares envoyé (l'état réel peut ne pas être transmis)
-        self._phares_attente: bool | None = None  # demandé pendant un pas : émis à sa fin
+        self._voyants_dernier: bool | None = None  # dernier ordre de voyants envoyé (l'état réel peut ne pas être transmis)
+        self._voyants_attente: bool | None = None  # demandé pendant un pas : émis à sa fin
         self._plateau_suite: str | None = None  # ce que la relecture a montré après le dernier ordre de plateau
         self._direct_en_cours = False
         # « Rendre la main à l'application » : liaison fermée, reconnexion automatique suspendue.
@@ -296,6 +296,7 @@ class ServeurUI:
                 web.post("/api/tache", self._tache_immediate),
                 web.post("/api/erreur/annuler", self._erreur_annuler),
                 web.post("/api/plateau/essai", self._plateau_essai),
+                web.post("/api/voyants", self._voyants),
                 web.post("/api/phares", self._phares),
                 web.post("/api/liaison/rendre", self._liaison_rendre),
                 web.post("/api/liaison/reprendre", self._liaison_reprendre),
@@ -760,6 +761,7 @@ class ServeurUI:
             "arret_aux_bords": self.arret_aux_bords,
             "recalage": self._recalage.resume(),
             "plateau": self._etat_du_plateau(),
+            "voyants": self._etat_des_voyants(),
             "phares": self._etat_des_phares(),
             "carte_connue": self._carte_affichee()[0] is not None,  # la page la charge alors d'elle-même
             "direct": {
@@ -1108,8 +1110,8 @@ class ServeurUI:
             self._noter(f"ordre en échec : {self.resultat['echec']}")
         finally:
             self.version += 1
-            if self._phares_attente is not None and not (self.ferme or self.suspendue or self._stop_demande):
-                asyncio.get_running_loop().call_soon(self._lancer_les_phares_en_attente)
+            if self._voyants_attente is not None and not (self.ferme or self.suspendue or self._stop_demande):
+                asyncio.get_running_loop().call_soon(self._lancer_les_voyants_en_attente)
             if self._ecoute is not None and not self.ferme:
                 self._fin_ecoute = asyncio.get_running_loop().call_later(SUITE_CAPTURE_S, self._fermer_ecoute)
 
@@ -1131,7 +1133,7 @@ class ServeurUI:
                 return _refus(503, f"robot injoignable : {self.etat_liaison}")
             self._noter("STOP demandé")
             self._desarmer("STOP")  # la file du pilotage direct est vidée avant tout
-            self._phares_attente = None
+            self._voyants_attente = None
             self.previsualisation = None
             self._stop_demande = True
             try:
@@ -1190,47 +1192,89 @@ class ServeurUI:
         return web.json_response({"accepte": True}, status=202)
 
     def _etat_des_phares(self) -> dict[str, Any]:
-        transmis = self.session.etat.phares if self.session is not None else None
-        # Un ordre plus récent que la configuration relue l'emporte tant que le robot ne l'a pas confirmé.
-        allumes = transmis if transmis is not None else self._phares_dernier
-        texte = mouvement.texte_phares(transmis, self._phares_dernier)
-        if self._phares_attente is not None:
-            texte += f" — {'allumage' if self._phares_attente else 'extinction'} en attente de la fin du pas"
-        return {"allumes": allumes, "transmis": transmis is not None, "en_attente": self._phares_attente, "texte": "Phares : " + texte}
+        """Phares (éclairage de la caméra) : LECTURE seule — niveau annoncé par le robot et plage horaire réglée
+        dans l'application. Le bouton « Phares » s'appuie sur ce niveau pour dire si le robot a obéi."""
+        etat = self.session.etat if self.session is not None else None
+        allumes = None if etat is None else etat.phares
+        niveau = None if etat is None else etat.donnees.get("camLedStatus")
+        plage = None if etat is None else etat.plage_des_phares
+        if allumes is None:
+            texte = "Phares : état non transmis"
+        elif allumes:
+            texte = "Phares : allumés (niveau " + {1: "faible", 2: "moyen", 3: "fort"}.get(niveau, str(niveau)) + ")"
+        else:
+            texte = "Phares : éteints"
+        if plage is not None:
+            texte += f" — plage d'allumage réglée dans l'application : {plage}" if plage else " — aucune plage d'allumage réglée dans l'application"
+        return {"allumes": allumes, "niveau": niveau, "plage": plage, "texte": texte}
 
-    async def _phares_entre_deux_pas(self) -> None:
+    def _etat_des_voyants(self) -> dict[str, Any]:
+        transmis = self.session.etat.voyants if self.session is not None else None
+        # Un ordre plus récent que la configuration relue l'emporte tant que le robot ne l'a pas confirmé.
+        allumes = transmis if transmis is not None else self._voyants_dernier
+        texte = mouvement.texte_voyants(transmis, self._voyants_dernier)
+        if self._voyants_attente is not None:
+            texte += f" — {'allumage' if self._voyants_attente else 'extinction'} en attente de la fin du pas"
+        return {"allumes": allumes, "transmis": transmis is not None, "en_attente": self._voyants_attente, "texte": "Voyants LED : " + texte}
+
+    async def _voyants_entre_deux_pas(self) -> None:
         """Demande faite pendant un pas direct : émise ici, entre deux pas — un message, sans relecture."""
-        allumer, self._phares_attente = self._phares_attente, None
+        allumer, self._voyants_attente = self._voyants_attente, None
         if allumer is None or self.session is None or self.suspendue:
             return
         try:
-            await mouvement.executer_phares(self.session, allumer, relire=False)
-            self._phares_dernier = allumer
-        except Exception as erreur:  # noqa: BLE001 — les phares ne font jamais échouer un pas
-            self._noter(f"phares : ordre non émis ({masquer(str(erreur)) or type(erreur).__name__})")
+            await mouvement.executer_voyants(self.session, allumer, relire=False)
+            self._voyants_dernier = allumer
+        except Exception as erreur:  # noqa: BLE001 — les voyants ne font jamais échouer un pas
+            self._noter(f"voyants LED : ordre non émis ({masquer(str(erreur)) or type(erreur).__name__})")
         self.version += 1
 
-    def _lancer_les_phares_en_attente(self) -> None:
-        allumer = self._phares_attente
+    def _lancer_les_voyants_en_attente(self) -> None:
+        allumer = self._voyants_attente
         if allumer is None or self.occupe or self.session is None or self.suspendue or self.ferme:
             return
-        self._phares_attente = None
-        self._lancer_les_phares(allumer)
+        self._voyants_attente = None
+        self._lancer_les_voyants(allumer)
 
-    def _lancer_les_phares(self, allumer: bool) -> None:
+    def _lancer_les_voyants(self, allumer: bool) -> None:
         session = self.session
 
         async def travail() -> tuple[dict[str, Any], int]:
-            bilan, code = await conduite.emettre_ordres(session, [Ordre("phares-allumer" if allumer else "phares-eteindre")], self.journal)
+            bilan, code = await conduite.emettre_ordres(session, [Ordre("voyants-allumer" if allumer else "voyants-eteindre")], self.journal)
             if code == 0:
-                self._phares_dernier = allumer
+                self._voyants_dernier = allumer
             return bilan, code
 
-        self._lancer_travail("phares : allumer" if allumer else "phares : éteindre", travail)
+        self._lancer_travail("voyants LED : allumer" if allumer else "voyants LED : éteindre", travail)
+
+    async def _voyants(self, requete: web.Request) -> web.StreamResponse:
+        """« Voyants LED : allumer / éteindre » : un clic, sans prévisualisation (ordre sans mouvement). Pendant un
+        pas, la demande attend sa fin : elle ne retarde ni les consignes ni le STOP."""
+        corps = await self._corps(requete)
+        allumer = corps.get("allumer") if isinstance(corps, dict) else None
+        if not isinstance(allumer, bool) or set(corps) != {"allumer"}:
+            raise ErreurSaisie("« allumer » attendu : vrai ou faux")
+        self._refuser_si_main_rendue()
+        ordre = Ordre("voyants-allumer" if allumer else "voyants-eteindre")
+        if not self.emet:  # SEC-05 : simulation — rien n'est émis
+            bilan, _code = conduite.simuler_ordres([ordre], self.cal, self.journal, self._appareil_fictif())
+            self._noter(f"voyants LED : {'allumer' if allumer else 'éteindre'} (simulation)")
+            return web.json_response({"accepte": True, "simulation": True, "bilan": bilan})
+        if self.session is None or not self.session.lien.connecte:
+            return _refus(503, f"robot injoignable : {self.etat_liaison}")
+        if self._stop_demande:
+            return _refus(409, "un STOP est en cours")
+        if self.occupe:  # un ordre est en cours : la demande attend sa fin (ou l'entre-deux-pas du pilotage direct)
+            self._voyants_attente = allumer
+            self.version += 1
+            return web.json_response({"accepte": True, "en_attente": True}, status=202)
+        self._lancer_les_voyants(allumer)
+        return web.json_response({"accepte": True, "en_attente": False}, status=202)
 
     async def _phares(self, requete: web.Request) -> web.StreamResponse:
-        """« Phares : allumer / éteindre » : un clic, sans prévisualisation (ordre sans mouvement). Pendant un
-        pas, la demande attend sa fin : elle ne retarde ni les consignes ni le STOP."""
+        """« Phares : allumer / éteindre » : un clic, sans prévisualisation (ordre sans mouvement). Extinction :
+        signal capturé ; allumage : jamais essayé par le nuage sur ce robot. Le constat (« allumés d'après le
+        robot » / « aucun changement ») part dans le fil d'activité."""
         corps = await self._corps(requete)
         allumer = corps.get("allumer") if isinstance(corps, dict) else None
         if not isinstance(allumer, bool) or set(corps) != {"allumer"}:
@@ -1243,14 +1287,20 @@ class ServeurUI:
             return web.json_response({"accepte": True, "simulation": True, "bilan": bilan})
         if self.session is None or not self.session.lien.connecte:
             return _refus(503, f"robot injoignable : {self.etat_liaison}")
-        if self._stop_demande:
-            return _refus(409, "un STOP est en cours")
-        if self.occupe:  # un ordre est en cours : la demande attend sa fin (ou l'entre-deux-pas du pilotage direct)
-            self._phares_attente = allumer
-            self.version += 1
-            return web.json_response({"accepte": True, "en_attente": True}, status=202)
-        self._lancer_les_phares(allumer)
-        return web.json_response({"accepte": True, "en_attente": False}, status=202)
+        if self.occupe or self._stop_demande:
+            return _refus(409, "un ordre est en cours : rappuyez à la fin du pas")
+        session = self.session
+
+        async def travail() -> tuple[dict[str, Any], int]:
+            bilan, code = await conduite.emettre_ordres(session, [ordre], self.journal)
+            etape = bilan["etapes"][0] if bilan["etapes"] else {}
+            self._noter(str(etape.get("constat") or etape.get("echec") or bilan.get("motif") or "phares : ordre non abouti"))
+            return bilan, code
+
+        self._lancer_travail("phares : allumer" if allumer else "phares : éteindre", travail)
+        if self.direct.arme:
+            self.direct.prolonger()
+        return web.json_response({"accepte": True}, status=202)
 
     async def _plateau_essai(self, requete: web.Request) -> web.StreamResponse:
         """ESSAI — « Plateau : position de nettoyage » / « redescendre » : mode réel seulement, sur confirmation
@@ -1480,7 +1530,7 @@ class ServeurUI:
         code = 0
         try:
             while self.direct.file:
-                await self._phares_entre_deux_pas()  # jamais pendant un pas : ni consigne ni STOP retardés
+                await self._voyants_entre_deux_pas()  # jamais pendant un pas : ni consigne ni STOP retardés
                 ordre = self.direct.file.pop(0)
                 self.version += 1
                 self._munir_du_garde_fou([ordre])
@@ -1951,9 +2001,10 @@ class ServeurUI:
         if indiquee[0] is None or indiquee[1] is None:
             raise ErreurSaisie("endroit attendu : « est » et « nord », en mètres dans le repère de la carte")
         etat = self.session.etat if self.session is not None else None
-        age = None if etat is None or etat.recu_pose is None else self.session.horloge() - etat.recu_pose
-        if etat is None or etat.pose is None or age is None or age > recalage.POSE_RECENTE_S:
-            return _refus(409, "position du robot inconnue ou trop ancienne : impossible de mesurer un décalage")
+        # La dernière position annoncée sert de repère quel que soit son âge : un robot immobile n'en renvoie
+        # pas forcément une nouvelle (jusqu'au 2026-10-12, au-delà de 60 s le pointage était refusé).
+        if etat is None or etat.pose is None:
+            return _refus(409, "le robot n'a encore annoncé aucune position : impossible de mesurer un décalage")
         try:
             decalage = recalage.decalage_vers((etat.pose.est_m, etat.pose.nord_m), indiquee)
         except ValueError as erreur:

@@ -173,10 +173,14 @@ def test_le_robot_est_ici_decalage_applique_partout_ou_l_outil_place_le_robot(tm
             assert statut == 200 and reponse["actif"] is False and reponse["texte"] == ""
             image = serveur.instantane()
             assert image["etat"]["position_est_m"] == 9.62 and "position_annoncee" not in image["etat"]
-            # Sans position récente du robot : pas de décalage mesurable.
+            # Une position ancienne sert encore de repère (robot immobile : il n'en renvoie pas forcément une autre).
+            serveur.session.etat.recu_pose -= 3600.0
+            statut, reponse, _recus = await poster(http, serveur, "/api/recalage", {"est": 7.62, "nord": 5.0})
+            assert statut == 200 and reponse["actif"] is True
+            # Aucune position jamais annoncée : pas de décalage mesurable, et c'est dit.
             serveur.session.etat.recu_pose = None
             statut, reponse, _recus = await poster(http, serveur, "/api/recalage", {"est": 7.62, "nord": 5.0})
-            assert statut == 409 and "position du robot inconnue" in reponse["erreur"]
+            assert statut == 409 and "aucune position" in reponse["erreur"]
 
     executer(scenario())
 
@@ -189,13 +193,21 @@ def test_page_recalage_mention_permanente_et_boutons():
     }
     sans = js("ordres.js", "M.etatDuRecalage(a[0], false)", {"actif": False, "texte": "", "mesure_station": "écart mesuré"})
     assert sans["annuler"] is False and sans["utiliserLaMesure"] is True  # la mesure à la station se propose en un clic
-    assert "Cliquez sur la carte" in js("ordres.js", "M.etatDuRecalage(null, true)")["texte"]
+    assert js("ordres.js", "M.etatDuRecalage(null, true)")["texte"] == "Cliquez l'endroit réel du robot sur la carte (Échap pour annuler)"
+    assert js("ordres.js", "M.distanceDuDecalage(a[0], a[1])", [9.62, 5.0], [7.62, 5.0]) == "2 m"
+    assert js("ordres.js", "M.distanceDuDecalage(a[0], a[1])", [0, 0], [1.2, 0.5]) == "1,3 m"
     page = (ui.STATIQUE / "index.html").read_text(encoding="utf-8")
     for texte in (">Le robot est ici<", ">Annuler le décalage<", ">Utiliser l'écart mesuré à la station<", 'id="recalage-mention"'):
         assert texte in page
     carte_js = (ui.STATIQUE / "carte.js").read_text(encoding="utf-8")
     assert 'recaler("/api/recalage", { est: position.x, nord: -position.y });' in carte_js  # axe vertical de l'écran inversé
-    assert "if (etait && !etait.bouge && attenteIci) { indiquerLeRobot(versCarte(evenement)); return; }" in carte_js
+    # Défaut constaté en réel (2026-10-12) : un clic à la main tremblante était pris pour un glisser et ignoré.
+    # En pointage, le relâchement désigne l'endroit, et la carte ne glisse pas.
+    assert "if (attenteIci) { indiquerLeRobot(versCarte(evenement)); return; }" in carte_js
+    assert "if (!glisse || attenteIci) { return; }" in carte_js
+    assert 'id="recalage-bandeau" class="bandeau-pointage" role="status" hidden>Cliquez l\'endroit réel du robot sur la carte (Échap pour annuler)<' in page
+    assert 'svg("line", "carte-decalage"' in carte_js and ".cadre-carte svg.attente-clic { cursor: crosshair; }" in (ui.STATIQUE / "style.css").read_text(encoding="utf-8")
+    assert 'if (evenement.key === "Escape" && attenteIci) { attenteIci = false; afficherRecalage(); }' in carte_js
     assert 'image.recalage && image.recalage.actif ? image.recalage.texte : ""' in (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
 
 
