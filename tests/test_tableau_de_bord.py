@@ -69,9 +69,8 @@ def test_actions_en_grille_de_boutons_et_cibles_d_au_moins_quarante_pixels():
     grille = grille[: grille.index("</p>")]
     libelles = [re.sub(r"<[^>]+>", "", b).strip() for b in re.findall(r"<button[^>]*>(.*?)</button>", grille)]
     assert [re.sub(r"^\S+\s", "", libelle) for libelle in libelles] == [
-        "Pause", "Reprendre", "Retour base", "Annuler tâche", "Plateau haut", "Recalage assisté", "Bon signal",
+        "Pause", "Reprendre", "Retour base", "Annuler tâche", "Plateau haut", "Phares : allumer", "Recalage assisté", "Bon signal",
     ]
-    assert "Phares" not in grille  # aucun ordre d'allumage des phares n'est attesté : pas de bouton
     assert "Plateau bas" not in PAGE  # ambigu : n'existe pas
     assert ".actions-robot { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));" in STYLE
     # Tailles de cible : 2,5 rem = 40 px au moins pour les boutons du tableau.

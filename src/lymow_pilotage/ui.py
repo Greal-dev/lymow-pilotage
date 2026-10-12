@@ -297,6 +297,7 @@ class ServeurUI:
                 web.post("/api/erreur/annuler", self._erreur_annuler),
                 web.post("/api/plateau/essai", self._plateau_essai),
                 web.post("/api/voyants", self._voyants),
+                web.post("/api/phares", self._phares),
                 web.post("/api/liaison/rendre", self._liaison_rendre),
                 web.post("/api/liaison/reprendre", self._liaison_reprendre),
                 web.post("/api/diagnostic-rtk", self._diagnostic_rtk),
@@ -1192,7 +1193,7 @@ class ServeurUI:
 
     def _etat_des_phares(self) -> dict[str, Any]:
         """Phares (éclairage de la caméra) : LECTURE seule — niveau annoncé par le robot et plage horaire réglée
-        dans l'application. Aucun ordre d'allumage immédiat n'est attesté par une capture : l'outil n'en émet pas."""
+        dans l'application. Le bouton « Phares » s'appuie sur ce niveau pour dire si le robot a obéi."""
         etat = self.session.etat if self.session is not None else None
         allumes = None if etat is None else etat.phares
         niveau = None if etat is None else etat.donnees.get("camLedStatus")
@@ -1269,6 +1270,37 @@ class ServeurUI:
             return web.json_response({"accepte": True, "en_attente": True}, status=202)
         self._lancer_les_voyants(allumer)
         return web.json_response({"accepte": True, "en_attente": False}, status=202)
+
+    async def _phares(self, requete: web.Request) -> web.StreamResponse:
+        """« Phares : allumer / éteindre » : un clic, sans prévisualisation (ordre sans mouvement). Extinction :
+        signal capturé ; allumage : jamais essayé par le nuage sur ce robot. Le constat (« allumés d'après le
+        robot » / « aucun changement ») part dans le fil d'activité."""
+        corps = await self._corps(requete)
+        allumer = corps.get("allumer") if isinstance(corps, dict) else None
+        if not isinstance(allumer, bool) or set(corps) != {"allumer"}:
+            raise ErreurSaisie("« allumer » attendu : vrai ou faux")
+        self._refuser_si_main_rendue()
+        ordre = Ordre("phares-allumer" if allumer else "phares-eteindre")
+        if not self.emet:  # SEC-05 : simulation — rien n'est émis
+            bilan, _code = conduite.simuler_ordres([ordre], self.cal, self.journal, self._appareil_fictif())
+            self._noter(f"phares : {'allumer' if allumer else 'éteindre'} (simulation)")
+            return web.json_response({"accepte": True, "simulation": True, "bilan": bilan})
+        if self.session is None or not self.session.lien.connecte:
+            return _refus(503, f"robot injoignable : {self.etat_liaison}")
+        if self.occupe or self._stop_demande:
+            return _refus(409, "un ordre est en cours : rappuyez à la fin du pas")
+        session = self.session
+
+        async def travail() -> tuple[dict[str, Any], int]:
+            bilan, code = await conduite.emettre_ordres(session, [ordre], self.journal)
+            etape = bilan["etapes"][0] if bilan["etapes"] else {}
+            self._noter(str(etape.get("constat") or etape.get("echec") or bilan.get("motif") or "phares : ordre non abouti"))
+            return bilan, code
+
+        self._lancer_travail("phares : allumer" if allumer else "phares : éteindre", travail)
+        if self.direct.arme:
+            self.direct.prolonger()
+        return web.json_response({"accepte": True}, status=202)
 
     async def _plateau_essai(self, requete: web.Request) -> web.StreamResponse:
         """ESSAI — « Plateau : position de nettoyage » / « redescendre » : mode réel seulement, sur confirmation

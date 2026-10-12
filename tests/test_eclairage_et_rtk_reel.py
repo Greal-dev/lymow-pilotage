@@ -70,7 +70,7 @@ def test_voyants_led_octets_attestes_et_rien_d_autre():
     for autre in (1, 0, "allumer", None):
         with pytest.raises(ValueError):
             protocole.trame_voyants(autre, Calibration())
-    assert not hasattr(protocole, "trame_phares")  # aucun ordre d'allumage des phares n'existe dans l'outil
+    assert protocole.trame_phares(True, Calibration()).octets != ALLUMER  # les phares ont leurs propres signaux
     assert mouvement.texte_voyants(True, False) == "allumés (d'après la configuration du robot)"
     assert mouvement.texte_voyants(None, True) == "dernier ordre envoyé : allumés (état réel non transmis)"
     assert mouvement.texte_voyants(None, None) == "état inconnu (non transmis)"
@@ -101,8 +101,6 @@ def test_phares_en_lecture_seule_et_voyants_d_un_clic(tmp_path, monkeypatch, ses
             image = serveur.instantane()
             assert image["phares"] == {"allumes": None, "niveau": None, "plage": None, "texte": "Phares : état non transmis"}
             assert image["voyants"]["texte"] == "Voyants LED : état inconnu (non transmis)"
-            statut, _reponse, _recus = await poster(http, serveur, "/api/phares", {"allumer": True})
-            assert statut in (404, 405) and lien.ordres == []  # aucune route d'allumage des phares
             for corps in ({}, {"allumer": "oui"}, {"allumer": True, "signal": 28}):
                 statut, _reponse, _recus = await poster(http, serveur, "/api/voyants", corps)
                 assert statut == 400 and lien.ordres == []
@@ -170,7 +168,7 @@ def test_voyants_simulation_commande_et_page_sans_bouton_phares(capsys, tmp_path
     assert "voyants-allumer" in sortie and '"signal": 10' in sortie
     assert cli.main(["voyants", "eteindre", "--json", "--donnees", str(tmp_path)]) == 0
     assert '"signal": 11' in capsys.readouterr().out
-    for refusee in (["voyants", "clignoter"], ["phares", "allumer"]):  # « phares » n'est plus une commande
+    for refusee in (["voyants", "clignoter"], ["phares", "clignoter"]):
         with pytest.raises(SystemExit):
             cli.main([*refusee, "--donnees", str(tmp_path)])
     assert mouvement.simuler(Ordre("voyants-allumer"), Calibration(), None)["trame"]["champs"]["robotConfig"] == {"signal": 10}
@@ -182,7 +180,6 @@ def test_voyants_simulation_commande_et_page_sans_bouton_phares(capsys, tmp_path
 
     executer(scenario())
     page = (ui.STATIQUE / "index.html").read_text(encoding="utf-8")
-    assert "phares-bouton" not in page and ">Phares" not in page  # pas de bouton « Phares » : aucun ordre attesté
     details = page[page.index('id="volet-ordres"') :]
     details = details[: details.index("</details>")]
     assert 'data-voyants="allumer">Voyants LED : allumer</button>' in details and 'data-voyants="eteindre">Voyants LED : éteindre</button>' in details
@@ -193,6 +190,91 @@ def test_voyants_simulation_commande_et_page_sans_bouton_phares(capsys, tmp_path
                   "process.stdout.write(JSON.stringify([p({allumes: true}), p({allumes: false}), p({allumes: null})]));")
         sortie = subprocess.run([NODE, "-e", script, str(ui.STATIQUE / "ordres.js")], capture_output=True, text=True, timeout=20, check=True, encoding="utf-8")
         assert json.loads(sortie.stdout) == [["phares allumés"], ["phares éteints"], []]
+
+
+# --- phares : extinction par un signal capturé, allumage à l'essai ----------------------------------------
+
+PHARES_ON, PHARES_OFF = bytes.fromhex("10 31 6a 02 40 06"), bytes.fromhex("10 31 6a 02 40 07")
+
+
+def test_phares_octets_et_constat_d_obeissance():
+    assert protocole.trame_phares(True, Calibration()).octets == PHARES_ON  # code de l'application, non capturé
+    assert protocole.trame_phares(False, Calibration()).octets == PHARES_OFF  # capturé par le socle
+    assert protocole.SIGNAUX_PHARES == {True: 6, False: 7}
+    assert "essai" in protocole.trame_phares(True, Calibration()).champs and "essai" not in protocole.trame_phares(False, Calibration()).champs
+    for autre in (6, "allumer", None):
+        with pytest.raises(ValueError):
+            protocole.trame_phares(autre, Calibration())
+    assert mouvement.constat_phares(True, False, True) == "phares : allumés d'après le robot"
+    assert mouvement.constat_phares(False, True, False) == "phares : éteints d'après le robot"
+    assert mouvement.constat_phares(True, False, False) == "phares : aucun changement (éteints d'après le robot)"
+    assert mouvement.constat_phares(True, None, None) == "phares : état non transmis après l'ordre — regardez le robot"
+
+
+def test_bouton_phares_un_clic_puis_le_fil_dit_si_le_robot_a_obei(tmp_path, monkeypatch, session_reelle, lien):
+    monkeypatch.setattr(mouvement, "ATTENTE_PHARES_S", 1.0)
+    lien.robot = dict(SANS_POSE) | configuration(cam=4, veh=3)  # phares éteints
+
+    async def scenario():
+        async with serveur_ui(tmp_path, monkeypatch, reel=True, session=session_reelle) as (serveur, http):
+            for corps in ({}, {"allumer": "oui"}, {"allumer": True, "signal": 28}):
+                statut, _reponse, _recus = await poster(http, serveur, "/api/phares", corps)
+                assert statut == 400 and lien.ordres == []
+            # Le robot n'obéit pas : dit tel quel.
+            statut, _reponse, _recus = await poster(http, serveur, "/api/phares", {"allumer": True})
+            assert statut == 202
+            await attendre(lambda: not serveur.occupe, delai=15.0)
+            assert lien.ordres == [PHARES_ON]
+            assert serveur.resultat["etapes"][0]["constat"] == "phares : aucun changement (éteints d'après le robot)"
+            assert any(n["texte"] == "phares : aucun changement (éteints d'après le robot)" for n in serveur.fil[-3:])  # fil d'activité
+            # Le robot obéit : sa configuration annonce le nouveau niveau.
+            lien.sur_publication = lambda lien_, octets: setattr(
+                lien_, "robot", dict(SANS_POSE) | configuration(cam=3 if octets == PHARES_ON else 4, veh=3)
+            ) if octets in (PHARES_ON, PHARES_OFF) else None
+            await poster(http, serveur, "/api/phares", {"allumer": True})
+            await attendre(lambda: not serveur.occupe, delai=15.0)
+            assert serveur.resultat["etapes"][0]["constat"] == "phares : allumés d'après le robot"
+            assert serveur.instantane()["phares"]["allumes"] is True
+            await poster(http, serveur, "/api/phares", {"allumer": False})
+            await attendre(lambda: not serveur.occupe, delai=15.0)
+            assert lien.ordres[-1] == PHARES_OFF and serveur.resultat["etapes"][0]["constat"] == "phares : éteints d'après le robot"
+            emis = [json.loads(ligne) for f in tmp_path.glob("journaux/*.jsonl") for ligne in f.read_text(encoding="utf-8").splitlines()]
+            assert [e["ordre"] for e in emis if e.get("evenement") == "ordre-emis"] == ["phares : allumer", "phares : allumer", "phares : éteindre"]
+            # Pendant un ordre : refusé ; main rendue : refusé.
+            await poster(http, serveur, "/api/direct/armer", {"confirmer": True})
+            await poster(http, serveur, "/api/direct/fleche", {"jeton": serveur.direct._jeton, "direction": "gauche", "pas": 90})
+            statut, reponse, _recus = await poster(http, serveur, "/api/phares", {"allumer": True})
+            assert statut == 409 and "rappuyez à la fin du pas" in reponse["erreur"]
+            await poster(http, serveur, "/api/stop")
+            await attendre(lambda: not serveur.occupe, delai=20.0)
+            await poster(http, serveur, "/api/liaison/rendre", {"choix": "pause"})
+            statut, _reponse, _recus = await poster(http, serveur, "/api/phares", {"allumer": True})
+            assert statut == 409
+
+    executer(scenario())
+
+
+def test_phares_commande_simulation_et_bouton_a_bascule(capsys, tmp_path):
+    assert cli.main(["phares", "allumer", "--json", "--donnees", str(tmp_path)]) == 0  # simulation par défaut
+    assert '"signal": 6' in capsys.readouterr().out
+    assert cli.main(["phares", "eteindre", "--json", "--donnees", str(tmp_path)]) == 0
+    assert '"signal": 7' in capsys.readouterr().out
+    page = (ui.STATIQUE / "index.html").read_text(encoding="utf-8")
+    grille = page[page.index('<p class="actions-robot">') :]
+    grille = grille[: grille.index("</p>")]
+    assert 'id="phares-bouton"' in grille and "Allumage jamais essayé par le cloud sur ce robot" in grille
+    assert "éteint ses phares sur sa base" in grille and "plage horaire automatique" in grille
+    app = (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
+    assert 'await appeler("/api/phares", { allumer: dernierPhares.allumer });' in app
+    if NODE is not None:
+        script = ("const M = require(process.argv[1]); process.stdout.write(JSON.stringify(["
+                  "M.boutonPhares(null), M.boutonPhares({allumes: true}), M.boutonPhares({allumes: false}),"
+                  "M.graviteDe(\"phares : aucun changement (éteints d'après le robot)\"), M.graviteDe(\"phares : allumés d'après le robot\")]));")
+        sortie = subprocess.run([NODE, "-e", script, str(ui.STATIQUE / "ordres.js")], capture_output=True, text=True, timeout=20, check=True, encoding="utf-8")
+        assert json.loads(sortie.stdout) == [
+            {"allumer": True, "libelle": "Phares : allumer"}, {"allumer": False, "libelle": "Phares : éteindre"},
+            {"allumer": True, "libelle": "Phares : allumer"}, "alerte", "info",
+        ]
 
 
 # --- diagnostic RTK : réponses réelles rejouées --------------------------------------------------------

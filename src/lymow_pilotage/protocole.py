@@ -184,8 +184,7 @@ LIBELLES_SIGNAUX_PLATEAU = {
 
 # VOYANTS LED du robot (« Vehicle LED » de l'application) : signaux 10 (allumer) et 11 (éteindre), forme
 # capturée par le socle (10 31 6a 02 40 0a / 0b). Ce ne sont PAS les phares (précision du propriétaire,
-# 2026-10-12 ; essai réel : signal 10 émis six fois, les phares sont restés éteints). Les phares sont
-# l'éclairage de la caméra : leur allumage immédiat n'est attesté par aucune capture, il n'est pas émis.
+# 2026-10-12 ; essai réel : signal 10 émis six fois, les phares sont restés éteints).
 SIGNAUX_VOYANTS: dict[bool, int] = {True: 10, False: 11}
 
 
@@ -196,6 +195,24 @@ def trame_voyants(allumer: bool, cal: Calibration) -> Trame:
     octets = _version(cal.version_protocole) + pb._field_bytes(CHAMP_ROBOT_CONFIG, pb._field_i32(CHAMP_SIGNAL, signal))
     champs = {"version": cal.version_protocole, "robotConfig": {"signal": signal}}
     return Trame("voyants LED : allumer" if allumer else "voyants LED : éteindre", Categorie.REGLAGE, octets, champs)
+
+
+# PHARES (éclairage de la caméra) — décision du propriétaire, 2026-10-12. Extinction : signal 7, capturé par le
+# socle dans l'application (10 31 6a 02 40 07, au sein du réglage « Headlight Mode »). Allumage : signal 6,
+# même enveloppe, connu par le code de l'application mais NON capturé — jamais essayé par le nuage sur ce
+# robot. Les niveaux intermédiaires (15, 16) ne sont pas émis.
+SIGNAUX_PHARES: dict[bool, int] = {True: 6, False: 7}
+
+
+def trame_phares(allumer: bool, cal: Calibration) -> Trame:
+    if not isinstance(allumer, bool):
+        raise ValueError("phares : allumer ou éteindre")
+    signal = SIGNAUX_PHARES[allumer]
+    octets = _version(cal.version_protocole) + pb._field_bytes(CHAMP_ROBOT_CONFIG, pb._field_i32(CHAMP_SIGNAL, signal))
+    champs = {"version": cal.version_protocole, "robotConfig": {"signal": signal}}
+    if allumer:
+        champs["essai"] = "allumage jamais essayé par le nuage sur ce robot"
+    return Trame("phares : allumer" if allumer else "phares : éteindre", Categorie.REGLAGE, octets, champs)
 
 
 def trame_signal_plateau(nom: str, cal: Calibration) -> Trame:

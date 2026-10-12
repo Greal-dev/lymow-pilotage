@@ -10,6 +10,7 @@
   var Ordres = window.LymowOrdres;
   var occupe = false;
   var liaisonSuspendue = false;
+  var dernierPhares = { allumer: true };
   var dernieresOrdres = null;
   var dernierEtat = null;
   var recalageAvant = null;
@@ -174,6 +175,9 @@
     document.querySelectorAll("[data-plateau-essai]").forEach(function (bouton) { bouton.disabled = !essai.possible; });
     if (!essai.possible) { $("plateau-essai-etat").textContent = essai.motif; }
     $("voyants-etat").textContent = image.voyants ? image.voyants.texte : "";
+    dernierPhares = Ordres.boutonPhares(image.phares);
+    $("phares-libelle").textContent = dernierPhares.libelle;
+    griser("phares-bouton", image.liaison_suspendue ? "La main est rendue à l'application Lymow." : occupe ? "Un ordre est en cours : rappuyez à la fin du pas." : "");
     var plateau = Ordres.textePlateau(image.plateau);
     $("plateau-etat").textContent = plateau.texte;
     $("plateau-jauge").hidden = !plateau.jauge;
@@ -710,6 +714,15 @@
   $("sequence-previsualiser").addEventListener("click", function () { previsualiser(sequence.slice(), false, objectifSequence); });
   $("sequence-vider").addEventListener("click", function () { sequence = []; afficherSequence(); });
   $("emettre").addEventListener("click", emettre);
+  $("phares-bouton").addEventListener("click", async function () {
+    // Un clic, sans prévisualisation : ordre sans mouvement. Le serveur dit ensuite, dans le fil, si le robot a obéi.
+    try {
+      var reponse = await appeler("/api/phares", { allumer: dernierPhares.allumer });
+      if (reponse.simulation) { dire("Phares : simulation, rien n'est émis.", "info"); }
+    } catch (erreur) {
+      dire("Phares : refusé — " + erreur.message, "alerte");
+    }
+  });
   document.querySelectorAll("[data-voyants]").forEach(function (bouton) {
     bouton.addEventListener("click", async function () {
       // Voyants LED (pas les phares) : un clic, sans prévisualisation ; pendant un pas, le serveur met en attente.

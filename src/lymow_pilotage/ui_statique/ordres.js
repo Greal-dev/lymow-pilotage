@@ -227,7 +227,7 @@
   function graviteDe(texte) {
     var t = String(texte).toLowerCase();
     if (/arrêt non confirmé|sec-01|liaison perdue|injoignable|en échec/.test(t)) { return "erreur"; }
-    if (/refus|échou|non abouti|désarmé|interrompu|patinage|liaison lente|d'après la carte|ignor|persiste/.test(t)) { return "alerte"; }
+    if (/refus|échou|non abouti|désarmé|interrompu|patinage|liaison lente|d'après la carte|ignor|persiste|aucun changement|non transmis/.test(t)) { return "alerte"; }
     return "info";
   }
 
@@ -298,6 +298,12 @@
   function distanceDuDecalage(annoncee, recalee) {
     var d = Math.hypot(recalee[0] - annoncee[0], recalee[1] - annoncee[1]);
     return String(Math.round(d * 100) / 100).replace(".", ",") + " m";
+  }
+
+  /* Bouton à bascule des phares : il propose le contraire du niveau annoncé par le robot (inconnu : allumer). */
+  function boutonPhares(phares) {
+    var allumer = !(phares && phares.allumes === true);
+    return { allumer: allumer, libelle: allumer ? "Phares : allumer" : "Phares : éteindre" };
   }
 
   function enErreur(ordres) {
@@ -391,6 +397,7 @@
     distanceDuDecalage: distanceDuDecalage,
     textePlateau: textePlateau,
     filAjouter: filAjouter,
+    boutonPhares: boutonPhares,
     graviteDe: graviteDe,
     heureCourte: heureCourte,
     notesNouvelles: notesNouvelles,

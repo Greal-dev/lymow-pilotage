@@ -468,20 +468,23 @@ pastille « phares allumés / éteints » et son info-bulle donnent le niveau
 annoncé par le robot et la plage d'allumage réglée dans l'application.
 Observé dans les trames réelles du 2026-10-12 : éteints le matin (aucune
 plage), allumés au niveau moyen entre 20:26 et 21:30 pendant la plage
-20:30–21:30, éteints après. **L'outil n'a pas de bouton « Phares »** :
+20:30–21:30, éteints après.
 
-- attesté par capture de l'application (par le socle, en Bluetooth) : le
-  réglage « Headlight Mode », une plage horaire quotidienne ; l'extinction
-  y porte le signal 7 ;
-- non attesté par capture : l'allumage immédiat (signal 6, niveaux 15 et
-  16) — connu seulement par le code de l'application et par une intégration
-  tierce qui dit l'avoir vérifié.
+**Bouton « Phares »** (grille d'actions, à bascule) et `lymow phares
+allumer|eteindre` — décision du propriétaire. Un clic, sans
+prévisualisation ; refusé main rendue et pendant un ordre.
 
-Pour l'obtenir avec certitude : capturer ce que l'application officielle
-envoie quand on appuie sur son bouton d'éclairage dans la vue caméra (on
-attend `10 31 6a 02 40 06`), ou décider d'essayer ce signal en ordre
-expérimental. En attendant, les phares s'allument en réglant leur plage
-dans l'application.
+- éteindre : signal 7 (`10 31 6a 02 40 07`), capturé par le socle dans
+  l'application (au sein du réglage « Headlight Mode ») ;
+- allumer : signal 6 (`10 31 6a 02 40 06`), même enveloppe, connu par le
+  code de l'application mais **non capturé : jamais essayé par le cloud sur
+  ce robot**.
+
+Après l'ordre, la configuration du robot est relue et le fil d'activité dit
+s'il a obéi : « phares : allumés d'après le robot », ou « phares : aucun
+changement (éteints d'après le robot) ». À savoir : le robot éteint ses
+phares sur sa base, et la plage horaire réglée dans l'application peut les
+rallumer ou les éteindre d'elle-même. L'outil ne règle pas cette plage.
 
 ## Essai dans un vrai navigateur
 

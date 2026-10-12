@@ -214,7 +214,7 @@ async def scenario_boutons(page: Page, serveur: Any, donnees: Path) -> dict[str,
     # Grille d'actions : chaque bouton cliqué réellement ; on relève s'il était grisé, et ce que le journal en dit.
     attendus = {
         "pause-bouton": "pause", "reprendre-bouton": "reprendre", "base-bouton": "base", "pave-plateau": "plateau-haut",
-        "annuler-bouton": "annuler", "recalage": None, "bon-signal-bouton": None,
+        "phares-bouton": "phares", "annuler-bouton": "annuler", "recalage": None, "bon-signal-bouton": None,
     }
     for identifiant, mot in attendus.items():
         await page.jusqu_a("!document.body.classList.contains('occupe') && true", 0.2)
@@ -247,7 +247,7 @@ async def scenario_boutons(page: Page, serveur: Any, donnees: Path) -> dict[str,
         textes = json.dumps([e for e in evenements(donnees)[nombre:] if e["evenement"] == "ordre-emis"], ensure_ascii=False)
         bilan["actions"][f"voyants-{sens}"] = {"clique": clique, "ordre_attendu_vu": f"voyants LED : {'allumer' if sens == 'allumer' else 'éteindre'}" in textes}
     await page.js("document.getElementById('volet-ordres').open = false; window.scrollTo(0, 0)")
-    bilan["phares_sans_bouton"] = await page.js("document.getElementById('phares-bouton') === null")
+    bilan["fil_apres_les_phares"] = [n["texte"] for n in serveur.fil if n["texte"].startswith("phares")]
     bilan["onglet_carte_apres_bon_signal"] = await page.js("!document.getElementById('vue-carte').hidden")
     await page.capture("boutons.png")
     return bilan

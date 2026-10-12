@@ -154,6 +154,8 @@ def construire_analyseur() -> argparse.ArgumentParser:
         "base": "retour à la base en conservant la tâche",
         "annuler": "annuler la tâche, arrêt sur place",
     }
+    phares = ajouter("phares", "allumer ou éteindre les phares (éclairage de la caméra) ; allumage jamais essayé par le cloud")
+    phares.add_argument("sens", choices=("allumer", "eteindre"))
     voyants = ajouter("voyants", "allumer ou éteindre les voyants LED du robot (ce ne sont pas les phares)")
     voyants.add_argument("sens", choices=("allumer", "eteindre"))
     for nom in _ORDRES_SIMPLES:
@@ -252,8 +254,8 @@ def _ordres(args: argparse.Namespace) -> list[Ordre]:
     if args.commande == "sequence":
         return mouvement.analyser_sequence(args.etapes)
     lire = lambda nom: getattr(args, nom, None)  # noqa: E731
-    if args.commande == "voyants":
-        return [Ordre(f"voyants-{args.sens}")]
+    if args.commande in ("voyants", "phares"):
+        return [Ordre(f"{args.commande}-{args.sens}")]
     if args.commande == "reprendre" and lire("position_imprecise_acceptee"):
         return [Ordre(mouvement.REPRISE_FORCEE)]  # SEC-12 : garde levée explicitement
     return [Ordre(args.commande, lire("valeur"), lire("vitesse"), lire("duree"), bool(lire("forcer")))]
