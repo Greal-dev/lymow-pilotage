@@ -15,6 +15,9 @@
   var PROCHE_PX = 10; // distance maximale d'un clic à un sommet
   var carte = null;
   var robot = null;
+  var etatRobot = null;
+  var dejaCadree = false;
+  var CADRE_ROBOT_M = 40; // cadrage initial : le robot et une quarantaine de mètres autour
   var apercu = null;
   var vue = { x: -10, y: -10, l: 20, h: 15 };
   var glisse = null;
@@ -136,13 +139,18 @@
         dessin.appendChild(titre(svg("circle", "carte-sommet" + (borne ? " borne" : ""), { cx: p[0], cy: -p[1], r: rayon }), "sommet " + indice));
       });
     }
+    if (robot && robot.rayon) {  // cercle d'incertitude, au rayon annoncé par le robot
+      dessin.appendChild(titre(svg("circle", "carte-incertitude", {
+        cx: robot.est, cy: -robot.nord, r: robot.rayon
+      }), "incertitude de position : ±" + robot.rayon + " m"));
+    }
     if (robot) {
       var unite = SYMBOLE_PX * parPixel;
       dessin.appendChild(titre(svg("polygon", "carte-robot", {
         points: [[1.8, 0], [-1.2, 1.1], [-1.2, -1.1]].map(function (p) { return p[0] * unite + "," + p[1] * unite; }).join(" "),
         // Cap mesuré depuis l'est, sens trigonométrique ; l'axe vertical du dessin est inversé.
         transform: "translate(" + robot.est + " " + (-robot.nord) + ") rotate(" + (-robot.cap) + ")"
-      }), "robot"));
+      }), robot.source === "station" ? "robot (sur sa station : position non transmise au repos)" : "robot"));
     }
     afficherEchelle();
   }
@@ -166,6 +174,13 @@
     dessiner();
   }
 
+  /* Le robot apparaît dès qu'une pose est connue ; au repos sans pose, sur sa station, en le disant. */
+  function placerLeRobot() {
+    robot = window.LymowOrdres.positionAffichee(etatRobot, carte ? carte.station : null);
+    var note = robot ? robot.note : (etatRobot ? "position du robot inconnue" : "");
+    $("carte-position").textContent = note;
+  }
+
   function toutVoir() {
     var tous = [];
     if (carte) {
@@ -178,7 +193,7 @@
   }
 
   function cadrerSurLeRobot() {
-    if (robot) { cadrer([[robot.est, robot.nord]], 10); }
+    if (robot) { cadrer([[robot.est, robot.nord]], CADRE_ROBOT_M); }
   }
 
   function zoomer(facteur, centreX, centreY) {
@@ -290,11 +305,16 @@
     var incomplete = carte && carte.complete === false
       ? "CARTE INCOMPLÈTE (" + carte.manques.join(" ; ") + ") : affichage seul, aucune retouche possible — "
       : "";
-    $("carte-etat").textContent = carte
-      ? incomplete + "carte reçue à " + (reponse.heure || "?") + " (il y a " + Math.round(reponse.age_s) + " s)"
-      : "aucune carte : cliquez sur « Actualiser la carte »";
+    // Carte de référence (dernière carte complète, gardée sur disque) : dite comme telle, avec sa date.
+    var origine = reponse.reference
+      ? reponse.reference
+      : "carte reçue à " + (reponse.heure || "?") + (typeof reponse.age_s === "number" ? " (il y a " + Math.round(reponse.age_s) + " s)" : "");
+    $("carte-etat").textContent = carte ? incomplete + origine : "aucune carte : cliquez sur « Actualiser la carte »";
+    $("carte-note").textContent = reponse.note || "";
     afficherPossibilite();
-    toutVoir();
+    placerLeRobot();
+    // Premier affichage : le robot et ~40 m autour, pas tout le jardin ; « Tout voir » reste là.
+    if (carte && !dejaCadree) { dejaCadree = true; if (robot) { cadrerSurLeRobot(); } else { toutVoir(); } }
     dessiner();
   }
 
@@ -382,11 +402,16 @@
 
   window.LymowCarte = {
     robot: function (etat) {
-      var connu = etat && typeof etat.position_est_m === "number" && typeof etat.position_nord_m === "number";
-      robot = connu ? { est: etat.position_est_m, nord: etat.position_nord_m, cap: etat.cap_deg || 0 } : null;
-      $("carte-rtk").textContent = etat && etat.rtk ? "— RTK : " + etat.rtk : "";
+      etatRobot = etat;
+      placerLeRobot();
+      $("carte-rtk").textContent = etat && etat.localisation_texte ? "— " + etat.localisation_texte : "";
       $("carte-robot-cadrer").disabled = !robot;
       $("carte-robot-cadrer").title = robot ? "" : "position du robot inconnue";
+      // « Suivre le robot » : la vue reste centrée sur lui, sans changer le zoom.
+      if (robot && robot.source === "pose" && $("carte-suivre").checked && !glisse) {
+        vue.x = robot.est - vue.l / 2;
+        vue.y = -robot.nord - vue.h / 2;
+      }
       dessiner();
     }
   };

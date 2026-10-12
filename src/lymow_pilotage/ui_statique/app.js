@@ -615,6 +615,16 @@
   $("sequence-previsualiser").addEventListener("click", function () { previsualiser(sequence.slice(), false); });
   $("sequence-vider").addEventListener("click", function () { sequence = []; afficherSequence(); });
   $("emettre").addEventListener("click", emettre);
+  // Cadre de droite : deux onglets, « Caméra » et « Carte ».
+  function montrerOnglet(nom) {
+    ["camera", "carte"].forEach(function (onglet) {
+      $("vue-" + onglet).hidden = onglet !== nom;
+      $("onglet-" + onglet).setAttribute("aria-selected", String(onglet === nom));
+    });
+    window.dispatchEvent(new Event("resize")); // la carte se dessine à sa taille réelle
+  }
+  $("onglet-camera").addEventListener("click", function () { montrerOnglet("camera"); });
+  $("onglet-carte").addEventListener("click", function () { montrerOnglet("carte"); });
   $("rendre-main").addEventListener("click", async function () {
     // Rendre la main : la liaison est fermée et ne se rouvre plus seule ; rien n'est émis vers le robot.
     try {
@@ -711,6 +721,7 @@
     ajouterEtape: function (ordre) { sequence.push(ordre); afficherSequence(); },
     annulerDerniere: function () { sequence.pop(); afficherSequence(); },
     viderSequence: function () { sequence = []; afficherSequence(); },
-    previsualiserSequence: function () { if (sequence.length) { previsualiser(sequence.slice(), false); } }
+    previsualiserSequence: function () { if (sequence.length) { previsualiser(sequence.slice(), false); } },
+    previsualiser: function (ordres) { previsualiser(ordres, false); }
   };
 })();

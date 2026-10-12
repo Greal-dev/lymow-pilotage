@@ -263,16 +263,18 @@ def test_page_du_pave_etat_complet_et_garde_fous_visibles(tmp_path, monkeypatch)
     page = (ui.STATIQUE / "index.html").read_text(encoding="utf-8")
     script = (ui.STATIQUE / "pave.js").read_text(encoding="utf-8")
     assert "PILOTAGE DIRECT ARMÉ" in page and 'id="bandeau-direct"' in page and "Échap ou Espace" in page
-    # La vidéo et les flèches partagent le même cadre, dans le bloc principal.
+    # Commandes à gauche, puis la caméra à droite, flèches en surimpression de la caméra.
     assert page.index('id="bloc-pilotage"') < page.index('id="bloc-fleches"') < page.index('id="video"') < page.index('data-fleche=')
-    for identifiant in ("pave-miniature", "pave-total", "pave-retours", "pave-file", "direct-interrupteur", "fleches-bascule"):
+    for identifiant in ("pave-miniature", "pave-total", "pave-retours", "pave-file", "composer", "fleches-bascule"):
         assert f'id="{identifiant}"' in page and f'"{identifiant}"' in script
     assert page.count("data-fleche=") == 4
     # Mode file : la flèche écrit dans LA séquence de la page ; aucune émission sans les deux temps.
     assert "page.ajouterEtape(etape)" in script and "/api/emettre" not in script and "/api/previsualiser" not in script
     assert "window.confirm(" in script and '"/api/direct/armer", { confirmer: true }' in script
-    assert "Fleches.actionClavier(touche)" in script and "evenement.repeat" in script
-    assert 'panneau.addEventListener("keydown"' in script and 'document.addEventListener("keydown"' not in script
+    # Clavier : capté au niveau du document, en phase de capture ; la décision est dans fleches.js.
+    assert "Fleches.interception({" in script and "repeat: evenement.repeat" in script
+    assert 'document.addEventListener("keydown", function (evenement) {' in script and "}, true);" in script
+    assert 'panneau.addEventListener("keydown"' not in script and "focusout" not in script and ".focus()" not in script
     assert 'navigator.sendBeacon("/api/direct/desarmer")' in script
 
 

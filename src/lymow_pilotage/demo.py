@@ -109,7 +109,9 @@ class RobotFictif:
     def etat(self) -> dict[str, Any]:
         return {
             # Comme le vrai : statut vivant (f1) et tâche (f6), ici identiques — le robot fictif n'a pas de tâche.
-            "robotState": self.statut, "workStatus": self.statut, "battery": 87, "poseEastM": self.est, "poseNorthM": self.nord,
+            "robotState": self.statut, "workStatus": self.statut, "battery": 87,
+            "rtkEastM": 0.02,  # précision horizontale annoncée (clé du socle, mal nommée) : position fiable
+            "poseEastM": self.est, "poseNorthM": self.nord,
             "poseThetaRad": self.cap, "rtkStatus": 3, "rtkSatellites": 24, "lteSignalQuality": 4,
             "wifiSignalQuality": 3, "rcCutHeight": self.hauteur_mm, "softwareVersion": "démonstration",
         }

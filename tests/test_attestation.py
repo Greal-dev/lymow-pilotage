@@ -481,7 +481,7 @@ def test_page_porte_le_message_le_bouton_la_confirmation_et_le_bandeau_d_attesta
     # Interface simplifiée : UNE proposition, dans le bloc Pilotage, sur la ligne de statut sous la barre
     # de commande — après le raccourci « Mettre en pause » (la pause d'abord, l'attestation ensuite).
     assert page.count(bouton) == 1
-    assert page.index('class="barre-commande"') < page.index('id="ordres-etat"') < page.index('id="pause-raccourci"')
+    assert page.index('id="bloc-fleches"') < page.index('id="ordres-etat"') < page.index('id="pause-raccourci"')
     assert page.index('id="pause-raccourci"') < page.index(bouton) < page.index('class="ligne-sequence"')
     haut = page[page.index('<div class="haut">') : page.index('<main>')]
     assert 'id="bandeau-attestation"' in haut and 'id="stop"' in haut  # avec les autres bandeaux : STOP jamais masqué

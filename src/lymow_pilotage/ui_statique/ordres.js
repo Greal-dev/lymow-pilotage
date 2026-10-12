@@ -113,8 +113,25 @@
     return suspendue ? "Reprendre la liaison" : "Rendre la main à l'application";
   }
 
+  /* Où dessiner le robot sur la carte : sa pose dès qu'elle est connue, avec son cercle d'incertitude ;
+   * au repos sans pose, sur sa station, en le disant. */
+  function positionAffichee(etat, station) {
+    var rayon = etat && typeof etat.precision_m === "number" ? etat.precision_m : null;
+    if (etat && typeof etat.position_est_m === "number" && typeof etat.position_nord_m === "number") {
+      return { est: etat.position_est_m, nord: etat.position_nord_m, cap: etat.cap_deg || 0, rayon: rayon, source: "pose", note: "" };
+    }
+    if (station) {
+      return {
+        est: station.est_m, nord: station.nord_m, cap: station.cap_deg || 0, rayon: null, source: "station",
+        note: "position non transmise au repos : robot placé sur sa station"
+      };
+    }
+    return null;
+  }
+
   var api = {
     libelleLiaison: libelleLiaison,
+    positionAffichee: positionAffichee,
     messageStatutDeclare: messageStatutDeclare,
     bandeauAttestation: bandeauAttestation,
     texteOrdre: texteOrdre,

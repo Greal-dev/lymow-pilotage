@@ -197,8 +197,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 /* Écran principal : vidéo, commande et séquence tiennent sur 1366×768 sans défilement. */
 .cadre-video {
   position: relative;
-  height: min(46vh, 26rem);
-  min-height: 11rem;
+  height: calc(100vh - 14rem);
+  min-height: 14rem;
   background: #000000;
   border: 4px solid transparent;
   border-radius: 0.4rem;
@@ -206,13 +206,37 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
   cursor: pointer;
 }
 .cadre-pilotage:focus { outline: none; }
-.cadre-pilotage.actif .cadre-video { border-color: #ef6c00; }  /* liseré : flèches actives */
+.cadre-video.actif { border-color: #ef6c00; }  /* liseré : flèches actives */
+/* Écran large : commandes à gauche (≈ 40 %), caméra ou carte à droite (≈ 60 %), sur la hauteur visible. */
+.deux-colonnes { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 0.8rem; align-items: start; }
+.colonne-commandes { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
+.colonne-commandes p { margin: 0; }
+.colonne-commandes input[type="checkbox"] { width: auto; margin: 0; }
+.colonne-vue { min-width: 0; }
+@media (max-width: 1099px) {
+  .deux-colonnes { grid-template-columns: 1fr; }
+  .colonne-vue { order: -1; }  /* écran étroit : une colonne, caméra d'abord */
+  .cadre-video { height: min(46vh, 26rem); }
+}
+.etat-robot { display: flex; flex-wrap: wrap; gap: 0.3rem 0.6rem; align-items: center; }
+.pas { display: flex; gap: 0.8rem; }
+.pas label { display: inline-flex; align-items: center; gap: 0.3rem; margin: 0; }
+.pas select { width: auto; }
+.actions-robot { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.35rem; }
+.actions-robot #rendre-main { grid-column: span 2; }
+.avis p:empty { display: none; }
+.onglets { display: flex; gap: 0.4rem; margin: 0 0 0.3rem; align-items: center; }
+.onglets [role="tab"] { font-weight: 700; padding: 0.3rem 0.9rem; border-radius: 0.4rem 0.4rem 0 0; }
+.onglets [role="tab"][aria-selected="true"] { background: var(--accent); color: var(--fond); }
+.vue-carte .cadre-carte svg { height: calc(100vh - 20rem); min-height: 14rem; }
+.vue-carte .actions, .vue-carte .legende { margin: 0.2rem 0; font-size: 0.9rem; }
+.carte-incertitude { fill: #ef6c0022; stroke: #ef6c00; stroke-dasharray: 5 4; }
 .etat-video { position: absolute; left: 0.5rem; top: 0.4rem; color: #ffffff; background: #000000aa; padding: 0 0.4rem;
   border-radius: 0.3rem; font-size: 0.85rem; }
 .barre-commande { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.6rem; margin: 0.4rem 0 0.2rem; }
 .barre-commande label { display: inline-flex; align-items: center; gap: 0.25rem; margin: 0; }
 .barre-commande select, .barre-commande input { width: auto; min-width: 0; margin: 0; }
-.bascule { font-size: 1.05rem; font-weight: 800; padding: 0.45rem 1rem; border: 2px solid #ef6c00; border-radius: 0.5rem; }
+.bascule { font-size: 1.25rem; font-weight: 800; padding: 0.7rem 1rem; border: 2px solid #ef6c00; border-radius: 0.5rem; }
 .bascule[aria-pressed="true"] { background: #ef6c00; color: #000000; }
 .discret { font-size: 0.85rem; color: var(--discret); }
 .ligne { margin: 0.1rem 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -138,20 +138,41 @@
   }
 
   function libelleBascule(actives) {
-    return actives ? "Flèches : ACTIVES" : "Flèches : activer";
+    return actives ? "Flèches : ACTIVES — désactiver" : "Flèches : activer";
   }
 
-  /* Échap : STOP d'abord. Il ne fait que retirer le focus des flèches si rien ne bouge et rien n'est armé. */
+  /* Échap : STOP dès qu'un mouvement est en cours. Hors mouvement, il désactive seulement les flèches. */
   function effetEchap(etat) {
-    if (etat.occupe || etat.directArme) { return "stop"; }
+    if (etat.occupe) { return "stop"; }
     return etat.flechesActives ? "desactiver" : "stop";
   }
+
+  /* Clavier, flèches actives : la touche fait bouger le robot, PAS la page (constat du 2026-10-12 : la
+   * page défilait). L'interception vaut quel que soit l'élément qui a le focus — `body`, un bouton — et
+   * jamais dans un champ de saisie, une liste déroulante ou une zone éditable. Une touche maintenue
+   * (`repeat`) est retenue mais ne compte pas. Espace reste STOP, traité ailleurs. */
+  function interception(evenement) {
+    var balise = String(evenement.balise || "").toUpperCase();
+    var saisie = balise === "INPUT" || balise === "SELECT" || balise === "TEXTAREA" || Boolean(evenement.editable);
+    if (!evenement.actives || saisie) { return { intercepter: false, action: null }; }
+    var action = null;
+    if (DIRECTIONS[evenement.key]) { action = { type: "fleche", direction: DIRECTIONS[evenement.key] }; }
+    else if (evenement.key === "Enter") { action = { type: "previsualiser" }; }
+    else if (evenement.key === "Backspace") { action = { type: "annuler" }; }
+    else if (evenement.key !== " " && evenement.key !== "Spacebar") { return { intercepter: false, action: null }; }
+    return { intercepter: true, action: evenement.repeat ? null : action };
+  }
+
+  /* Une seule activation : pilotage direct par défaut, composition de séquence si la case est cochée. */
+  function modeDesFleches(composer) { return composer ? "file" : "direct"; }
 
   var api = {
     ordreDe: ordreDe,
     basculer: basculer,
     libelleBascule: libelleBascule,
     effetEchap: effetEchap,
+    interception: interception,
+    modeDesFleches: modeDesFleches,
     directionDe: directionDe,
     symbole: symbole,
     trace: trace,

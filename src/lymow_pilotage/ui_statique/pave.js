@@ -20,7 +20,8 @@
   var faitesEnFile = 0; // étapes de la séquence déjà émises (marquées dans la miniature)
   var cap = null;
   var ordresDuRobot = null;
-  var actives = false; // LA bascule : boutons sur la vidéo et clavier, ensemble
+  var actives = false; // LA bascule : boutons sur la caméra et clavier, ensemble
+  var modeSimulation = false;
 
   function $(id) { return document.getElementById(id); }
 
@@ -87,17 +88,47 @@
     $("pave-total").title = enTete;
   }
 
-  /* Bascule unique : un seul état, visible (liseré autour de la vidéo, libellé du bouton). */
+  function enDirect() { return Fleches.modeDesFleches($("composer").checked) === "direct"; }
+
+  /* Bascule unique : un seul état pour les boutons sur la caméra ET le clavier, visible (liseré, libellé). */
   function regler(nouveau) {
     actives = nouveau;
     panneau.classList.toggle("actif", actives);
-    panneau.querySelectorAll("[data-fleche]").forEach(function (bouton) { bouton.disabled = !actives; });
+    document.getElementById("vue-camera").classList.toggle("actif", actives);
+    document.querySelectorAll("[data-fleche]").forEach(function (bouton) { bouton.disabled = !actives; });
     $("fleches-bascule").textContent = Fleches.libelleBascule(actives);
     $("fleches-bascule").setAttribute("aria-pressed", String(actives));
-    $("pave-focus").textContent = actives
-      ? "Flèches actives : ↑ ↓ ← → ajoutent une étape, Entrée prévisualise, Retour arrière annule. Échap ou clic ailleurs : désactiver."
-      : "Flèches inactives : cliquez dans la vidéo ou sur « Flèches : activer ».";
-    if (actives && !panneau.contains(document.activeElement)) { panneau.focus(); }
+    $("pave-focus").textContent = !actives
+      ? "Flèches inactives. Activées, elles font bouger le robot tout de suite (ou composent une séquence, case cochée)."
+      : enDirect()
+        ? "Flèches ACTIVES — pilotage direct : ↑ ↓ ← → font bouger le robot. Échap : désactiver (STOP si un mouvement est en cours)."
+        : "Flèches ACTIVES — composition : ↑ ↓ ← → ajoutent une étape, Entrée prévisualise, Retour arrière annule.";
+  }
+
+  async function desactiver(motif) {
+    var armees = Boolean(jeton);
+    jeton = null;
+    regler(false);
+    if (motif) { signaler(motif); }
+    if (armees) { try { await page.appeler("/api/direct/desarmer"); } catch (erreur) { signaler(erreur.message); } }
+  }
+
+  /* UN geste : « Flèches : activer » arme aussi le pilotage direct (une confirmation), sauf en composition. */
+  async function activer() {
+    if (!enDirect()) { regler(true); signaler(""); return; }
+    var accord = window.confirm(
+      "Activer les flèches ?\n\nChaque flèche fera bouger le robot IMMÉDIATEMENT, sans prévisualisation. "
+      + "STOP : Échap ou Espace. Désactivation automatique après " + config.armement_s + " s sans action."
+    );
+    if (!accord) { return; }
+    try {
+      jeton = (await page.appeler("/api/direct/armer", { confirmer: true })).jeton;
+      regler(true);
+      signaler(modeSimulation ? "Simulation : les flèches parcourent le même chemin, rien n'est émis vers le robot." : "");
+    } catch (erreur) {
+      jeton = null;
+      signaler("Activation refusée : " + erreur.message);
+    }
   }
 
   function afficherPastilles(faites, aVenir) {
@@ -126,18 +157,18 @@
 
   function afficherDirect() {
     $("bandeau-direct").hidden = !direct.arme;
-    $("direct-interrupteur").checked = direct.arme;
     $("direct-etat").textContent = direct.arme
-      ? "ARMÉ : chaque flèche émet tout de suite. Désarmement automatique dans " + direct.reste_s + " s sans action."
+      ? "Pilotage direct : désactivation automatique dans " + direct.reste_s + " s sans action."
       : "";
-    // Hors des quatre flèches, rien ne part en direct : ces boutons le disent quand ils sont inactifs.
-    $("pave-plateau").disabled = direct.arme;
-    $("pave-previsualiser").disabled = direct.arme || page.sequence().length === 0;
-    $("pave-annuler").disabled = direct.arme || page.sequence().length === 0;
-    $("pave-vider").disabled = direct.arme || page.sequence().length === 0;
-    $("pave-boutons-note").textContent = direct.arme
-      ? "Pilotage direct armé : seules les quatre flèches agissent (ni plateau, ni séquence)."
-      : "";
+    var composition = !enDirect();
+    var vide = page.sequence().length === 0;
+    // La séquence ne se manie qu'en composition ; hors composition, ces boutons disent pourquoi ils sont inactifs.
+    $("pave-previsualiser").disabled = !composition || vide;
+    $("pave-annuler").disabled = !composition || vide;
+    $("pave-vider").disabled = vide;
+    $("pave-boutons-note").textContent = composition || vide
+      ? ""
+      : "Séquence en attente : cochez « Composer une séquence » pour la prévisualiser.";
   }
 
   function rafraichir() {
@@ -163,71 +194,54 @@
     if (!actives) { return; }
     var blocage = window.LymowOrdres.blocageDesFleches(ordresDuRobot);
     if (blocage) { signaler(blocage); return; }
-    if (direct.arme && jeton) { flecheDirecte(direction); return; }
+    if (enDirect()) {
+      if (jeton) { flecheDirecte(direction); }
+      return;
+    }
     var etape = etapeDe(direction);
     if (!etape) { return; }
     page.ajouterEtape(etape);
     signaler("");
   }
 
-  async function basculerDirect() {
-    if (!$("direct-interrupteur").checked) {
-      jeton = null;
-      try { await page.appeler("/api/direct/desarmer"); } catch (erreur) { signaler(erreur.message); }
-      return;
-    }
-    var accord = window.confirm(
-      "Armer le pilotage direct ?\n\nChaque flèche émettra IMMÉDIATEMENT son étape, sans prévisualisation. "
-      + "STOP : Échap ou Espace. Désarmement automatique après " + config.armement_s + " s sans action."
-    );
-    if (!accord) { $("direct-interrupteur").checked = false; return; }
-    try {
-      jeton = (await page.appeler("/api/direct/armer", { confirmer: true })).jeton;
-      regler(Fleches.basculer(actives, "armement"));
-    } catch (erreur) {
-      jeton = null;
-      $("direct-interrupteur").checked = false;
-      signaler("Armement refusé : " + erreur.message);
-    }
-  }
-
   // --- branchements --------------------------------------------------------------
 
-  panneau.querySelectorAll("[data-fleche]").forEach(function (bouton) {
+  document.querySelectorAll("[data-fleche]").forEach(function (bouton) {
     bouton.addEventListener("click", function () { fleche(bouton.dataset.fleche); });
   });
-  $("pave-plateau").addEventListener("click", function () { page.ajouterEtape({ nom: "plateau-haut" }); });
+  $("pave-plateau").addEventListener("click", function () {
+    // En composition : une étape de plus ; sinon : prévisualisé, puis « Émettre », comme tout ordre.
+    if (enDirect()) { page.previsualiser([{ nom: "plateau-haut" }]); } else { page.ajouterEtape({ nom: "plateau-haut" }); }
+  });
   $("pave-annuler").addEventListener("click", page.annulerDerniere);
   $("pave-vider").addEventListener("click", page.viderSequence);
   $("pave-previsualiser").addEventListener("click", page.previsualiserSequence);
-  $("fleches-bascule").addEventListener("click", function () { regler(Fleches.basculer(actives, "bouton")); });
-  panneau.querySelector(".cadre-video").addEventListener("click", function () {
-    regler(Fleches.basculer(actives, "clic-video"));
-    panneau.focus();
+  $("fleches-bascule").addEventListener("click", function () { if (actives) { desactiver(""); } else { activer(); } });
+  document.getElementById("vue-camera").addEventListener("click", function (evenement) {
+    if (!actives && !evenement.target.closest("button")) { activer(); }
   });
-  $("direct-interrupteur").addEventListener("change", basculerDirect);
-  ["pave-distance", "pave-angle"].forEach(function (id) {
-    $(id).addEventListener("change", function () { if (actives) { panneau.focus(); } });
+  $("composer").addEventListener("change", function () {
+    if (actives) { desactiver("Mode changé : réactivez les flèches."); }
+    rafraichir();
   });
 
-  // Le clavier n'agit que flèches activées ET focus dans le panneau ; cliquer ailleurs les désactive.
-  panneau.addEventListener("keydown", function (evenement) {
-    var touche = {
-      key: evenement.key, repeat: evenement.repeat, balise: evenement.target.tagName, dansLePave: true, actives: actives
-    };
-    if (Fleches.retientLaTouche(touche)) { evenement.preventDefault(); } // la page ne défile pas
-    var action = Fleches.actionClavier(touche);
-    if (!action) { return; }
+  // Clavier : capté au niveau du document, en phase de capture, quel que soit l'élément qui a le focus.
+  // Flèches actives, ↑ ↓ ← → Entrée et Retour arrière ne font JAMAIS défiler ni agir la page.
+  document.addEventListener("keydown", function (evenement) {
+    var cible = evenement.target || {};
+    var decision = Fleches.interception({
+      key: evenement.key, repeat: evenement.repeat, balise: cible.tagName, editable: cible.isContentEditable, actives: actives
+    });
+    if (!decision.intercepter) { return; }
+    if (evenement.key === " " || evenement.key === "Spacebar") { return; } // STOP : traité par la page, qui retient aussi la touche
     evenement.preventDefault();
+    evenement.stopPropagation();
+    var action = decision.action;
+    if (!action) { return; }
     if (action.type === "fleche") { fleche(action.direction); }
-    if (action.type === "annuler" && !direct.arme) { page.annulerDerniere(); }
-    if (action.type === "previsualiser" && !direct.arme) { page.previsualiserSequence(); }
-  });
-  panneau.addEventListener("focusout", function () {
-    window.setTimeout(function () {
-      if (actives && !panneau.contains(document.activeElement)) { regler(Fleches.basculer(actives, "sortie")); }
-    }, 0);
-  });
+    if (action.type === "annuler" && !enDirect()) { page.annulerDerniere(); }
+    if (action.type === "previsualiser" && !enDirect()) { page.previsualiserSequence(); }
+  }, true);
   window.addEventListener("pagehide", function () {
     if (direct.arme && navigator.sendBeacon) { navigator.sendBeacon("/api/direct/desarmer"); }
   });
@@ -245,7 +259,12 @@
     appliquer: function (image) {
       direct = image.direct || direct;
       ordresDuRobot = image.ordres || null;
-      if (!direct.arme) { jeton = null; } // expiré, STOP, refus ou échec : le serveur a désarmé
+      modeSimulation = image.mode === "simulation";
+      if (!direct.arme && jeton) {  // expiré, STOP, refus ou échec : le serveur a désarmé — l'activation tombe
+        jeton = null;
+        regler(false);
+        signaler("Flèches désactivées : pilotage direct désarmé (60 s sans action, STOP ou refus). Réactivez-les.");
+      }
       cap = image.etat && typeof image.etat.cap_deg === "number" ? image.etat.cap_deg : null;
       var texte = JSON.stringify(image.resultat);
       if (texte !== dernierResultat) {
@@ -261,10 +280,9 @@
     },
     /* Échap, vu par la page : vrai si la touche n'a fait que désactiver les flèches (sinon : STOP). */
     echap: function (occupe) {
-      var effet = Fleches.effetEchap({ occupe: occupe, directArme: direct.arme, flechesActives: actives });
+      var effet = Fleches.effetEchap({ occupe: occupe, flechesActives: actives });
       if (effet !== "desactiver") { return false; }
-      regler(Fleches.basculer(actives, "echap"));
-      if (document.activeElement && panneau.contains(document.activeElement)) { document.activeElement.blur(); }
+      desactiver("");
       return true;
     },
     sequenceChangee: function () {

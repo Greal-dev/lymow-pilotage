@@ -85,15 +85,26 @@ s'appliquent pas.
 navigateur et s'arrête sur Ctrl+C. `lancer-lymow.cmd` (double-clic) lance
 `lymow ui` en simulation.
 
-La page tient en un écran de pilotage : l'en-tête (mode, état du robot en une
-ligne, STOP toujours visible), puis un bloc unique — la vidéo, sa barre de
-commande (vidéo, « Flèches : activer », pas des flèches, « Direct : armer »,
-« Plateau haut », « Pause ») et la séquence en cours sur une ligne avec
-« Prévisualiser » et « Émettre ». Tout le reste est rangé dans des sections
-repliées par défaut, dont l'état ouvert ou fermé est mémorisé par le
-navigateur (rien d'autre n'y est stocké) : « Carte et ajustement de zone »,
-« Ordres détaillés », « Calibration », « Compte » (ouverte d'elle-même si
-aucun compte n'est connecté), « Journal et résultat détaillé ».
+La page tient en un écran de pilotage, sans défilement en 1366×768. En haut :
+mode, état du robot en une ligne, STOP toujours visible. Dessous, deux
+colonnes sur écran large (une seule, caméra d'abord, sur écran étroit) :
+
+- **à gauche, les commandes** : statut du robot et précision de position, le
+  gros bouton « Flèches », les pas ↑↓ et ←→, les actions (Pause, Reprendre,
+  Retour base, Plateau haut, Rendre la main), les autorisations et refus avec
+  leurs boutons, la séquence et le retour des derniers pas ;
+- **à droite, un cadre à deux onglets** : « Caméra » (flèches en
+  surimpression) et « Carte » (position du robot avec son cercle
+  d'incertitude, « suivre le robot », précision relevée).
+
+La carte affichée est la dernière carte complète reçue, gardée sur disque par
+appareil (`carte-reference/`, hors dépôt) : elle s'affiche dès l'ouverture, et
+une réponse partielle du robot pendant une tâche ne la remplace pas — elle
+est seulement signalée. Tout le reste est rangé sous les deux colonnes, dans
+des sections repliées par défaut, dont l'état est mémorisé par le navigateur
+(rien d'autre n'y est stocké) : « Ajustement de zone », « Ordres détaillés »,
+« Calibration », « Compte » (ouverte d'elle-même si aucun compte n'est
+connecté), « Journal et résultat détaillé ».
 
 - Version. Au lancement, l'interface calcule une empreinte de son code et
   charge sa page en mémoire : la page servie reste cohérente avec le serveur,
@@ -229,11 +240,19 @@ premier essai, ouvrir la console du navigateur (F12) et observer :
 But : écrire vite une suite d'étapes — se dégager, rejoindre une zone où le
 réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même.
 
-- **Une seule bascule : « Flèches : activer »** (ou un clic dans la vidéo).
-  Elle active ensemble les quatre boutons affichés sur la vidéo et le
-  clavier ; un liseré orange autour de la vidéo le montre. Cliquer ailleurs
-  ou Échap les désactive — Échap reste STOP dès qu'un mouvement est en cours
-  ou que le pilotage direct est armé.
+- **Un seul geste : « Flèches : activer »** (ou un clic dans la caméra), avec
+  une confirmation. Par défaut c'est le **pilotage direct** : chaque flèche
+  fait bouger le robot tout de suite. La case « Composer une séquence (ne
+  pas émettre tout de suite) » rend l'autre comportement : les flèches
+  ajoutent des étapes, qui ne partent qu'avec « Prévisualiser » puis
+  « Émettre ». Un liseré orange autour de la caméra montre l'activation.
+  Elle ne tombe que par le bouton, par Échap hors mouvement (Échap reste STOP
+  pendant un mouvement), ou par le désarmement du serveur (60 s sans action,
+  STOP, refus) — plus en cliquant ailleurs.
+- **Clavier.** Flèches actives, les touches ↑ ↓ ← →, Entrée et Retour arrière
+  sont captées au niveau de la page entière : elles ne la font plus défiler,
+  quel que soit l'élément qui a le focus ; elles ne sont pas captées dans un
+  champ de saisie ou une liste. Une touche maintenue vaut un seul appui.
 - **Robot en tonte ou en retour : un mouvement est refusé** (SEC-01), et la
   page le dit avant même d'essayer : « Le robot tond : mettez la tâche en
   pause pour prendre la main », avec le bouton « Mettre en pause » à côté (une
@@ -247,11 +266,11 @@ réseau revient — et non piloter à vue. Les flèches sont sur la vidéo même
   ↓ reculer, ← tourner à gauche, → tourner à droite. Pas choisis dans deux
   listes : 0,25 / 0,5 / 1 (défaut) / 2 m et 15 / 45 (défaut) / 90°. Vitesses
   par défaut de l'outil. STOP reste Échap ou Espace, partout.
-- **Mode file (défaut).** Chaque flèche ajoute une étape à la séquence de la
+- **Composition (case cochée).** Chaque flèche ajoute une étape à la séquence de la
   page (la même liste que le compositeur). Une miniature trace le trajet cumulé
   et donne distance, rotation et durée estimée. Entrée prévisualise la
   séquence ; « Émettre » l'émet. Retour arrière annule la dernière étape.
-- **Mode direct (à armer, avec confirmation).** Chaque flèche émet aussitôt son
+- **Pilotage direct (défaut).** Chaque flèche émet aussitôt son
   étape, sans prévisualisation ; les appuis faits pendant un mouvement
   attendent dans une file de cinq au plus. Bandeau « PILOTAGE DIRECT ARMÉ »
   tant que c'est armé. Désarmement automatique après 60 s sans action, à la
