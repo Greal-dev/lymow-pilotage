@@ -157,6 +157,7 @@
     }
     liaisonSuspendue = Boolean(image.liaison_suspendue);
     $("diagnostic-rtk").checked = Boolean(image.diagnostic_rtk);
+    $("diagnostic-texte").textContent = image.diagnostic_texte || "";
     dernieresOrdres = image.ordres || null;
     $("rendre-main").disabled = liaisonSuspendue;
     $("rendre-main").title = liaisonSuspendue ? "La main est déjà rendue : « Prendre la main » la reprend." : "";
@@ -653,6 +654,13 @@
   $("sequence-previsualiser").addEventListener("click", function () { previsualiser(sequence.slice(), false, objectifSequence); });
   $("sequence-vider").addEventListener("click", function () { sequence = []; afficherSequence(); });
   $("emettre").addEventListener("click", emettre);
+  $("garde-carte").addEventListener("change", async function () {
+    try {
+      await appeler("/api/garde-carte", { arreter: $("garde-carte").checked });
+    } catch (erreur) {
+      $("pause-etat").textContent = "Réglage refusé : " + erreur.message;
+    }
+  });
   $("erreur-annuler").addEventListener("click", async function () {
     if (!window.confirm("Annuler la tâche en cours ?\n\nLa tâche est ABANDONNÉE : le robot s'arrête sur place et se remet en "
       + "attente. Effet sur une erreur de pare-chocs : inconnu — si l'erreur persiste, il faudra intervenir sur place.")) { return; }
@@ -668,7 +676,7 @@
       await appeler("/api/diagnostic-rtk", { actif: $("diagnostic-rtk").checked });
     } catch (erreur) {
       $("diagnostic-rtk").checked = false;
-      $("carte-note").textContent = "Diagnostic de localisation refusé : " + erreur.message;
+      $("diagnostic-texte").textContent = "Diagnostic de localisation refusé : " + erreur.message;
     }
   });
   $("recalage").addEventListener("click", function () {

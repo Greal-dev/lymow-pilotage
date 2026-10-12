@@ -229,7 +229,10 @@ def test_direct_refuse_pendant_un_autre_ordre_et_arme_refuse_si_occupe(tmp_path,
             _statut, corps, _recus = await poster(http, serveur, "/api/previsualiser", {"ordres": [{"nom": "avancer", "valeur": 0.5}]})
             await poster(http, serveur, "/api/emettre", {"identifiant": corps["identifiant"]})
             statut, _corps, _recus = await fleche(http, serveur, jeton, "haut", 1)
-            assert statut == 409 and serveur.instantane()["direct"]["arme"] is False  # un seul mouvement à la fois
+            # Un seul mouvement à la fois ; refus avant émission : dit, sans désarmer (décision du 2026-10-12).
+            assert statut == 409 and serveur.instantane()["direct"]["arme"] is True
+            await poster(http, serveur, "/api/direct/desarmer")
+            await attendre(lambda: serveur.session is not None)
             statut, _corps, _recus = await poster(http, serveur, "/api/direct/armer", {"confirmer": True})
             assert statut == 409
             await attendre(lambda: not serveur.occupe, delai=6.0)

@@ -235,6 +235,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .pas { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; margin: 0.2rem 0; }
 .pas label { display: inline-flex; align-items: center; gap: 0.3rem; margin: 0; white-space: nowrap; }
 #bord-zone { margin: 0; }
+#bord-zone.alerte-carte { color: #ef6c00; font-weight: 700; }  /* le bord est avant la fin du pas demandé */
+.diagnostic .explication { display: block; }
+.diagnostic strong:empty { display: none; }
 .pas select { width: auto; }
 .actions-robot { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.35rem; }
 .avis p:empty { display: none; }

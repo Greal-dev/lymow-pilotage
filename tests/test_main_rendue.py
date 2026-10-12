@@ -371,7 +371,7 @@ def test_sec13_pose_ancienne_le_pas_part_entier_et_le_bilan_le_dit(session, lien
 
 def test_sec13_raccourcissement_annonce_des_la_previsualisation(tmp_path, monkeypatch, session_reelle, lien):
     etapes = [("avancer", 1.0), ("tourner", 180.0), ("avancer", 1.0), ("plateau", 60.0), ("reculer", 2.0)]
-    assert garde_carte.annoncer(CARTE, (9.12, 5.0), 0.0, 0.0, 1.0, etapes) == [
+    assert garde_carte.annoncer(CARTE, (9.12, 5.0), 0.0, 0.0, 1.0, etapes, True) == [
         "étape 1 : pas réduit à 0,55 m : bord de zone devant à 0,85 m (marge de sécurité 0,3 m)",
         "étape 5 : pas réduit à 1 m : bord de zone derrière à 1,3 m (marge de sécurité 0,3 m)",
     ]
@@ -387,6 +387,7 @@ def test_sec13_raccourcissement_annonce_des_la_previsualisation(tmp_path, monkey
         async with serveur_ui(tmp_path, monkeypatch, reel=True, session=session_reelle) as (serveur, http):
             await attendre(lambda: serveur.instantane()["carte_connue"])
             await poster(http, serveur, "/api/actualiser")
+            await poster(http, serveur, "/api/garde-carte", {"arreter": True})  # case cochée : le garde-fou raccourcit
             _statut, corps, _recus = await poster(http, serveur, "/api/previsualiser", {"ordres": [{"nom": "avancer", "valeur": 1}]})
             assert corps["garde_carte"] == ["étape 1 : pas réduit à 0,55 m : bord de zone devant à 0,85 m (marge de sécurité 0,3 m)"]
             _statut, corps, _recus = await poster(http, serveur, "/api/previsualiser", {"ordres": [{"nom": "avancer", "valeur": 1, "force": True}]})

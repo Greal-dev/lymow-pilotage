@@ -28,7 +28,7 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
-from . import auth, bon_signal, capture, diagnostic, garde_carte, coffre, compte, conduite, demo, fleches, geometrie, liaison, reference, releve, mouvement, rappel, retouche, securite
+from . import auth, bon_signal, capture, config, diagnostic, garde_carte, coffre, compte, conduite, demo, fleches, geometrie, liaison, reference, releve, mouvement, rappel, retouche, securite
 from . import carte as cartes
 from .config import Calibration
 from .journal import Journal, assainir, declarer_secret, masquer
@@ -71,6 +71,7 @@ DELAI_LIBERATION_S = 10.0
 SUITE_CAPTURE_S = 20.0
 # Après « Mettre en pause » : temps laissé au robot pour annoncer son statut « pause ».
 DELAI_PAUSE_S = 15.0
+ATTENTE_DIAGNOSTIC_S = 20.0  # sans réponse du robot au diagnostic de localisation au-delà : c'est dit
 DELAI_ANNULATION_S = 15.0  # après « annuler la tâche », le statut « prêt » est attendu ce temps-là
 # Pas de suite sans déplacement constaté avant de désarmer le pilotage direct (essai réel du 2026-10-12 :
 # au premier constat, la main se perdait à chaque pas).
@@ -221,6 +222,9 @@ class ServeurUI:
         self._pause: tuple[float, float, int] | None = None
         self._annulation: tuple[float, float] | None = None  # « annuler la tâche » sur erreur : instant, échéance
         self._immobiles = 0  # pas directs de suite sans déplacement constaté
+        # SEC-13 : avertissement par défaut ; la case « Arrêter aux bords de zone » est mémorisée sur ce poste.
+        self.arret_aux_bords = config.arret_aux_bords(self.dossier)
+        self._diagnostic_depuis: float | None = None
         self._direct_en_cours = False
         # « Rendre la main à l'application » : liaison fermée, reconnexion automatique suspendue.
         self.suspendue = False
@@ -267,6 +271,7 @@ class ServeurUI:
                 web.post("/api/liaison/rendre", self._liaison_rendre),
                 web.post("/api/liaison/reprendre", self._liaison_reprendre),
                 web.post("/api/diagnostic-rtk", self._diagnostic_rtk),
+                web.post("/api/garde-carte", self._garde_carte),
                 web.get("/api/releve", self._releve_lire),
                 web.get("/api/signal", self._signal_proposer),
                 web.post("/api/direct/armer", self._direct_armer),
@@ -459,6 +464,35 @@ class ServeurUI:
             except Exception:  # noqa: BLE001 — une demande perdue se refera au tour suivant
                 continue
 
+    def _texte_du_diagnostic(self) -> str:
+        """Case cochée : ce que le robot a répondu, ou qu'il ne répond pas (dit après 20 s)."""
+        session = self.session
+        if not self.diagnostic_rtk or session is None:
+            return ""
+        if self._diagnostic_depuis is None:
+            self._diagnostic_depuis = session.horloge()
+        etat, depuis = session.etat, self._diagnostic_depuis
+        if etat.recu_rtk is not None and etat.recu_rtk >= depuis:
+            detail = etat.detail_localisation() or "réponse reçue, sans détail exploitable"
+            if etat.ecart_brut_m is None:
+                detail += " ; écart position satellite / position calculée : non mesurable (position brute non transmise)"
+            return detail
+        if session.horloge() - depuis > ATTENTE_DIAGNOSTIC_S:
+            return "le robot ne répond pas à la demande de diagnostic"
+        return "demande envoyée : réponse attendue…"
+
+    async def _garde_carte(self, requete: web.Request) -> web.StreamResponse:
+        """Case « Arrêter aux bords de zone (d'après la carte) » : décochée par défaut, mémorisée sur ce poste."""
+        corps = await self._corps(requete)
+        arreter = corps.get("arreter") if isinstance(corps, dict) else None
+        if not isinstance(arreter, bool) or set(corps) != {"arreter"}:
+            raise ErreurSaisie("« arreter » attendu : vrai ou faux")
+        self.arret_aux_bords = arreter
+        memorisee = config.memoriser_arret_aux_bords(self.dossier, arreter)
+        self.journal.ecrire("garde-carte", arret_aux_bords=arreter, memorisee=memorisee)
+        self.version += 1
+        return web.json_response({"arreter": arreter, "memorisee": memorisee})
+
     async def _diagnostic_rtk(self, requete: web.Request) -> web.StreamResponse:
         corps = await self._corps(requete)
         actif = corps.get("actif") if isinstance(corps, dict) else None
@@ -469,6 +503,7 @@ class ServeurUI:
             self._refuser_si_main_rendue()
         if actif != self.diagnostic_rtk:
             self.diagnostic_rtk = actif
+            self._diagnostic_depuis = self.session.horloge() if actif and self.session is not None else None
             self.journal.ecrire("diagnostic-rtk", actif=actif, mode=self.mode)
             self._noter("diagnostic de localisation : " + ("le robot est interrogé toutes les 5 s" if actif else "arrêté"))
         return web.json_response({"actif": self.diagnostic_rtk})
@@ -499,7 +534,9 @@ class ServeurUI:
             cap = None if pose is None else pose.cap_deg
             devant, derriere = (garde_carte.bord_devant(carte, point, cap, sens) if fraiche else None for sens in (1.0, -1.0))
             inconnue = garde_carte.juger_pas(carte, point, cap, 1.0, session.etat.precision_m, age).motif if devant is None else None
-            texte = inconnue or f"bord de zone devant : {garde_carte.metres(devant)} ; derrière : {garde_carte.metres(derriere)}"
+            texte = inconnue or (
+                f"d'après la carte : bord de zone devant à {garde_carte.metres(devant)} ; derrière à {garde_carte.metres(derriere)}"
+            )
             self._bord = (cle, {"devant_m": devant, "derriere_m": derriere, "texte": texte})
         return self._bord[1]
 
@@ -677,6 +714,8 @@ class ServeurUI:
             "occupe": self.occupe,
             "ordres": self._etat_des_ordres(),
             "diagnostic_rtk": self.diagnostic_rtk,
+            "diagnostic_texte": self._texte_du_diagnostic(),
+            "arret_aux_bords": self.arret_aux_bords,
             "carte_connue": self._carte_affichee()[0] is not None,  # la page la charge alors d'elle-même
             "direct": {
                 "arme": self.direct.arme, "reste_s": self.direct.reste_s,
@@ -883,7 +922,7 @@ class ServeurUI:
             annonces = garde_carte.annoncer(
                 self.session.carte_reference, None if etat.pose is None else (etat.pose.est_m, etat.pose.nord_m),
                 None if etat.pose is None else etat.pose.cap_deg, etat.precision_m, age,
-                [(o.nom, o.valeur) for o in ordres if not o.force],
+                [(o.nom, o.valeur) for o in ordres if not o.force], self.arret_aux_bords,
             ) if any(o.nom in ("avancer", "reculer") and not o.force for o in ordres) else []
         texte = " ; ".join(str(ordre) for ordre in ordres)
         self._noter(f"prévisualisation : {texte}" + ("" if code == 0 else f" — refusée : {bilan.get('motif')}"))
@@ -941,6 +980,7 @@ class ServeurUI:
         pause ou rotation ; et un échec ici ne retient aucun ordre (pas de garde-fou, c'est dit au bilan)."""
         if not any(ordre.nom in ("avancer", "reculer") for ordre in ordres):
             return
+        self.session.arret_aux_bords = self.arret_aux_bords
         try:
             self._poser_origine(self.session)
         except Exception:  # noqa: BLE001
@@ -1163,9 +1203,12 @@ class ServeurUI:
         if self.session is None or not self.session.lien.connecte:
             self._desarmer("robot injoignable")
             return _refus(503, f"robot injoignable : {self.etat_liaison}")
-        if self._stop_demande or (self.occupe and not self._direct_en_cours):
-            self._desarmer("un autre ordre ou un STOP est en cours")
-            return _refus(409, "un autre ordre ou un STOP est en cours : pilotage direct désarmé")
+        if self._stop_demande:
+            self._desarmer("un STOP est en cours")
+            return _refus(409, "un STOP est en cours : pilotage direct désarmé")
+        if self.occupe and not self._direct_en_cours:  # refus avant émission : dit, la main est gardée
+            self.direct.prolonger()
+            return _refus(409, "un autre ordre est en cours : attendez sa fin, puis rappuyez")
         if self.occupe and len(self.direct.file) >= fleches.FILE_MAX:
             self.direct.prolonger()  # appui ignoré, jeton inchangé : la page reste armée
             return _refus(429, f"file d'attente pleine ({fleches.FILE_MAX}) : appui ignoré")
@@ -1216,6 +1259,13 @@ class ServeurUI:
                     )
                     code = 1
                     break
+                # Refus AVANT émission (rien n'est parti) : seuls SEC-01 (statut du robot) et la liaison désarment.
+                # Bornes (SEC-02), carte (SEC-13), localisation (SEC-12) : dits, la main est gardée.
+                if code != 0 and rapport.get("refus_avant_emission") and "SEC-01" not in str(rapport.get("echec")):
+                    self.direct.file.clear()
+                    self.direct.prolonger()
+                    code = 0
+                    continue
                 if code != 0 or contraire:
                     motif = bilan.get("motif") or rapport.get("echec") or rapport.get("constat") or "échec"
                     code = code or 1

@@ -82,8 +82,9 @@ def test_allure_lente_pres_d_un_bord_ou_position_non_fiable_sauf_choix_de_l_oper
     pres = juger_pas(CARTE, (7.02, 5.0), 0.0, 2.0, 0.02)  # arrivée à 0,95 m du bord
     assert garde_carte.allure(None, loin, 0.02) == (None, None)
     assert garde_carte.allure(None, pres, 0.02) == (0.10, "allure lente : l'arrivée est à moins de 1 m d'un bord de zone")
-    assert garde_carte.allure(None, loin, 0.3) == (0.10, "allure lente : position dégradée")
-    assert garde_carte.allure(None, loin, 1.32) == (0.10, "allure lente : position perdue")
+    # Position non fiable : la carte n'est pas crédible, l'allure reste normale (décision du 2026-10-12).
+    for precision in (0.3, 1.32, 4.68):
+        assert garde_carte.allure(None, loin, precision) == (None, None) and garde_carte.allure(None, pres, precision) == (None, None)
     assert garde_carte.allure(0.25, pres, 1.32) == (None, None)  # allure choisie par l'opérateur : respectée
     assert garde_carte.allure(None, loin, None) == (None, None)  # précision non annoncée : rien n'est changé
 
@@ -129,6 +130,7 @@ def _robot(est: float, nord: float = 5.0, precision: float = 0.01, **plus) -> di
 
 def test_sec13_avance_reelle_raccourcie_annoncee_et_lente(session, lien):
     session.carte_reference = CARTE
+    session.arret_aux_bords = True  # case « Arrêter aux bords de zone » cochée
     lien.robot = _robot(9.12)  # bord à 0,85 m, marge 0,31 m
     bilan = asyncio.run(mouvement.executer_sequence(session, [Ordre("avancer", 1.0)]))
     etape = bilan["etapes"][0]
@@ -140,6 +142,7 @@ def test_sec13_avance_reelle_raccourcie_annoncee_et_lente(session, lien):
 
 def test_sec13_avance_reelle_refusee_rien_n_est_emis_puis_forcee_et_journalisee(session, lien, tmp_path):
     session.carte_reference = CARTE
+    session.arret_aux_bords = True  # case « Arrêter aux bords de zone » cochée
     lien.robot = _robot(9.82)  # bord à 0,15 m
     bilan = asyncio.run(mouvement.executer_sequence(session, [Ordre("avancer", 0.5)]))
     assert "pas refusé : bord de zone devant à 0,15 m" in bilan["etapes"][0]["echec"] and "(SEC-13)" in bilan["etapes"][0]["echec"]
@@ -160,10 +163,14 @@ def test_sec13_sans_carte_de_reference_le_pas_part_et_le_bilan_le_dit(session, l
     assert "garde_carte" not in tourne and "allure" not in tourne  # rotation inchangée
 
 
-def test_sec13_position_degradee_allure_lente_sans_changer_la_longueur_du_pas(session, lien):
+def test_position_degradee_allure_normale_et_pas_long_pres_d_un_bord_plancher_de_vitesse(session, lien):
     lien.robot = _robot(2.0, precision=0.3)
+    normal = asyncio.run(mouvement.executer_sequence(session, [Ordre("avancer", 0.5)]))["etapes"][0]
+    assert normal["ordre"] == "avancer 0.5" and "allure" not in normal  # position dégradée : allure normale
+    session.carte_reference = CARTE
+    lien.robot = _robot(8.72, precision=0.02)  # position fiable, bord à 1,25 m : arrivée à moins de 1 m
     etape = [asyncio.run(mouvement.executer_sequence(session, [Ordre("avancer", pas)]))["etapes"][0] for pas in (0.5, 2.0)]
-    assert etape[0]["ordre"] == "avancer 0.5 --vitesse 0.1" and etape[0]["allure"] == "allure lente : position dégradée"
+    assert etape[0]["ordre"] == "avancer 0.5 --vitesse 0.1" and "moins de 1 m d'un bord de zone" in etape[0]["allure"]
     # Un pas de 2 m ne tient pas en 9 s à 0,10 m/s (SEC-02) : il garde sa longueur, à la plus faible vitesse qui tient.
     assert etape[1]["ordre"] == "avancer 2 --vitesse 0.23" and "0.23 m/s pour ce pas de 2 m (9 s au plus par ordre)" in etape[1]["allure"]
 
@@ -243,7 +250,7 @@ def test_page_allure_forcer_et_distance_au_bord(tmp_path, monkeypatch, session_r
             await attendre(lambda: serveur.session.etat.pose is not None)
             await attendre(lambda: serveur.instantane()["ordres"]["bord"]["devant_m"] is not None)
             assert serveur.instantane()["ordres"]["bord"] == {
-                "devant_m": 2.95, "derriere_m": 7.0, "texte": "bord de zone devant : 2,95 m ; derrière : 7 m",
+                "devant_m": 2.95, "derriere_m": 7.0, "texte": "d'après la carte : bord de zone devant à 2,95 m ; derrière à 7 m",
             }
             # Une flèche réelle passe par le garde-fou : la carte connue de la page est celle de la session.
             _statut, corps, _recus = await poster(http, serveur, "/api/direct/armer", {"confirmer": True})
@@ -253,7 +260,7 @@ def test_page_allure_forcer_et_distance_au_bord(tmp_path, monkeypatch, session_r
             assert statut == 202 and serveur.session.carte_reference is not None
             await attendre(lambda: not serveur.occupe, delai=10.0)
             rapport = serveur.instantane()["direct"]["faites"][-1]["rapport"]
-            assert rapport["ordre"] == "avancer 0.25 --vitesse 0.1" and rapport["garde_carte"].startswith("bord de zone devant : 2,95 m")
+            assert rapport["ordre"] == "avancer 0.25 --vitesse 0.1" and rapport["garde_carte"] == "d'après la carte : bord de zone devant à 2,95 m"
 
     executer(scenario())
 

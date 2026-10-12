@@ -360,7 +360,9 @@ captures : le robot n'envoie le détail RTK qu'à un client qui le demande
 de la base, taux d'erreur du lien radio, motif d'erreur. L'outil sait émettre
 ces deux demandes comme **requêtes pures** (forme exacte, contrôlée à
 l'octet), mais **jamais d'office** : seulement si vous cochez « Diagnostic
-de localisation (interroge le robot toutes les 5 s) » sous la carte —
+de localisation (interroge le robot toutes les 5 s) », dans le bloc d'état
+à gauche (la réponse s'affiche à côté ; sans réponse après 20 s : « le
+robot ne répond pas à la demande de diagnostic ») —
 décoché par défaut, décoché de nouveau quand la main est rendue, jamais
 pendant un mouvement — ou par `lymow capture --rtk`. Ce que les sources
 établissent : le socle nomme ces codes « QUERY » et les émet tels quels ;
@@ -397,10 +399,12 @@ aucun code d'erreur ni d'avertissement, ni aucun champ de perception —
 mais aucun obstacle n'a été approché ce jour-là. L'outil se protège donc
 avec ce qu'il voit :
 
-- **la carte** (SEC-13) : il ne laisse pas un pas sortir des zones connues ;
+- **la carte** (SEC-13) : il avertit quand un pas sortirait des zones
+  connues — et ne l'empêche que si la case « Arrêter aux bords de zone »
+  est cochée ;
 - **les indices de choc** (SEC-14) : il s'arrête si le robot annonce un
   choc ou cesse d'avancer — donc APRÈS le contact, pas avant ;
-- **l'allure** : lente près d'un bord ou quand la position est douteuse.
+- **l'allure** : lente près d'un bord, quand la position est fiable.
 
 Il **ne voit pas** : un obstacle absent de la carte (mur non cartographié,
 mobilier, outil laissé au sol), une personne, un animal. Le pilotage se
@@ -599,24 +603,34 @@ s'exécute tout seul.**
   horizontale, précision verticale, qualité, état du nœud de localisation ;
   ni l'âge des corrections RTK ni l'état du lien radio de la base n'y
   figurent.
-- **SEC-13 Garde-fou carte** (avance et recul réels). Avant d'émettre, le
-  pas est projeté depuis la pose et le cap connus sur la carte de référence.
-  Le robot doit rester dans les zones de tonte et les passages, hors zones
-  interdites, en gardant devant lui une marge de 0,30 m plus l'incertitude
-  de position annoncée. Sinon le pas est **raccourci** à la plus grande
-  distance sûre, et c'est annoncé (« pas réduit à 0,55 m : bord de zone
-  devant à 0,85 m ») ; s'il reste moins de 0,25 m, il est **refusé**.
-  « Forcer ce pas » (case de la page, une confirmation, un seul pas) ou
-  `lymow avancer 1 --forcer` passe outre — la carte peut être fausse, et il
-  faut pouvoir sortir d'une zone — et le journal le note
-  (`garde-carte-forcee`). Sans pose, sans carte de référence ou robot hors
-  des zones : aucun garde-fou possible, dit en clair (« distance au bord
-  inconnue »), sans blocage. La page affiche « bord de zone devant : 2,4 m ».
-  Limites : seule la distance dans l'axe du pas est jugée (un bord latéral
-  proche ne l'est pas) ; une pose reçue il y a plus de 5 s ne compte plus
-  (« distance au bord inconnue : position du robot trop ancienne ») ; la
-  rotation n'est pas concernée. Le raccourcissement ou le refus est annoncé
-  dès la prévisualisation, étape par étape.
+- **SEC-13 Garde-fou carte : un AVERTISSEMENT par défaut** (décision du
+  propriétaire, 2026-10-12 : en essai réel, la carte plaçait le robot à
+  0,35 m d'un bord alors qu'il en était loin, et le garde-fou refusait à
+  tort). Avant et après chaque avance ou recul, l'outil dit ce que la carte
+  indique (« d'après la carte : bord de zone devant à 0,35 m », en orange
+  quand le bord est avant la fin du pas), puis **émet le pas en entier** :
+  il ne raccourcit et ne refuse rien. La case « Arrêter aux bords de zone
+  (d'après la carte) », **décochée par défaut** et mémorisée sur ce poste
+  (`preferences.json` du dossier de données, lue aussi par la commande),
+  rétablit l'ancien comportement : marge de 0,30 m plus l'incertitude
+  annoncée, pas raccourci ou refusé, « Forcer ce pas » (qui n'apparaît
+  qu'alors) ou `--forcer` pour passer outre. Sans pose récente (5 s), sans
+  carte ou robot hors des zones : « distance au bord inconnue ». Seule la
+  distance dans l'axe du pas est regardée ; la rotation n'est pas
+  concernée. La prévisualisation annonce la même chose, étape par étape.
+  **Aucun refus de carte ne désarme le pilotage direct.** Avant émission,
+  seuls un refus de statut (SEC-01, SEC-01b) et un échec de liaison
+  désarment ; les refus de bornes (SEC-02), de carte (SEC-13), de
+  localisation (SEC-12), de pas hors liste, ou « un autre ordre est en
+  cours » sont dits et la main est gardée.
+  Vérification hors ligne du repère (2 512 poses réelles du 2026-10-12,
+  carte de référence) : toutes les poses de précision fiable ou dégradée
+  tombent dans les zones et passages de la carte, et aucune autre
+  orientation des axes ne fait mieux — pose et carte sont dans le même
+  repère. Un décalage de l'ordre du mètre ne se voit pas par ce contrôle,
+  et aucune pose « en charge » n'existe dans les captures pour le comparer
+  à la station. Sur la carte, une position reçue il y a plus de 5 s est
+  dite telle (« le marqueur n'est plus à jour »).
 - **SEC-14 Arrêt sur indice de choc** pendant un mouvement : arrêt immédiat
   si un code d'erreur ou d'avertissement de choc, pare-chocs, ultrasons,
   soulèvement, blocage ou patinage **apparaît** (un code déjà présent au
@@ -627,9 +641,10 @@ s'exécute tout seul.**
   n'opère que si la position arrive au moins chaque seconde ; sinon le
   bilan dit « surveillance de progression inactive ».
 - **Allure.** Liste « Allure » à côté des pas : auto, lente (0,10 m/s),
-  normale (0,25 m/s). En auto, l'allure lente est prise quand l'arrivée est
-  à moins de 1 m d'un bord de zone ou quand la position est dégradée ou
-  perdue ; c'est annoncé au bilan. Un ordre dure 9 s au plus (SEC-02) : un
+  normale (0,25 m/s). En auto, l'allure lente n'est prise que si la
+  position est fiable ET que l'arrivée est à moins de 1 m d'un bord de
+  zone ; position dégradée ou perdue : la carte n'est pas crédible,
+  l'allure reste normale. C'est annoncé au bilan. Un ordre dure 9 s au plus (SEC-02) : un
   pas trop long pour 0,10 m/s garde sa longueur et prend la plus faible
   vitesse qui tient (0,12 m/s pour 1 m, 0,23 m/s pour 2 m). Pour rester
   vraiment lent, choisir un pas de 0,5 m.

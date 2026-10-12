@@ -120,7 +120,12 @@
   function positionAffichee(etat, station) {
     var rayon = etat && typeof etat.precision_m === "number" ? etat.precision_m : null;
     if (etat && typeof etat.position_est_m === "number" && typeof etat.position_nord_m === "number") {
-      return { est: etat.position_est_m, nord: etat.position_nord_m, cap: etat.cap_deg || 0, rayon: rayon, source: "pose", note: "" };
+      // Position ancienne : le marqueur reste où il était, et c'est dit — le robot ne la transmet plus.
+      var age = typeof etat.age_pose_s === "number" ? etat.age_pose_s : 0;
+      var note = age > 5
+        ? "position reçue il y a " + (age < 90 ? Math.round(age) + " s" : Math.round(age / 60) + " min") + " : le robot ne la transmet plus, le marqueur n'est plus à jour"
+        : "";
+      return { est: etat.position_est_m, nord: etat.position_nord_m, cap: etat.cap_deg || 0, rayon: rayon, source: "pose", note: note };
     }
     if (station) {
       return {
@@ -171,6 +176,12 @@
       texte += apres.precision_m <= avant.precision_m ? " : stable ou amélioré." : " : dégradé.";
     }
     return texte;
+  }
+
+  /* SEC-13, avertissement : le bord (d'après la carte) est-il avant la fin du pas demandé, devant ou derrière ? */
+  function alerteBord(bord, pas) {
+    if (!bord || typeof pas !== "number") { return false; }
+    return (typeof bord.devant_m === "number" && bord.devant_m < pas) || (typeof bord.derriere_m === "number" && bord.derriere_m < pas);
   }
 
   function enErreur(ordres) {
@@ -259,6 +270,7 @@
     quiALaMain: quiALaMain,
     clicRendreAccepte: clicRendreAccepte,
     diagnosticErreur: diagnosticErreur,
+    alerteBord: alerteBord,
     texteDeLaMain: texteDeLaMain,
     annoncePrendreLaMain: annoncePrendreLaMain,
     suitePrendreLaMain: suitePrendreLaMain,

@@ -468,6 +468,8 @@ def _age_de_la_pose(session: Session) -> float | None:
 def _garder_le_pas(session: Session, ordre: Ordre) -> tuple[Ordre, dict[str, Any]]:
     """SEC-13 : une avance ou un recul est projeté sur la carte de référence avant d'être émis.
 
+    Par défaut, simple AVERTISSEMENT (voir plus bas) ; le comportement décrit ici ne vaut que si l'opérateur a
+    coché « Arrêter aux bords de zone (d'après la carte) ».
     Hors des zones et passages, ou dans une zone interdite (marge 0,30 m + incertitude annoncée) : le pas
     est raccourci à la plus grande distance sûre, ou refusé. « Forcer ce pas » passe outre (la carte peut
     être fausse, et il faut pouvoir sortir d'une zone) : c'est journalisé. Sans pose ou sans carte, aucun
@@ -482,7 +484,12 @@ def _garder_le_pas(session: Session, ordre: Ordre) -> tuple[Ordre, dict[str, Any
         None if pose is None else pose.cap_deg, sens * ordre.valeur, precision, _age_de_la_pose(session),
     )
     infos: dict[str, Any] = {"garde_carte": jugement.motif}
-    if jugement.decision in (garde_carte.RACCOURCI, garde_carte.REFUS):
+    if not session.arret_aux_bords:
+        # Décision du propriétaire (2026-10-12, constat réel : position affichée fausse, pas refusés à tort) :
+        # par défaut la carte AVERTIT seulement — le pas part en entier, jamais raccourci ni refusé.
+        texte, alerte = garde_carte.constat(jugement, sens * ordre.valeur)
+        infos = {"garde_carte": texte, "garde_carte_alerte": alerte}
+    elif jugement.decision in (garde_carte.RACCOURCI, garde_carte.REFUS):
         if ordre.force:
             session.journal.ecrire("garde-carte-forcee", strict=True, ordre=str(ordre), motif=jugement.motif)
             infos["garde_carte"] = f"pas forcé par l'opérateur malgré : {jugement.motif}"
@@ -573,9 +580,18 @@ async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
     # SEC-14 (c) n'opère que si la pose arrive assez souvent (télécommande : ~0,6 s) : sinon c'est dit.
     if suivi is not None:
         garde_fou["surveillance_progression"] = "active" if suivi.active else "inactive : position reçue trop rarement"
-    return {"mode": "réel", "ordre": str(ordre), "emissions": emissions} | depart | sous_attestation | garde_fou | await constater(
+    rapport = {"mode": "réel", "ordre": str(ordre), "emissions": emissions} | depart | sous_attestation | garde_fou | await constater(
         session, avant, instant_arret, consigne
     )
+    if "garde_carte" in garde_fou and not session.arret_aux_bords:  # la carte, après le pas aussi
+        apres = session.etat.pose
+        suite = garde_carte.juger_pas(
+            session.carte_reference, None if apres is None else (apres.est_m, apres.nord_m),
+            None if apres is None else apres.cap_deg, math.copysign(1.0, consigne.lineaire), session.etat.precision_m,
+            _age_de_la_pose(session),
+        )
+        rapport["garde_carte_apres"] = garde_carte.constat(suite, math.copysign(1.0, consigne.lineaire))[0]
+    return rapport
 
 
 def code_pause(statut: int | None) -> int:
@@ -879,7 +895,10 @@ async def executer_sequence(session: Session, ordres: list[Ordre], objectif_sign
         try:
             rapport = await executer(session, ordre)
         except (RefusSecurite, EchecOrdre, OSError) as erreur:
-            bilan["etapes"].append({"ordre": str(ordre), "issue": "non émise ou échouée", "echec": str(erreur)})
+            etape = {"ordre": str(ordre), "issue": "non émise ou échouée", "echec": str(erreur)}
+            if isinstance(erreur, RefusSecurite):
+                etape["refus_avant_emission"] = True  # rien n'est parti : l'appelant peut garder la main
+            bilan["etapes"].append(etape)
             non_confirme = isinstance(erreur, ArretNonConfirme)
             return bilan | {
                 "interrompue": True,
