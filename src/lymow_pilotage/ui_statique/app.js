@@ -105,6 +105,10 @@
     emission = modeReel || demonstration;
     $("bandeau-reel").hidden = !modeReel;
     $("bandeau-demo").hidden = !demonstration;
+    $("bandeau-arret").hidden = true; // le serveur répond
+    if (image.serveur) {
+      $("version-serveur").textContent = "version " + image.serveur.empreinte + ", démarrée à " + image.serveur.demarre;
+    }
     $("video-demarrer").hidden = demonstration;
     $("mode").textContent = modeReel ? "MODE RÉEL" : image.mode;
     $("mode").className = "pastille" + (modeReel ? " reel" : "");
@@ -560,7 +564,11 @@
       appliquer(image);
       var flux = new EventSource("/api/flux");
       flux.onmessage = function (evenement) { appliquer(JSON.parse(evenement.data)); };
-      flux.onerror = function () { $("liaison").textContent = "page déconnectée du serveur local (est-il arrêté ?)"; };
+      flux.onerror = function () {
+        // Flux rompu : le serveur est arrêté (ou remplacé). Plus de page figée qui semble vivante.
+        $("bandeau-arret").hidden = false;
+        $("liaison").textContent = "page déconnectée du serveur local";
+      };
     })
     .catch(function () { $("liaison").textContent = "serveur local injoignable"; });
   afficherSequence();

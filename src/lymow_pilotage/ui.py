@@ -10,6 +10,7 @@ Le mouvement vit ici, côté serveur : la page peut disparaître, l'arrêt part.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
 import math
@@ -52,6 +53,27 @@ FICHIERS = {
 NOMS_ORDRES = (*mouvement.ETAPES_SEQUENCE, mouvement.ESSAI, *mouvement.TACHES)
 NON_CONNECTE = "non connecté — utilisez le panneau « Compte » de cette page"
 ROUTE_REOUVERTURE = "/api/instance/rouvrir"
+ROUTE_IDENTITE = "/api/instance/identite"
+ROUTE_ARRET = "/api/instance/arreter"
+ROUTES_LOCALES = (ROUTE_REOUVERTURE, ROUTE_IDENTITE, ROUTE_ARRET, rappel.ROUTE)
+REMPLACEE = "ancienne version remplacée"
+DELAI_LIBERATION_S = 10.0
+
+
+def charger_statiques() -> dict[str, str]:
+    """Page et fichiers statiques, lus UNE fois : la page servie reste celle du code en mémoire,
+    même si les fichiers changent sur le disque pendant que le serveur tourne (panne du 2026-10-12)."""
+    return {nom: (STATIQUE / nom).read_text(encoding="utf-8") for nom in ("index.html", *FICHIERS)}
+
+
+def empreinte_du_code() -> str:
+    """Condensat court des fichiers .py et statiques du paquet : deux lancements du même code le partagent."""
+    condense = hashlib.sha256()
+    paquet = STATIQUE.parent
+    fichiers = [f for f in paquet.rglob("*") if f.is_file() and (f.suffix == ".py" or f.parent == STATIQUE)]
+    for fichier in sorted(fichiers):
+        condense.update(fichier.relative_to(paquet).as_posix().encode() + b"\0" + fichier.read_bytes() + b"\0")
+    return condense.hexdigest()[:12]
 DELAI_REOUVERTURE_S = 3.0  # au plus une réouverture de page toutes les trois secondes
 DELAI_RAPPEL_S = 1.0  # au plus une remise d'adresse de rappel par seconde
 MODES = ("simulation", "réel", "démonstration")
@@ -130,6 +152,10 @@ class ServeurUI:
         self.emet = reel or demonstration
         self.dossier = dossier if dossier is not None else journal._dossier.parent  # sauvegardes de carte
         self.carte_heure: str | None = None
+        # Version : figée au lancement, avec la page qui va avec.
+        self.statiques = charger_statiques()
+        self.empreinte = empreinte_du_code()
+        self.demarre = datetime.now().strftime("%H:%M")
         self._liste: tuple[bytes, list[dict[str, Any]]] = (b"", [])
         # Deux secrets de 256 bits, neufs à chaque lancement : le jeton d'adresse sert UNE fois,
         # puis seul le témoin (valeur distincte, jamais dans une adresse) authentifie la page.
@@ -185,6 +211,8 @@ class ServeurUI:
                 web.post("/api/video/arreter", self._video_arreter),
                 web.get("/favicon.ico", self._sans_contenu),
                 web.post(ROUTE_REOUVERTURE, self._rouvrir),
+                web.post(ROUTE_IDENTITE, self._identite),
+                web.post(ROUTE_ARRET, self._arret_demande),
                 web.post(rappel.ROUTE, self._rappel),
                 web.post("/api/compte/un-clic", self._compte_un_clic),
                 web.get("/api/carte", self._carte),
@@ -330,14 +358,18 @@ class ServeurUI:
             return _refus(403, "hôte refusé")
         if requete.method not in ("GET", "POST"):
             return _refus(405, "méthode refusée")
-        if requete.path in (ROUTE_REOUVERTURE, rappel.ROUTE):
+        if requete.path in ROUTES_LOCALES:
             # Réservées à un second processus lymow de ce poste : un navigateur joint toujours
             # Origin ou Referer à un POST, donc aucun site web ne peut les déclencher.
             if requete.method != "POST":
                 return _refus(405, "méthode refusée")
             if "Origin" in requete.headers or "Referer" in requete.headers:
                 return _refus(403, "origine refusée")
-            return await (self._rouvrir(requete) if requete.path == ROUTE_REOUVERTURE else self._rappel(requete))
+            locales = {
+                ROUTE_REOUVERTURE: self._rouvrir, ROUTE_IDENTITE: self._identite,
+                ROUTE_ARRET: self._arret_demande, rappel.ROUTE: self._rappel,
+            }
+            return await locales[requete.path](requete)
         origines = (f"http://{HOTE}:{self.port}", f"http://localhost:{self.port}")
         if requete.method == "POST" and requete.headers.get("Origin") not in origines:
             return _refus(403, "origine refusée")
@@ -372,6 +404,24 @@ class ServeurUI:
         self._noter("page rouverte à la demande d'un second lancement")
         return web.json_response(reponse)
 
+    async def _identite(self, _requete: web.Request) -> web.StreamResponse:
+        """Qui tourne ici : mode et empreinte du code, rien d'autre ; aucun effet."""
+        return web.json_response({"interface": "lymow", "mode": self.mode, "empreinte": self.empreinte})
+
+    async def _arret_demande(self, requete: web.Request) -> web.StreamResponse:
+        """Un lancement d'une AUTRE version demande la place. Refusé pendant un mouvement ou une
+        écriture de carte : on ne coupe jamais un ordre en cours pour une mise à jour."""
+        try:
+            corps = await requete.json()
+        except (ValueError, RecursionError):
+            corps = None
+        reponse = {"interface": "lymow", "mode": self.mode, "ok": False}
+        if not isinstance(corps, dict) or corps.get("mode") != self.mode or self.occupe:
+            return web.json_response(reponse, status=409)
+        self._noter("arrêt demandé par le lancement d'une autre version")
+        asyncio.get_running_loop().call_later(0.05, self.fin.set)  # après l'envoi de la réponse
+        return web.json_response(reponse | {"ok": True})
+
     # --- page et état ---------------------------------------------------------
 
     async def _page(self, requete: web.Request) -> web.StreamResponse:
@@ -384,13 +434,13 @@ class ServeurUI:
             reponse.set_cookie(COOKIE, self.temoin, httponly=True, samesite="Strict", path="/")
             return reponse
         self.video_ouverte = False  # page (re)chargée : l'ancienne session vidéo n'existe plus
-        return web.Response(text=(STATIQUE / "index.html").read_text(encoding="utf-8"), content_type="text/html")
+        return web.Response(text=self.statiques["index.html"], content_type="text/html")
 
     async def _statique(self, requete: web.Request) -> web.StreamResponse:
         nom = requete.match_info["nom"]
         if nom not in FICHIERS:
             return _refus(404, "fichier inconnu")
-        return web.Response(text=(STATIQUE / nom).read_text(encoding="utf-8"), content_type=FICHIERS[nom])
+        return web.Response(text=self.statiques[nom], content_type=FICHIERS[nom])
 
     async def _sans_contenu(self, _requete: web.Request) -> web.StreamResponse:
         return web.Response(status=204)
@@ -408,6 +458,7 @@ class ServeurUI:
             etat["perime"] = age is None or age > securite.AGE_MAX_ETAT_S
         image: dict[str, Any] = {
             "mode": self.mode,
+            "serveur": {"empreinte": self.empreinte, "demarre": self.demarre},
             "connecte": session is not None and bool(session.lien.connecte),
             "liaison": self.etat_liaison,
             "appareil": demo.APPAREIL if self.demonstration else self.ident.appareil if self.ident else None,
@@ -877,30 +928,65 @@ def _refus(statut: int, message: str) -> web.Response:
     return web.json_response({"erreur": message}, status=statut)
 
 
-async def rejoindre(port: int, reel: bool, demonstration: bool = False) -> str:
-    """Port occupé : si c'est une interface lymow du même mode, lui faire rouvrir sa page."""
-    mode = MODES[2] if demonstration else MODES[1] if reel else MODES[0]
-    corps: Any = None
-    statut = 0
+async def _demander(http: aiohttp.ClientSession, port: int, route: str, corps: dict[str, Any]) -> tuple[int, Any]:
+    """POST local, sans Origin ni Referer ; tout autre programme répond autrement, ou pas du tout."""
     try:
-        delai = aiohttp.ClientTimeout(total=5)
-        async with aiohttp.ClientSession(timeout=delai) as http:
-            adresse = f"http://{HOTE}:{port}{ROUTE_REOUVERTURE}"
-            async with http.post(adresse, json={"mode": mode}, allow_redirects=False) as reponse:
-                statut = reponse.status
-                corps = await reponse.json(content_type=None)
-    except Exception:  # noqa: BLE001 — tout autre programme répond autrement, ou pas du tout
-        corps = None
-    if not isinstance(corps, dict) or corps.get("interface") != "lymow" or corps.get("mode") not in MODES:
-        raise EchecDemarrage(
-            f"le port {port} est occupé par un autre programme : fermez-le, ou choisissez un autre port "
-            f"avec « lymow ui --port N »"
-        )
-    if corps["mode"] != mode:
-        raise EchecDemarrage(
-            f"une interface en mode {corps['mode']} tourne déjà ; fermez sa fenêtre avant de lancer le mode {mode}"
-        )
-    if corps.get("ok") is True:
+        async with http.post(f"http://{HOTE}:{port}{route}", json=corps, allow_redirects=False) as reponse:
+            return reponse.status, await reponse.json(content_type=None)
+    except Exception:  # noqa: BLE001
+        return 0, None
+
+
+def _est_lymow(corps: Any) -> bool:
+    return isinstance(corps, dict) and corps.get("interface") == "lymow" and corps.get("mode") in MODES
+
+
+async def _port_libere(port: int, delai_s: float) -> bool:
+    fin = time.monotonic() + delai_s
+    while time.monotonic() < fin:
+        try:
+            _lecteur, ecrivain = await asyncio.open_connection(HOTE, port)
+        except OSError:
+            return True
+        ecrivain.close()
+        await asyncio.sleep(0.1)
+    return False
+
+
+async def rejoindre(port: int, reel: bool, demonstration: bool = False, empreinte: str | None = None) -> str:
+    """Port occupé par une interface lymow du même mode : même version, elle rouvre sa page ;
+    autre version, elle s'arrête proprement et rend `REMPLACEE` pour que la nouvelle démarre."""
+    mode = MODES[2] if demonstration else MODES[1] if reel else MODES[0]
+    empreinte = empreinte or empreinte_du_code()
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as http:
+        _statut, identite = await _demander(http, port, ROUTE_IDENTITE, {})
+        if not (_est_lymow(identite) and isinstance(identite.get("empreinte"), str)):
+            # Pas d'identité : un autre programme, ou une interface d'avant ces routes (constat du
+            # 2026-10-12). Un mode volontairement inconnu la fait répondre sans rouvrir sa page.
+            _statut, ancienne = await _demander(http, port, ROUTE_REOUVERTURE, {"mode": "identification"})
+            if _est_lymow(ancienne):
+                raise EchecDemarrage(
+                    "une ancienne version de l'interface tourne encore : fermez sa fenêtre noire puis relancez"
+                )
+            raise EchecDemarrage(
+                f"le port {port} est occupé par un autre programme : fermez-le, ou choisissez un autre port "
+                f"avec « lymow ui --port N »"
+            )
+        if identite["mode"] != mode:
+            raise EchecDemarrage(
+                f"une interface en mode {identite['mode']} tourne déjà ; fermez sa fenêtre avant de lancer le mode {mode}"
+            )
+        if identite["empreinte"] != empreinte:
+            statut, corps = await _demander(http, port, ROUTE_ARRET, {"mode": mode})
+            if not (statut == 200 and _est_lymow(corps) and corps.get("ok") is True):
+                raise EchecDemarrage("une ancienne version est en cours d'utilisation, fermez sa fenêtre")
+            if not await _port_libere(port, DELAI_LIBERATION_S):
+                raise EchecDemarrage(
+                    f"l'ancienne version n'a pas libéré le port {port} en {DELAI_LIBERATION_S:g} s : fermez sa fenêtre puis relancez"
+                )
+            return REMPLACEE
+        statut, corps = await _demander(http, port, ROUTE_REOUVERTURE, {"mode": mode})
+    if _est_lymow(corps) and corps.get("ok") is True:
         return "interface déjà ouverte : page rouverte dans le navigateur"
     if statut == 429:
         raise EchecDemarrage("interface déjà ouverte, page rouverte à l'instant : réessayez dans quelques secondes")
@@ -913,16 +999,26 @@ async def servir(
     cal: Calibration, journal: Journal, *, reel: bool, port: int, navigateur: bool = True, dossier: Path | None = None,
     demonstration: bool = False,
 ) -> str:
-    serveur = ServeurUI(cal, journal, reel=reel, port=port, dossier=dossier, demonstration=demonstration)
-    if not navigateur:
-        serveur.ouvrir_navigateur = lambda _adresse: False
-    try:
-        await serveur.demarrer()
-    except OSError:  # port déjà pris (WinError 10048) : une interface tourne peut-être déjà
-        await serveur.arreter()
-        return await rejoindre(port, reel, demonstration)
+    remplacee = False
+    while True:
+        serveur = ServeurUI(cal, journal, reel=reel, port=port, dossier=dossier, demonstration=demonstration)
+        if not navigateur:
+            serveur.ouvrir_navigateur = lambda _adresse: False
+        try:
+            await serveur.demarrer()
+            break
+        except OSError:  # port déjà pris (WinError 10048) : une interface tourne peut-être déjà
+            await serveur.arreter()
+            issue = await rejoindre(port, reel, demonstration, serveur.empreinte)
+            if issue != REMPLACEE:
+                return issue
+            if remplacee:
+                raise EchecDemarrage(f"le port {port} reste occupé après l'arrêt de l'ancienne version") from None
+            remplacee = True
     rappel.noter_port(rappel.dossier_ports(), serveur.port, True)
     try:
+        if remplacee:
+            print("Ancienne version remplacée : l'interface à jour démarre.")
         print(f"Interface en mode {serveur.mode.upper() if reel else serveur.mode} sur {serveur.adresse} — Ctrl+C pour arrêter.")
         serveur.ouvrir_page()  # en cas d'échec : adresse affichée, et la fenêtre reste ouverte
         await serveur.fin.wait()
