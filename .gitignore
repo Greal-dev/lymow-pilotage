@@ -4,6 +4,7 @@ journaux/
 sauvegardes-carte/
 apercus-carte/
 captures/
+carte-reference/
 releve-precision.jsonl
 ui-ports.txt
 __pycache__/

@@ -28,7 +28,7 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
-from . import auth, capture, compte, conduite, demo, fleches, geometrie, liaison, releve, mouvement, rappel, retouche, securite
+from . import auth, capture, coffre, compte, conduite, demo, fleches, geometrie, liaison, reference, releve, mouvement, rappel, retouche, securite
 from . import carte as cartes
 from .config import Calibration
 from .journal import Journal, assainir, declarer_secret, masquer
@@ -176,6 +176,9 @@ class ServeurUI:
         self.empreinte = empreinte_du_code()
         self.demarre = datetime.now().strftime("%H:%M")
         self._liste: tuple[bytes, list[dict[str, Any]]] = (b"", [])
+        # Carte de référence (dernière carte complète, sur disque) : (appareil, carte, métadonnées), relue au besoin.
+        self._reference: tuple[str, cartes.Carte, dict[str, Any]] | None = None
+        self.carte_note: str | None = None
         # Deux secrets de 256 bits, neufs à chaque lancement : le jeton d'adresse sert UNE fois,
         # puis seul le témoin (valeur distincte, jamais dans une adresse) authentifie la page.
         self.jeton: str | None = secrets.token_urlsafe(32)
@@ -977,13 +980,44 @@ class ServeurUI:
 
     # --- carte : lecture, puis retouche par le même chemin que la commande -----
 
+    def _appareil_de_la_carte(self) -> str | None:
+        if self.demonstration:
+            return None  # le jardin fictif ne s'enregistre pas sur disque
+        return self.ident.appareil if self.ident is not None else coffre.appareil_connu()
+
+    def _carte_de_reference(self) -> tuple[cartes.Carte, dict[str, Any]] | None:
+        appareil = self._appareil_de_la_carte()
+        if appareil is None:
+            return None
+        if self._reference is None or self._reference[0] != appareil:
+            lue = reference.charger(self.dossier, appareil)
+            if lue is None:
+                return None
+            self._reference = (appareil, *lue)
+        return self._reference[1], self._reference[2]
+
+    def _carte_affichee(self) -> tuple[cartes.Carte | None, dict[str, Any] | None]:
+        """La carte à montrer : celle en mémoire si elle est complète, sinon la référence du disque.
+
+        Affichage seulement — une écriture relit toujours le robot deux fois (SEC-09)."""
+        memoire = cartes.en_memoire(self.session) if self.session is not None else None
+        if memoire is not None and memoire.complete:
+            return memoire, None
+        lue = self._carte_de_reference()
+        if lue is not None:
+            return lue
+        return memoire, None
+
     def _carte_json(self) -> dict[str, Any]:
-        carte = cartes.en_memoire(self.session) if self.session is not None else None
+        carte, meta = self._carte_affichee()
         if carte is None:
-            return {"carte": None}
+            return {"carte": None, "note": self.carte_note}
         return {
             "carte": cartes.vers_json(carte) | {"liste": self._liste_zones(carte)}, "heure": self.carte_heure,
-            "age_s": round(self.session.horloge() - carte.recue, 1),
+            "age_s": None if meta is not None or self.session is None else round(self.session.horloge() - carte.recue, 1),
+            # Carte venue du disque : dite comme telle, avec sa date.
+            "reference": None if meta is None else reference.libelle(meta),
+            "note": self.carte_note,
         }
 
     def _liste_zones(self, carte: cartes.Carte) -> list[dict[str, Any]]:
@@ -1004,10 +1038,26 @@ class ServeurUI:
             await cartes.demander(self.session, securite.ATTENTE_CARTE_S)
         except cartes.CarteIllisible as erreur:  # reçue, mais refusée : le motif exact, tout de suite
             self._noter(str(erreur))
-            return _refus(422, masquer(str(erreur)))
+            if self._carte_de_reference() is None:
+                return _refus(422, masquer(str(erreur)))
+            # Une réponse partielle ne remplace jamais la référence : elle est seulement signalée.
+            self.carte_note = f"le robot n'a renvoyé qu'une carte partielle ({masquer(str(erreur))}) : carte de référence affichée"
+            return web.json_response(self._carte_json())
         except Exception as erreur:  # noqa: BLE001
             return _refus(504, masquer(str(erreur)) or type(erreur).__name__)
         self.carte_heure = datetime.now().strftime("%H:%M:%S")
+        lue = cartes.en_memoire(self.session)
+        self.carte_note = None
+        appareil = self._appareil_de_la_carte()
+        if lue is not None and appareil is not None:
+            if lue.complete:
+                meta = reference.enregistrer(self.dossier, appareil, lue)
+                if meta is not None:
+                    self._reference = (appareil, lue, meta)
+            elif self._carte_de_reference() is not None:
+                self.carte_note = (
+                    f"le robot n'a renvoyé qu'une carte partielle ({' ; '.join(lue.manques)}) : carte de référence affichée"
+                )
         self._noter("carte reçue")
         return web.json_response(self._carte_json())
 
@@ -1020,7 +1070,7 @@ class ServeurUI:
         de, a, cm = _nombre(corps.get("de"), entier=True), _nombre(corps.get("a"), entier=True), _nombre(corps.get("cm"))
         if de is None or a is None or cm is None:
             raise ErreurSaisie("sommets de début et de fin, et largeur en cm, attendus")
-        carte = cartes.en_memoire(self.session) if self.session is not None else None
+        carte, _meta = self._carte_affichee()  # aperçu seulement : l'émission relit le robot (SEC-09)
         if carte is None:
             return _refus(409, "aucune carte en mémoire : actualisez d'abord la carte")
         self.previsualisation = None  # une nouvelle prévisualisation annule toujours la précédente

@@ -367,7 +367,12 @@ def extract_raw_map_content(pb_bytes: bytes) -> bytes | None:
     outer_raw = _first(top, 23)
     if not isinstance(outer_raw, bytes):
         return None
-    wrapper_raw = _first(_decode_fields(outer_raw), 2)
+    outer = _decode_fields(outer_raw)
+    # Ajout du projet (constat du 2026-10-12) : une réponse de TRAJET a la même forme f23 → f2 → f3,
+    # avec le drapeau f23.f3 (queryPath) ; le robot en diffuse pendant une tâche. Ce n'est pas une carte.
+    if _first(outer, 3):
+        return None
+    wrapper_raw = _first(outer, 2)
     if not isinstance(wrapper_raw, bytes):
         return None
     content_raw = _first(_decode_fields(wrapper_raw), 3)

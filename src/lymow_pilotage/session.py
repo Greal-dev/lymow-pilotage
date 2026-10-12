@@ -90,10 +90,10 @@ class Session:
         carte = fragment.pop("mapRaw", None)
         if isinstance(carte, bytes):
             # Octets gardés tels quels : la sauvegarde (SEC-09) et la comparaison (SEC-11) en dépendent.
+            # Une réponse n'est qu'une tranche, et pas forcément une carte : seul `carte.demander`, qui
+            # assemble et décode strictement, pose `carte_brute`. Une réponse non demandée ne chasse
+            # donc jamais la carte en mémoire (constat du 2026-10-12 : trajets diffusés pendant une tâche).
             self.tranche_carte = (carte, instant)
-            # Une réponse pleine (81 920 octets) n'est qu'une tranche : `carte.demander` assemble.
-            if len(carte) < protocole.TAILLE_TRANCHE_CARTE:
-                self.carte_brute = (carte, instant)
             self.journaliser("carte-recue", octets=len(carte))
         self.etat.appliquer(fragment, instant)
         # Un état émis à l'instant par le robot vaut preuve de présence.
