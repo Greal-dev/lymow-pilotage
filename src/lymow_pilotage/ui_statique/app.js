@@ -22,7 +22,7 @@
   var modeReel = false;
   var emission = false; // réel, ou démonstration (robot fictif)
   var dernierResultat = "";
-  var video = { pc: null, ws: null };
+  var video = { pc: null, ws: null, minuterie: null };
   var videoOuverte = false;
   var unClicActif = false;
   var CLES_ETAT = [
@@ -602,57 +602,120 @@
 
   function etatVideo(texte) { $("video-etat").textContent = texte; }
 
-  function arreterVideo(texte) {
-    if (video.ws) { video.ws.onclose = null; video.ws.close(); }
-    if (video.pc) { video.pc.close(); }
+  /* Chaque étape est dite sous l'image ET rapportée au serveur (fil d'activité, journal) : jamais d'adresse ni de clé. */
+  function etapeVideo(etape, motif) {
+    appeler("/api/video/etape", { etape: etape, motif: motif || "" }).catch(function () { return undefined; });
+  }
+
+  function fermerVideo() {
+    if (video.minuterie) { window.clearTimeout(video.minuterie); }
+    if (video.ws) { video.ws.onclose = null; video.ws.onerror = null; video.ws.close(); }
+    if (video.pc) { video.pc.onconnectionstatechange = null; video.pc.oniceconnectionstatechange = null; video.pc.close(); }
     video = { pc: null, ws: null };
-    if (videoOuverte) {
-      // Le serveur refuse un second démarrage tant que la page n'a pas rendu la session.
-      videoOuverte = false;
-      appeler("/api/video/arreter").catch(function () { return undefined; });
-    }
     $("video").srcObject = null;
     $("video-demarrer").disabled = false;
     $("video-arreter").disabled = true;
+  }
+
+  function arreterVideo(texte) {
+    fermerVideo();
+    if (videoOuverte) {
+      videoOuverte = false;
+      appeler("/api/video/arreter").catch(function () { return undefined; });
+    }
+    $("video-reessayer").hidden = true;
     etatVideo(texte || "arrêtée");
   }
 
+  /* Échec : dit en clair où ça bloque, rapporté au serveur (qui libère la session), « Réessayer » proposé. */
+  function echecVideo(motif) {
+    fermerVideo();
+    videoOuverte = false;
+    etapeVideo("echec", motif);
+    etatVideo("échec : " + motif);
+    $("video-reessayer").hidden = false;
+  }
+
   async function demarrerVideo() {
+    fermerVideo();
     $("video-demarrer").disabled = true;
-    etatVideo("ouverture de la session…");
+    $("video-reessayer").hidden = true;
+    etatVideo("demande des réglages au cloud Lymow…");
     var reglages;
     try {
       reglages = await appeler("/api/video/demarrer");
-    } catch (erreur) {
-      arreterVideo("indisponible : " + erreur.message);
+    } catch (erreur) {  // le serveur a déjà écrit le refus et son code dans le fil et le journal
+      fermerVideo();
+      etatVideo("refusée par l'interface : " + erreur.message);
+      $("video-reessayer").hidden = false;
       return;
     }
     videoOuverte = true;
     $("video-arreter").disabled = false;
-    var pc = new RTCPeerConnection({ iceServers: reglages.iceServers || [], bundlePolicy: "max-bundle" });
-    var ws = new WebSocket(reglages.wss);
+    var etape = "ouverture de la signalisation";
+    var pc;
+    var ws;
+    try {
+      pc = new RTCPeerConnection({ iceServers: reglages.iceServers || [], bundlePolicy: "max-bundle" });
+      ws = new WebSocket(reglages.wss);
+    } catch (erreur) {
+      if (pc) { pc.close(); }
+      echecVideo("le navigateur refuse d'ouvrir la signalisation (" + erreur.name + ") : rechargez la page");
+      return;
+    }
     var enAttente = [];
     reglages = null; // secrets temporaires : rien n'est gardé au-delà de l'ouverture
-    video = { pc: pc, ws: ws };
+    video = { pc: pc, ws: ws, minuterie: null };
+    video.minuterie = window.setTimeout(function () {
+      if (video.pc === pc && pc.connectionState !== "connected") { echecVideo("délai dépassé (20 s) à l'étape : " + etape); }
+    }, Ordres.DELAI_VIDEO_MS);
+    etatVideo(etape + "…");
     pc.addTransceiver("video", { direction: "recvonly" });
     pc.ontrack = function (evenement) {
       $("video").srcObject = evenement.streams[0] || new MediaStream([evenement.track]);
       $("video").play().catch(function () { return undefined; });
     };
-    pc.onconnectionstatechange = function () { etatVideo("liaison vidéo : " + pc.connectionState); };
+    pc.onconnectionstatechange = function () {
+      if (video.pc !== pc) { return; }
+      if (pc.connectionState === "connected") {
+        window.clearTimeout(video.minuterie);
+        etape = "connexion établie";
+        etapeVideo("connexion-etablie");
+        etatVideo("connexion établie");
+      } else if (pc.connectionState === "failed") {
+        echecVideo("liaison vidéo en échec après l'étape : " + etape);
+      } else {
+        etatVideo(etape + " — liaison vidéo : " + pc.connectionState);
+      }
+    };
+    pc.oniceconnectionstatechange = function () {
+      if (video.pc !== pc) { return; }
+      if (pc.iceConnectionState === "failed") {
+        echecVideo("état ICE failed (aucun chemin réseau vers le robot) après l'étape : " + etape);
+      } else if (pc.iceConnectionState === "disconnected") {
+        etapeVideo("echec", "état ICE disconnected (flux interrompu)");
+        etatVideo("flux interrompu (ICE disconnected) : attente, ou « Réessayer »");
+        $("video-reessayer").hidden = false;
+      }
+    };
     pc.onicecandidate = function (evenement) {
       if (evenement.candidate && ws.readyState === WebSocket.OPEN) {
         ws.send(Signalisation.messageCandidat(evenement.candidate.toJSON()));
       }
     };
     ws.onopen = async function () {
-      etatVideo("signalisation ouverte, offre envoyée…");
+      etape = "signalisation ouverte";
+      etapeVideo("signalisation-ouverte");
+      etatVideo("signalisation ouverte, préparation de l'offre…");
       try {
         var offre = await pc.createOffer();
         await pc.setLocalDescription(offre);
         ws.send(Signalisation.messageOffre(offre.sdp));
+        etape = "offre envoyée, attente de la réponse du robot";
+        etapeVideo("offre-envoyee");
+        etatVideo(etape + "…");
       } catch (erreur) {
-        arreterVideo("échec de l'offre vidéo");
+        echecVideo("offre vidéo impossible (" + erreur.name + ")");
       }
     };
     ws.onmessage = async function (evenement) {
@@ -661,6 +724,9 @@
       try {
         if (message.type === "SDP_ANSWER") {
           await pc.setRemoteDescription(message.charge);
+          etape = "réponse reçue, établissement de la liaison";
+          etapeVideo("reponse-recue");
+          etatVideo(etape + "…");
           while (enAttente.length) { await pc.addIceCandidate(enAttente.shift()); }
         } else if (!pc.remoteDescription) {
           enAttente.push(message.charge);
@@ -668,11 +734,13 @@
           await pc.addIceCandidate(message.charge);
         }
       } catch (erreur) {
-        etatVideo("message de signalisation refusé par le navigateur");
+        etatVideo("message de signalisation refusé par le navigateur (" + erreur.name + ")");
       }
     };
-    ws.onerror = function () { etatVideo("échec de la signalisation"); };
-    ws.onclose = function () { if (video.ws === ws && pc.connectionState !== "connected") { etatVideo("signalisation fermée"); } };
+    ws.onclose = function (evenement) {
+      if (video.ws !== ws || pc.connectionState === "connected") { return; }
+      echecVideo("signalisation fermée (code " + evenement.code + ") à l'étape : " + etape);
+    };
   }
 
   // --- branchements ---------------------------------------------------------
@@ -890,6 +958,13 @@
   $("un-clic-activer").addEventListener("click", function () { reglerUnClic(true); });
   $("un-clic-desactiver").addEventListener("click", function () { reglerUnClic(false); });
   $("video-arreter").addEventListener("click", function () { arreterVideo(); });
+  $("video-reessayer").addEventListener("click", demarrerVideo);
+  // La politique de la page a bloqué une connexion (page chargée avant la connexion au compte) : dit, pas tu.
+  document.addEventListener("securitypolicyviolation", function (evenement) {
+    if (evenement.effectiveDirective === "connect-src" && videoOuverte) {
+      echecVideo("signalisation bloquée par la politique de sécurité de la page : rechargez la page");
+    }
+  });
 
   window.addEventListener("pagehide", function () {
     if (videoOuverte && navigator.sendBeacon) { navigator.sendBeacon("/api/video/arreter"); }

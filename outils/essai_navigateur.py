@@ -8,7 +8,8 @@ dépendance (aiohttp, déjà requis, parle au navigateur par son protocole de d�
 ou Chrome s'il en trouve un ; sinon il le dit et s'arrête.
 
 Usage :
-    python outils/essai_navigateur.py <dossier-de-sortie> [recalage] [boutons] [diagonales] [--navigateur CHEMIN]
+    python outils/essai_navigateur.py <dossier-de-sortie> [recalage] [boutons] [diagonales] [nettoyage] [base] [--navigateur CHEMIN]
+    python outils/essai_navigateur.py <dossier-de-sortie> video    (simulation, compte factice, signalisation locale)
 """
 
 from __future__ import annotations
@@ -375,6 +376,130 @@ async def scenario_diagonales(page: Page, serveur: Any, donnees: Path) -> dict[s
     return bilan
 
 
+class SignalisationDeTest:
+    """Petit serveur WebSocket local : tient lieu de signalisation vidéo, garde ce que le navigateur lui envoie."""
+
+    def __init__(self) -> None:
+        self.recus: list[str] = []
+        self.prises: list[Any] = []
+        self.port = 0
+        self._lanceur: Any = None
+
+    async def demarrer(self) -> None:
+        from aiohttp import web
+
+        async def signal(requete: Any) -> Any:
+            prise = web.WebSocketResponse()
+            await prise.prepare(requete)
+            self.prises.append(prise)
+            async for message in prise:
+                self.recus.append(str(message.data))
+            return prise
+
+        application = web.Application()
+        application.add_routes([web.get("/signal", signal)])
+        self._lanceur = web.AppRunner(application, access_log=None)
+        await self._lanceur.setup()
+        site = web.TCPSite(self._lanceur, "127.0.0.1", 0)
+        await site.start()
+        self.port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+
+    def offres(self) -> list[str]:
+        """Le SDP de chaque offre reçue (enveloppe Kinesis Video : action + charge en base64)."""
+        sdp = []
+        for texte in self.recus:
+            enveloppe = json.loads(texte)
+            if enveloppe.get("action") == "SDP_OFFER":
+                sdp.append(json.loads(base64.b64decode(enveloppe["messagePayload"]))["sdp"])
+        return sdp
+
+    async def arreter(self) -> None:
+        if self._lanceur is not None:
+            await self._lanceur.cleanup()
+
+
+async def monter_serveur_video(donnees: Path, signalisation: SignalisationDeTest) -> Any:
+    """Interface en SIMULATION, compte factice, aucun nuage : tout point d'entrée vers le coffre ou le cloud est
+    remplacé par un double (l'essai échoue s'il est sollicité) ; `fournir_video` pointe vers le serveur local."""
+    from test_ui import IDENT
+
+    from lymow_pilotage import coffre, liaison
+
+    def interdit(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("coffre, compte ou nuage sollicité pendant l'essai vidéo")
+
+    liaison.lire_identifiants = lambda: IDENT
+    for nom in ("ouvrir_session", "obtenir_acces", "demarrer_video"):
+        setattr(liaison, nom, interdit)
+    coffre.lire, coffre.ecrire, coffre.appareil_connu = (lambda _cle: None), interdit, (lambda: None)
+    serveur = ui.ServeurUI(Calibration(), Journal(donnees), reel=False, port=0)
+    serveur.registre = FauxRegistre()
+
+    async def fournir() -> dict[str, Any]:
+        return {"wss": f"ws://127.0.0.1:{signalisation.port}/signal", "iceServers": []}
+
+    serveur.fournir_video = fournir
+    entetes = serveur._entetes
+    serveur.csp_reelle = lambda: entetes()["Content-Security-Policy"]
+
+    def avec_l_hote_de_test() -> dict[str, str]:  # la vraie politique n'ouvre que Kinesis Video : vérifiée à part
+        valeurs = entetes()
+        valeurs["Content-Security-Policy"] = valeurs["Content-Security-Policy"].replace(
+            "connect-src 'self'", f"connect-src 'self' ws://127.0.0.1:{signalisation.port}"
+        )
+        return valeurs
+
+    serveur._entetes = avec_l_hote_de_test
+    await serveur.demarrer()
+    return serveur
+
+
+async def scenario_video(page: Page, serveur: Any, donnees: Path, signalisation: SignalisationDeTest) -> dict[str, Any]:
+    """Clique réellement « Démarrer la vidéo » : bouton, route, RTCPeerConnection, WebSocket, offre SDP ; puis la
+    signalisation est coupée (échec visible, « Réessayer »), et « Réessayer » est cliqué."""
+    bilan: dict[str, Any] = {"mode": serveur.mode, "csp_reelle_connect_src": serveur.csp_reelle().split(";")[1].strip()}
+    bilan["bouton"] = await page.js(
+        "(function () { var b = document.getElementById('video-demarrer'); var r = b.getBoundingClientRect();"
+        " return { present: true, masque: b.hidden, grise: b.disabled, largeur: Math.round(r.width) }; })()"
+    )
+    bilan["element_video"] = await page.js(
+        "(function () { var v = document.getElementById('video'); var r = v.getBoundingClientRect();"
+        " return { muted: v.muted, playsinline: v.hasAttribute('playsinline'), largeur: Math.round(r.width), hauteur: Math.round(r.height),"
+        " panneau_masque: document.getElementById('vue-camera').hidden }; })()"
+    )
+    bilan["signalisation_js_chargee"] = await page.js("typeof Signalisation === 'object' && typeof RTCPeerConnection === 'function'")
+    bilan["clic_demarrer"] = await page.cliquer("#video-demarrer")
+    for _ in range(100):
+        if signalisation.offres():
+            break
+        await page.attendre(0.2)
+    offres = signalisation.offres()
+    bilan["websocket_ouvert"] = len(signalisation.prises) == 1
+    bilan["offre_recue"] = len(offres) == 1
+    bilan["offre_trickle_renomination"] = bool(offres) and "a=ice-options:trickle renomination" in offres[0]
+    bilan["offre_video_recvonly"] = bool(offres) and "m=video" in offres[0] and "a=recvonly" in offres[0]
+    await page.attendre(1.0)
+    bilan["etat_sous_l_image"] = await page.js("document.getElementById('video-etat').textContent")
+    # La signalisation se ferme (le robot ne répond pas) : la page doit le dire et proposer « Réessayer ».
+    for prise in signalisation.prises:
+        await prise.close(code=4000)
+    bilan["echec_affiche"] = await page.jusqu_a("document.getElementById('video-etat').textContent.indexOf('code 4000') !== -1", 5.0)
+    bilan["etat_apres_fermeture"] = await page.js("document.getElementById('video-etat').textContent")
+    bilan["reessayer_visible"] = await page.js("!document.getElementById('video-reessayer').hidden")
+    await page.capture("video.png")
+    bilan["clic_reessayer"] = await page.cliquer("#video-reessayer")
+    for _ in range(100):
+        if len(signalisation.offres()) == 2:
+            break
+        await page.attendre(0.2)
+    bilan["seconde_offre_recue"] = len(signalisation.offres()) == 2
+    await page.attendre(1.0)
+    bilan["fil_serveur"] = [note["texte"] for note in serveur.fil if note["texte"].startswith("vidéo")]
+    bilan["journal_sur_disque"] = [e.get("etape") for e in evenements(donnees) if e["evenement"] == "video-etape"]
+    bilan["fil_de_la_page"] = await page.js("document.getElementById('fil').textContent")
+    return bilan
+
+
 async def principal(sortie: Path, scenarios: list[str], navigateur: str | None) -> int:
     chemin = navigateur or next((n for n in NAVIGATEURS if Path(n).exists()), None)
     if chemin is None:
@@ -382,9 +507,15 @@ async def principal(sortie: Path, scenarios: list[str], navigateur: str | None) 
         return 2
     sortie.mkdir(parents=True, exist_ok=True)
     donnees = sortie / f"donnees-{int(time.time())}"  # un dossier neuf par essai : journal et préférences vierges
-    serveur = ui.ServeurUI(Calibration(), Journal(donnees), reel=False, port=0, demonstration=True)
-    serveur.registre = FauxRegistre()
-    await serveur.demarrer()
+    signalisation = SignalisationDeTest()
+    if "video" in scenarios:  # essai à part : simulation et compte factice, la démonstration n'a pas de caméra
+        scenarios = ["video"]
+        await signalisation.demarrer()
+        serveur = await monter_serveur_video(donnees, signalisation)
+    else:
+        serveur = ui.ServeurUI(Calibration(), Journal(donnees), reel=False, port=0, demonstration=True)
+        serveur.registre = FauxRegistre()
+        await serveur.demarrer()
     edge = subprocess.Popen([
         chemin, "--headless=new", "--disable-gpu", "--no-first-run", f"--remote-debugging-port={PORT_DEBOGAGE}",
         f"--user-data-dir={sortie / 'profil'}", "--window-size=1366,768", "about:blank",
@@ -415,6 +546,8 @@ async def principal(sortie: Path, scenarios: list[str], navigateur: str | None) 
                     compte_rendu["recalage"] = await scenario_recalage(page, serveur, donnees)
                 if "diagonales" in scenarios:
                     compte_rendu["diagonales"] = await scenario_diagonales(page, serveur, donnees)
+                if "video" in scenarios:
+                    compte_rendu["video"] = await scenario_video(page, serveur, donnees, signalisation)
                 if "base" in scenarios:
                     compte_rendu["base"] = await scenario_base(page, serveur, donnees)
                 if "nettoyage" in scenarios:
@@ -426,6 +559,7 @@ async def principal(sortie: Path, scenarios: list[str], navigateur: str | None) 
     finally:
         edge.terminate()
         await serveur.arreter()
+        await signalisation.arreter()
     (sortie / "compte-rendu.json").write_text(json.dumps(compte_rendu, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     print(json.dumps(compte_rendu, ensure_ascii=False, indent=1))
     return 0
