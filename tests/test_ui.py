@@ -688,7 +688,7 @@ def test_video_relit_le_coffre_a_chaque_acces_et_ne_rafraichit_jamais_en_paralle
     assert coffre_factice["jeton-rafraichissement"] == "jeton-tour-4"
 
 
-def test_video_second_demarrage_refuse_tant_que_la_page_tient_la_session(tmp_path, monkeypatch, session_reelle):
+def test_video_deux_demarrages_simultanes_n_en_font_qu_un(tmp_path, monkeypatch, session_reelle):
     appels = []
 
     async def fournir():
@@ -701,8 +701,6 @@ def test_video_second_demarrage_refuse_tant_que_la_page_tient_la_session(tmp_pat
             serveur.fournir_video = fournir
             premiers = await asyncio.gather(*(poster(http, serveur, "/api/video/demarrer") for _ in range(2)))
             assert sorted(statut for statut, _corps, _recus in premiers) == [200, 409]
-            statut, corps, _recus = await poster(http, serveur, "/api/video/demarrer")
-            assert statut == 409 and "déjà ouverte" in corps["erreur"]
             statut, _corps, _recus = await poster(http, serveur, "/api/video/arreter")
             assert statut == 200
             statut, _corps, _recus = await poster(http, serveur, "/api/video/demarrer")

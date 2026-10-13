@@ -233,7 +233,7 @@
   function graviteDe(texte) {
     var t = String(texte).toLowerCase();
     if (/arrêt non confirmé|sec-01|liaison perdue|injoignable|en échec/.test(t)) { return "erreur"; }
-    if (/refus|échou|non abouti|désarmé|interrompu|patinage|liaison lente|d'après la carte|ignor|persiste|aucun changement|n'a pas changé d'état|non transmis/.test(t)) { return "alerte"; }
+    if (/refus|échou|non abouti|désarmé|interrompu|patinage|liaison lente|d'après la carte|ignor|persiste|aucun changement|n'a pas changé d'état|vidéo : échec|non transmis/.test(t)) { return "alerte"; }
     return "info";
   }
 
@@ -414,6 +414,7 @@
     pastilles: pastilles,
     essaiPlateauPossible: essaiPlateauPossible,
     CONFIRMATION_ESSAI_PLATEAU: CONFIRMATION_ESSAI_PLATEAU,
+    DELAI_VIDEO_MS: 20000,
     bulleRetourBase: bulleRetourBase,
     texteDeLaMain: texteDeLaMain,
     annoncePrendreLaMain: annoncePrendreLaMain,

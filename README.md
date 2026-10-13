@@ -658,6 +658,31 @@ hypothèse) ; l'outil ne reçoit aucune hauteur mesurée du plateau ; après un
 redémarrage, un arrêt d'urgence resté en place est toujours tenu pour celui
 de la levée, même si quelqu'un a appuyé entre-temps sur le bouton du robot.
 
+## Vidéo : savoir où ça bloque
+
+Constat du 2026-10-13 : la vidéo ne s'affichait plus alors que le cloud
+répondait bien, et le journal n'en disait rien. Désormais chaque étape
+s'écrit dans le fil d'activité **et** dans le journal sur disque
+(évènement `video-etape`, jamais une adresse ni une clé) : demande des
+réglages, réglages obtenus, signalisation ouverte, offre envoyée, réponse
+reçue, connexion établie — ou l'étape en échec et son motif : refus de
+l'interface avec son code (main rendue, compte absent, cloud en erreur),
+signalisation fermée avec son code, état ICE `failed` ou `disconnected`,
+délai dépassé à 20 s, connexion bloquée par la politique de la page (page
+chargée avant la connexion au compte : rechargez-la). L'état sous l'image
+dit la même chose, et « Réessayer » relance tout.
+
+Une session vidéo ne reste plus jamais « déjà ouverte » : un nouveau
+« Démarrer » libère la précédente, et une session sans flux se libère
+seule après 30 s.
+
+L'essai `python outils/essai_navigateur.py <dossier> video` joue tout le
+chemin dans un vrai navigateur, sans cloud : simulation, compte factice,
+signalisation remplacée par un serveur WebSocket local. Il prouve le
+bouton, la route, la connexion pair à pair créée, le WebSocket ouvert et
+l'offre (`a=ice-options:trickle renomination`) ; il ne prouve rien de la
+réponse du robot ni du chemin réseau jusqu'à lui.
+
 ## Retour à la base, et constat des ordres de tâche
 
 Constat réel du 2026-10-13 : « Retour base » émis trois fois (ordre 33,

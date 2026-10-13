@@ -84,6 +84,14 @@ DELAI_ANNULATION_S = 15.0  # après « annuler la tâche », le statut « prêt 
 # Veille de la liaison : une coupure est vue et réparée sans attendre un clic.
 PERIODE_VEILLE_S = 2.0
 LIAISON_SUSPENDUE = "Liaison suspendue : l'application Lymow a la main"
+# Vidéo : étapes que la page rapporte (fil et journal) ; jamais d'adresse ni de clé, seulement ces mots et un
+# motif court. Constat du 2026-10-13 : vidéo en panne et AUCUNE trace sur disque.
+ETAPES_VIDEO = {
+    "signalisation-ouverte": "signalisation ouverte", "offre-envoyee": "offre envoyée",
+    "reponse-recue": "réponse reçue", "connexion-etablie": "connexion établie", "echec": "ÉCHEC",
+}
+MOTIF_VIDEO_MAX = 160
+VIDEO_SANS_FLUX_S = 30.0  # session ouverte sans « connexion établie » : libérée d'office
 MAIN_RENDUE = "la main est rendue à l'application Lymow : cliquez d'abord sur « Prendre la main »"
 LIAISON_COUPEE = (
     "liaison coupée par le service — peut-être reprise par une autre application "
@@ -269,6 +277,8 @@ class ServeurUI:
         self._ecoute: capture.Enregistreur | None = None  # trames brutes pendant un ordre réel
         self._fin_ecoute: asyncio.TimerHandle | None = None
         self.video_ouverte = False
+        self._video_en_ouverture = False
+        self._video_garde: asyncio.TimerHandle | None = None  # libère une session restée sans flux
         # Connexion au compte : vérificateur PKCE et `state` ne quittent jamais la mémoire du serveur.
         self.tentative: tuple[auth.DemandeOAuth, float] | None = None
         self.choix: dict[str, Any] | None = None
@@ -322,6 +332,7 @@ class ServeurUI:
                 web.post(ROUTE_ATTESTATION_RETIRER, self._attestation_retirer),
                 web.post("/api/video/demarrer", self._video_demarrer),
                 web.post("/api/video/arreter", self._video_arreter),
+                web.post("/api/video/etape", self._video_etape),
                 web.get("/favicon.ico", self._sans_contenu),
                 web.post(ROUTE_REOUVERTURE, self._rouvrir),
                 web.post(ROUTE_IDENTITE, self._identite),
@@ -385,6 +396,7 @@ class ServeurUI:
         await self._interrompre()
         self.attestation.retirer("arrêt du serveur")  # SEC-01b ; après l'arrêt du mouvement, jamais avant
         self._fermer_ecoute()
+        self._video_liberer()
         for tache in (self._veille, getattr(self, "_sonde", None), self._carte_initiale):
             if tache is not None:
                 tache.cancel()
@@ -733,7 +745,7 @@ class ServeurUI:
             reponse = web.Response(status=303, headers={"Location": "/"})
             reponse.set_cookie(COOKIE, self.temoin, httponly=True, samesite="Strict", path="/")
             return reponse
-        self.video_ouverte = False  # page (re)chargée : l'ancienne session vidéo n'existe plus
+        self._video_liberer()  # page (re)chargée : l'ancienne session vidéo n'existe plus
         return web.Response(text=self.statiques["index.html"], content_type="text/html")
 
     async def _statique(self, requete: web.Request) -> web.StreamResponse:
@@ -2179,7 +2191,7 @@ class ServeurUI:
             compte.oublier()
             self.ident, self.etat_liaison = None, NON_CONNECTE
         self.tentative = self.choix = None
-        self.video_ouverte = False
+        self._video_liberer()
         self.journal.ecrire("compte-oublie")
         self._noter("compte effacé de ce poste")
         return web.json_response({"connecte": False})
@@ -2195,28 +2207,82 @@ class ServeurUI:
             return await liaison.demarrer_video(http, self.ident, acces)
 
     async def _video_demarrer(self, _requete: web.Request) -> web.StreamResponse:
+        refus = None
         if self.demonstration:
-            return _refus(403, "vidéo désactivée en démonstration : le robot fictif n'a pas de caméra")
-        if self.suspendue:
-            return _refus(409, MAIN_RENDUE)
-        if self.ident is None:
-            return _refus(503, NON_CONNECTE)
-        if self.video_ouverte:
-            return _refus(409, "une session vidéo est déjà ouverte : arrêtez-la d'abord")
-        self.video_ouverte = True  # posé avant l'attente : deux démarrages simultanés n'en font qu'un
+            refus = (403, "vidéo désactivée en démonstration : le robot fictif n'a pas de caméra")
+        elif self.suspendue:
+            refus = (409, MAIN_RENDUE)
+        elif self.ident is None:
+            refus = (503, NON_CONNECTE)
+        elif self._video_en_ouverture:  # deux démarrages simultanés n'en font qu'un
+            refus = (409, "une ouverture de session vidéo est déjà en cours : patientez")
+        if refus is not None:
+            self._tracer_video("demande-refusee", f"vidéo : demande refusée ({refus[0]}) — {refus[1]}", code_http=refus[0], motif=refus[1])
+            return _refus(*refus)
+        if self.video_ouverte:  # jamais de 409 permanent : un nouveau « Démarrer » libère la session précédente
+            self._tracer_video("session-liberee", "vidéo : session précédente libérée par un nouveau démarrage")
+        self._video_liberer()
+        self._video_en_ouverture = True
+        self._tracer_video("demande", "vidéo : demande des réglages au cloud Lymow…")
         try:
             reglages = await self.fournir_video()
         except Exception as erreur:  # noqa: BLE001
-            self.video_ouverte = False
-            return _refus(502, f"vidéo indisponible : {masquer(str(erreur)) or type(erreur).__name__}")
-        self._noter("vidéo : session ouverte")  # jamais les valeurs : ce sont des secrets temporaires
+            motif = masquer(str(erreur)) or type(erreur).__name__
+            self._tracer_video("reglages-refuses", f"vidéo : ÉCHEC — réglages non obtenus (502) : {motif}", code_http=502, motif=motif)
+            return _refus(502, f"vidéo indisponible : {motif}")
+        finally:
+            self._video_en_ouverture = False
+        self.video_ouverte = True
+        self._video_garde = asyncio.get_running_loop().call_later(VIDEO_SANS_FLUX_S, self._video_sans_flux)
+        relais = len(reglages.get("iceServers") or []) if isinstance(reglages, dict) else 0
+        # Jamais les valeurs : ce sont des secrets temporaires.
+        self._tracer_video("reglages-obtenus", f"vidéo : session ouverte, réglages obtenus ({relais} serveur(s) de relais)", relais=relais)
         return web.json_response(reglages)
+
+    def _tracer_video(self, etape: str, texte: str, **champs: Any) -> None:
+        """Chaque étape vidéo : au fil de la page ET au journal sur disque, sans aucun secret."""
+        self.journal.ecrire("video-etape", etape=etape, mode=self.mode, **champs)
+        self._noter(texte)
+
+    def _video_liberer(self) -> None:
+        self.video_ouverte = False
+        if self._video_garde is not None:
+            self._video_garde.cancel()
+            self._video_garde = None
+
+    def _video_sans_flux(self) -> None:
+        self._video_garde = None
+        if self.video_ouverte:
+            self.video_ouverte = False
+            self._tracer_video(
+                "sans-flux", f"vidéo : ÉCHEC — aucun flux {VIDEO_SANS_FLUX_S:g} s après l'ouverture : session libérée, « Réessayer »"
+            )
+
+    async def _video_etape(self, requete: web.Request) -> web.StreamResponse:
+        """La page dit où elle en est (signalisation, offre, réponse, connexion) ou ce qui a échoué, et pourquoi."""
+        corps = await self._corps(requete)
+        etape = corps.get("etape") if isinstance(corps, dict) else None
+        motif = corps.get("motif", "") if isinstance(corps, dict) else None
+        if etape not in ETAPES_VIDEO or not isinstance(motif, str) or set(corps) - {"etape", "motif"}:
+            raise ErreurSaisie("étape vidéo inconnue")
+        # Motif écrit par la page (codes, états) ; par prudence : borné, sans adresse, passé au filtre des secrets.
+        motif = " ".join(motif.split())[:MOTIF_VIDEO_MAX]
+        if "://" in motif or "X-Amz" in motif:
+            motif = "motif retiré (adresse)"
+        motif = masquer(motif)
+        if etape == "connexion-etablie" and self._video_garde is not None:
+            self._video_garde.cancel()
+            self._video_garde = None
+        elif etape == "echec":
+            self._video_liberer()
+        self._tracer_video(etape, f"vidéo : {ETAPES_VIDEO[etape]}" + (f" — {motif}" if motif else ""), motif=motif)
+        return web.json_response({"note": True})
 
     async def _video_arreter(self, _requete: web.Request) -> web.StreamResponse:
         """La page a fermé sa session : aucun arrêt de canal n'est connu côté service."""
         if self.video_ouverte:
-            self._noter("vidéo : session fermée par la page")
-        self.video_ouverte = False
+            self._tracer_video("fermee", "vidéo : session fermée par la page")
+        self._video_liberer()
         return web.json_response({"video": "arrêtée"})
 
 
