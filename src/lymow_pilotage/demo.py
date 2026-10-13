@@ -104,6 +104,7 @@ class RobotFictif:
         self.est, self.nord, self.cap = 2.5, 2.5, 0.0  # mètres, mètres, radians
         self.hauteur_mm = 60
         self.statut = 1  # prêt, en attente d'ordre
+        self._statut_avant_nettoyage: int | None = None
         self.recues: list[bytes] = []
 
     def etat(self) -> dict[str, Any]:
@@ -143,6 +144,7 @@ class RobotFictif:
             self.est, self.nord, self.cap, self.statut = 1.0, 1.0, 0.0, 5
         elif commande in (28, 32):
             self.statut = 1
+        self._signal(champs)
         self.session.recevoir_etat(self.etat())
 
     def _piloter(self, consigne: list[cartes.Champ]) -> None:
@@ -152,10 +154,25 @@ class RobotFictif:
         if lineaire == 0 and angulaire == 0:
             self.session.recevoir_etat(self.etat())
             return
+        if self.statut == 13:  # hypothèse de démonstration : en arrêt d'urgence, le robot ignore la consigne
+            return
         pas = 1.0 / CADENCE_HZ
         self.cap = (self.cap + angulaire * pas + math.pi) % (2 * math.pi) - math.pi  # positif = gauche
         self.est += lineaire * math.cos(self.cap) * pas
         self.nord += lineaire * math.sin(self.cap) * pas
+
+    def _signal(self, champs: list[cartes.Champ]) -> None:
+        """Constat réel du 2026-10-13 : la levée de nettoyage (signal 8) met le robot en statut 13 « arrêt
+        d'urgence » ; la redescente (signal 9) est supposée le rendre à son statut précédent."""
+        try:
+            config = cartes.champs_stricts(next(v for n, t, v in champs if n == 13 and t == 2))
+        except (StopIteration, cartes.CarteIllisible):
+            return
+        signal = next((v for n, t, v in config if n == 8 and t == 0), None)
+        if signal == 8 and self.statut != 13:
+            self._statut_avant_nettoyage, self.statut = self.statut, 13
+        elif signal == 9 and self.statut == 13 and self._statut_avant_nettoyage is not None:
+            self.statut, self._statut_avant_nettoyage = self._statut_avant_nettoyage, None
 
     def _retoucher(self, champs: list[cartes.Champ]) -> None:
         """Retouche de contour (userCtrl 9) : seul le polygone de la zone visée change."""

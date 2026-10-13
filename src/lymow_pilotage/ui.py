@@ -28,7 +28,7 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
-from . import auth, bon_signal, capture, config, diagnostic, garde_carte, recalage, coffre, compte, conduite, demo, fleches, geometrie, liaison, reference, releve, mouvement, rappel, retouche, securite
+from . import auth, bon_signal, capture, config, diagnostic, garde_carte, recalage, coffre, compte, conduite, demo, fleches, geometrie, liaison, nettoyage, reference, releve, mouvement, rappel, retouche, securite
 from . import carte as cartes
 from .config import Calibration
 from .journal import Journal, assainir, declarer_secret, masquer
@@ -262,6 +262,10 @@ class ServeurUI:
         self.diagnostic_rtk = False
         # SEC-01b : attestation « lames à l'arrêt » de l'opérateur ; en mémoire, jamais active au lancement.
         self.attestation = securite.Attestation(lambda: self.horloge(), self._tracer_attestation)
+        # SEC-01c : arrêt d'urgence posé par la levée de nettoyage ; mémorisé sur disque, sauf en démonstration.
+        self.nettoyage = nettoyage.PositionDeNettoyage(
+            None if demonstration else self.dossier, lambda: self.horloge(), self._tracer_nettoyage
+        )
         self._ecoute: capture.Enregistreur | None = None  # trames brutes pendant un ordre réel
         self._fin_ecoute: asyncio.TimerHandle | None = None
         self.video_ouverte = False
@@ -298,6 +302,7 @@ class ServeurUI:
                 web.post("/api/tache", self._tache_immediate),
                 web.post("/api/erreur/annuler", self._erreur_annuler),
                 web.post("/api/plateau/essai", self._plateau_essai),
+                web.post("/api/plateau/pas-leve", self._plateau_pas_leve),
                 web.post("/api/voyants", self._voyants),
                 web.post("/api/phares", self._phares),
                 web.post("/api/liaison/rendre", self._liaison_rendre),
@@ -413,6 +418,7 @@ class ServeurUI:
             robot.session = self.session
             self.session.signaler = self._signaler
             self.session.attestation = self.attestation
+            self.session.nettoyage = self.nettoyage
             self.ident, self.etat_liaison = None, demo.MENTION
             if self._battement is not None:
                 self._battement.cancel()
@@ -441,6 +447,7 @@ class ServeurUI:
             return
         self.session.signaler = self._signaler
         self.session.attestation = self.attestation  # SEC-01b : la même règle pour tous les chemins d'ordre
+        self.session.nettoyage = self.nettoyage  # SEC-01c
         self.session.sur_etat = self._relever  # relevé local de la précision, par position
         self.etat_liaison = "connecté"
         await self.session.solliciter()
@@ -763,6 +770,7 @@ class ServeurUI:
             "arret_aux_bords": self.arret_aux_bords,
             "recalage": self._recalage.resume(),
             "plateau": self._etat_du_plateau(),
+            "nettoyage": self._etat_du_nettoyage(),
             "voyants": self._etat_des_voyants(),
             "phares": self._etat_des_phares(),
             "carte_connue": self._carte_affichee()[0] is not None,  # la page la charge alors d'elle-même
@@ -806,9 +814,13 @@ class ServeurUI:
         refus, action = None, None
         if etat.en_ligne is False:
             refus = "Le robot est hors ligne : attendez son retour en ligne."
-        elif etat.statut is not None and not securite.statut_admis(etat.statut, self.attestation.active):
+        elif etat.statut is not None and not securite.statut_admis(
+            etat.statut, self.attestation.active, self.nettoyage.essai_actif
+        ):
             constat, conseil = securite.explication_statut(etat.statut)
             refus = constat[0].upper() + constat[1:] + (f" : {conseil}." if conseil else " : mouvement refusé.")
+            if etat.statut == securite.STATUT_PLATEAU_LEVE and self.nettoyage.posee is not None:
+                refus = f"{nettoyage.TEXTE} : redescendez le plateau."
             action = "pause" if etat.statut in securite.STATUTS_PAUSE_UTILE else None
         pause = self._etat_de_la_pause(etat, session.horloge())
         if pause and pause["etat"] == "en attente":
@@ -1002,6 +1014,10 @@ class ServeurUI:
             return _refus(503, f"robot injoignable : {self.etat_liaison}")
         if self.occupe or self._stop_demande:
             return _refus(409, "un ordre ou un STOP est déjà en cours : seul STOP est accepté")
+        if not isinstance(attendue[1], retouche.Retouche):
+            refus_leve = self._refus_plateau_leve(list(attendue[1]))
+            if refus_leve is not None:
+                return _refus(409, refus_leve)
         if isinstance(attendue[1], retouche.Retouche):
             operation = attendue[1]  # SEC-08 : aucun autre ordre en cours, vérifié juste au-dessus
             self._lancer_travail(
@@ -1141,6 +1157,7 @@ class ServeurUI:
             try:
                 await self._interrompre()  # l'arrêt de fin de mouvement part d'abord
                 self.attestation.retirer("STOP")  # SEC-01b : après l'arrêt, rien ne le retarde
+                self.nettoyage.retirer_essai("STOP")  # SEC-01c
                 self._lancer([Ordre("stop")])  # puis le `stop` de la commande : consignes nulles ×3, pause
             finally:
                 self._stop_demande = False
@@ -1311,7 +1328,7 @@ class ServeurUI:
         nom = corps.get("ordre") if isinstance(corps, dict) else None
         if nom not in protocole.SIGNAUX_PLATEAU or corps.get("confirmer") is not True or set(corps) != {"ordre", "confirmer"}:
             raise ErreurSaisie("essai de plateau : « nettoyage » ou « redescendre », avec confirmation explicite")
-        if not self.reel:  # ni simulation, ni démonstration : il n'y a rien à simuler d'un ordre jamais observé
+        if not self.emet:  # simulation : rien à simuler ; la démonstration rejoue le constat réel du 2026-10-13
             return _refus(403, "essai de plateau : en mode réel seulement")
         self._refuser_si_main_rendue()
         if self.session is None or not self.session.lien.connecte:
@@ -1335,6 +1352,70 @@ class ServeurUI:
         self.previsualisation = None
         self._lancer_travail(protocole.LIBELLES_SIGNAUX_PLATEAU[nom], essai)
         return web.json_response({"accepte": True}, status=202)
+
+    async def _plateau_pas_leve(self, requete: web.Request) -> web.StreamResponse:
+        """SEC-01c — « Essayer un pas plateau levé » : seulement si l'arrêt d'urgence a été posé par l'outil, sur
+        confirmation explicite ; pose l'autorisation (2 minutes), n'émet rien."""
+        corps = await self._corps(requete)
+        if not isinstance(corps, dict) or corps.get("confirmer") is not True or set(corps) != {"confirmer"}:
+            raise ErreurSaisie("confirmation explicite attendue pour essayer un pas plateau levé")
+        if not self.emet:
+            return _refus(403, "essai de pas plateau levé : jamais en simulation (SEC-01c)")
+        self._refuser_si_main_rendue()
+        session = self.session
+        if session is None or not session.lien.connecte:
+            return _refus(503, f"robot injoignable : {self.etat_liaison}")
+        if session.etat.statut != securite.STATUT_PLATEAU_LEVE:
+            return _refus(409, "essai de pas plateau levé refusé : le robot ne se déclare pas en arrêt d'urgence (SEC-01c)")
+        try:
+            self.nettoyage.autoriser_essai()
+        except RefusSecurite as refus:  # origine inconnue : toujours refusé, attestation ou non
+            return _refus(409, str(refus))
+        return web.json_response({"nettoyage": self._etat_du_nettoyage()})
+
+    def _etat_du_nettoyage(self) -> dict[str, Any]:
+        """SEC-01c : la position de nettoyage posée par l'outil, tant que le robot se déclare en arrêt d'urgence."""
+        session = self.session
+        en_arret = session is not None and session.etat.statut == securite.STATUT_PLATEAU_LEVE
+        posee = self.nettoyage.posee if en_arret else None
+        essai = posee is not None and self.nettoyage.essai_actif
+        texte = nettoyage.TEXTE if posee else ""
+        if essai:
+            texte += (
+                f" — essai de pas autorisé encore {self.nettoyage.essai_reste_s} s : "
+                f"{securite.PAS_MAX_PLATEAU_LEVE_M:g} m et {securite.ANGLE_MAX_PLATEAU_LEVE_DEG:g}° au plus, un pas à la fois"
+            )
+        return {
+            "posee": posee is not None, "depuis": posee and posee["horodatage"], "texte": texte, "essai": essai,
+            "essai_reste_s": self.nettoyage.essai_reste_s if essai else 0, "confirmation": nettoyage.CONFIRMATION_ESSAI,
+        }
+
+    def _tracer_nettoyage(self, evenement: str, **champs: Any) -> None:
+        """Au journal (différé pendant un arrêt, SEC-03) et au fil de la page."""
+        session = self.session
+        (session.journaliser if session is not None else self.journal.ecrire)(evenement, mode=self.mode, **champs)
+        textes = {
+            "nettoyage-pose": f"{nettoyage.TEXTE} : « Redescendre le plateau » le sort de cet état",
+            "nettoyage-efface": "le robot a quitté l'arrêt d'urgence : position de nettoyage effacée",
+            "essai-plateau-leve-autorise": "ESSAI DE PAS PLATEAU LEVÉ AUTORISÉ (SEC-01c), 2 min au plus, un pas à la fois",
+            "essai-plateau-leve-retire": f"essai de pas plateau levé retiré : {champs.get('motif')}",
+            "essai-plateau-leve-expire": "essai de pas plateau levé expiré",
+        }
+        self._noter(textes[evenement])
+
+    def _refus_plateau_leve(self, ordres: list[Any]) -> str | None:
+        """SEC-01c : plateau levé, un seul pas à la fois, dans les plafonds — dit avant toute émission."""
+        session = self.session
+        if session is None or session.etat.statut != securite.STATUT_PLATEAU_LEVE or not self.nettoyage.essai_actif:
+            return None
+        if len(ordres) != 1 or self.occupe:
+            return "plateau levé : un seul pas à la fois, sans file d'attente (SEC-01c)"
+        ordre = ordres[0]
+        try:
+            securite.verifier_pas_plateau_leve(ordre.nom, ordre.valeur, ordre.angle)
+        except RefusSecurite as refus:
+            return str(refus)
+        return None
 
     async def _erreur_annuler(self, requete: web.Request) -> web.StreamResponse:
         """Robot en erreur : « Annuler la tâche et remettre le robot en attente » — le seul ordre « annuler »
@@ -1476,6 +1557,10 @@ class ServeurUI:
         if self._stop_demande:
             self._desarmer("un STOP est en cours")
             return _refus(409, "un STOP est en cours : pilotage direct désarmé")
+        refus_leve = self._refus_plateau_leve([ordre])
+        if refus_leve is not None:  # SEC-01c : dit, sans désarmer — rien n'est émis
+            self.direct.prolonger()
+            return _refus(409, refus_leve)
         if self.occupe and not self._direct_en_cours:  # refus avant émission : dit, la main est gardée
             self.direct.prolonger()
             return _refus(409, "un autre ordre est en cours : attendez sa fin, puis rappuyez")

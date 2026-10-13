@@ -12,7 +12,6 @@ import subprocess
 
 import pytest
 from conftest import fragment
-from test_demo import serveur_demo
 from test_ui import attendre, executer, poster, serveur_ui
 
 from lymow_pilotage import protocole, ui
@@ -81,9 +80,7 @@ def test_essai_de_plateau_refuse_hors_mode_reel(tmp_path, monkeypatch, session_r
         async with serveur_ui(tmp_path, monkeypatch, reel=False, session=session_reelle) as (serveur, http):
             statut, reponse, _recus = await poster(http, serveur, "/api/plateau/essai", {"ordre": "nettoyage", "confirmer": True})
             assert statut == 403 and "mode réel seulement" in reponse["erreur"] and lien.ordres == []
-        async with serveur_demo(tmp_path, monkeypatch) as (serveur, http):
-            statut, _reponse, _recus = await poster(http, serveur, "/api/plateau/essai", {"ordre": "nettoyage", "confirmer": True})
-            assert statut == 403 and LEVER not in serveur.session.lien.recues
+        # La démonstration, elle, rejoue le constat réel du 2026-10-13 : voir tests/test_nettoyage.py.
 
     executer(scenario())
 
@@ -93,7 +90,9 @@ def test_page_essais_ranges_dans_calibration_avec_leur_confirmation_et_hors_des_
     calibration = page[page.index('data-volet="calibration"') :]
     calibration = calibration[: calibration.index("</details>")]
     assert ">Plateau : position de nettoyage (essai)</button>" in calibration and ">Plateau : redescendre (essai)</button>" in calibration
-    assert "data-plateau-essai" not in page.replace(calibration, "")  # jamais dans la barre principale
+    # Hors de Calibration : le seul « Redescendre le plateau » du bloc Pilotage, affiché en position de nettoyage.
+    ailleurs = page.replace(calibration, "")
+    assert ailleurs.count("data-plateau-essai") == 1 and 'id="nettoyage-redescendre"' in ailleurs
     assert "jamais essayée par le nuage sur ce robot" in calibration
     app = (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
     clic = app[app.index('document.querySelectorAll("[data-plateau-essai]").forEach(function (bouton) {\n    bouton.addEventListener') :][:600]

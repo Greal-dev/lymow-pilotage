@@ -71,6 +71,8 @@ class Session:
         self.decalage_carte: tuple[float, float] | None = None
         # SEC-01b : posée par l'appelant (page ou commande), jamais par la session elle-même.
         self.attestation: Attestation | None = None
+        # SEC-01c : position de nettoyage posée par l'outil (`nettoyage.PositionDeNettoyage`), posée par l'appelant.
+        self.nettoyage: Any = None
         self._differes: list[tuple[str, dict[str, Any]]] = []
         self._identifiant = uuid.uuid4().hex
 
@@ -123,6 +125,8 @@ class Session:
         # SEC-01b : arrêt d'urgence, mise à jour, essai d'usine, hors ligne — l'attestation tombe.
         if self.attestation is not None:
             self.attestation.controler(self.etat.statut, self.etat.en_ligne)
+        if self.nettoyage is not None:
+            self.nettoyage.observer(self.etat.statut, self.appareil)
 
     async def publier(self, trame: Trame, delai: float) -> None:
         """Publie en QoS 1 et attend l'acquittement ; lève plutôt que d'abandonner en silence."""

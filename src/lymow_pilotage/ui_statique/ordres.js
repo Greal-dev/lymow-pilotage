@@ -212,7 +212,7 @@
 
   /* Essais de plateau : proposés en mode réel seulement, hors de tout ordre en cours. */
   function essaiPlateauPossible(c) {
-    if (c.mode !== "réel") { return { possible: false, motif: "Essais de plateau : en mode réel seulement." }; }
+    if (c.mode === "simulation") { return { possible: false, motif: "Essais de plateau : en mode réel seulement." }; }
     if (c.occupe) { return { possible: false, motif: "Un ordre est en cours." }; }
     return { possible: true, motif: "" };
   }

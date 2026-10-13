@@ -28,6 +28,7 @@ from .vendor.ha_lymow import const as socle
 
 # Le robot ne parle spontanément que toutes les 60 s environ.
 ATTENTE_ETAT_S = 75.0
+RELECTURES_SORTIE, PAUSE_RELECTURE_S = 3, 3.0  # après « redescendre » : statut relu, ~10 s au plus
 # Constat après un ordre : une trame d'état fraîche, pas davantage (voir `constater`).
 ATTENTE_CONSTAT_S = 12.0
 IMMOBILE = "le robot n'a pas bougé (patinage ou ordre ignoré)"
@@ -445,7 +446,21 @@ def _attestee(session: Session) -> bool:
     return session.attestation is not None and session.attestation.active
 
 
-async def _exiger_lames_arret(session: Session, attestable: bool = False) -> Pose | None:
+def _plateau_leve(session: Session) -> bool:
+    """SEC-01c : un essai de pas plateau levé est-il autorisé sur cette session ?"""
+    return session.nettoyage is not None and session.nettoyage.essai_actif
+
+
+def _borner_au_plateau_leve(ordre: Ordre) -> Ordre:
+    """SEC-01c : plafonds du pas plateau levé, et allure lente imposée."""
+    securite.verifier_pas_plateau_leve(ordre.nom, ordre.valeur, ordre.angle)
+    lente = (
+        securite.VITESSE_ANGULAIRE_PLATEAU_LEVE_RAD_S if ordre.nom == "tourner" else securite.VITESSE_PLATEAU_LEVE_M_S
+    )
+    return dataclasses.replace(ordre, vitesse=lente, duree=None, force=False)
+
+
+async def _exiger_lames_arret(session: Session, attestable: bool = False, sortie_nettoyage: bool = False) -> Pose | None:
     """SEC-01 : état reçu dans la session, après sollicitation, puis liste blanche.
 
     Rend la pose de départ si elle est aussi fraîche que le statut (SEC-04).
@@ -464,6 +479,7 @@ async def _exiger_lames_arret(session: Session, attestable: bool = False) -> Pos
     securite.verifier_lames_arret(
         etat.statut if frais else None, etat.age_statut(maintenant) if frais else None, etat.en_ligne,
         attestee=attestable and _attestee(session),
+        arret_urgence_admis=sortie_nettoyage or (attestable and _plateau_leve(session)),  # SEC-01c
     )
     pose_fraiche = (
         etat.recu_pose is not None
@@ -480,7 +496,8 @@ def _surveiller(session: Session, attestable: bool = False) -> None:
     """
     try:
         securite.verifier_presence_et_statut(
-            session.etat.statut, session.etat.en_ligne, attestable and _attestee(session)
+            session.etat.statut, session.etat.en_ligne, attestable and _attestee(session),
+            attestable and _plateau_leve(session),  # SEC-01c : expiré ou retiré en route, le pas s'arrête
         )
     except RefusSecurite as refus:
         raise EchecOrdre(f"mouvement interrompu en cours de route : {refus}") from None
@@ -580,7 +597,30 @@ def _surveiller_choc(session: Session, chocs_au_depart: frozenset[tuple[str, int
 
 async def executer_mouvement(session: Session, ordre: Ordre) -> dict[str, Any]:
     consigne = consigne_de(ordre, session.cal)  # SEC-02
-    avant = await _exiger_lames_arret(session, attestable=True)  # SEC-01, SEC-01b
+    avant = await _exiger_lames_arret(session, attestable=True)  # SEC-01, SEC-01b, SEC-01c
+    plateau_leve = session.etat.statut == securite.STATUT_PLATEAU_LEVE  # admis par le seul essai SEC-01c
+    if plateau_leve:
+        ordre = _borner_au_plateau_leve(ordre)
+        consigne = consigne_de(ordre, session.cal)
+        session.journal.ecrire("essai-plateau-leve", strict=True, regle="SEC-01c", ordre=str(ordre), mention=securite.MENTION_PLATEAU_LEVE)
+    try:
+        rapport = await _mouvoir(session, ordre, consigne, avant)
+    except EchecOrdre as echec:
+        if plateau_leve and "SEC-14" in str(echec):
+            raise EchecOrdre(f"plateau levé : le robot a IGNORÉ l'ordre ou n'avance pas — {echec}") from None
+        raise
+    if plateau_leve:
+        rapport["plateau_leve"] = securite.MENTION_PLATEAU_LEVE
+        if rapport.get("verification") == AUCUN_ETAT:
+            rapport["essai_plateau_leve"] = "plateau levé : aucun état relu, on ne sait pas si le robot a bougé"
+        elif rapport.get("constat") == IMMOBILE:
+            rapport["essai_plateau_leve"] = "plateau levé : le robot a IGNORÉ l'ordre (il n'a pas bougé)"
+        else:
+            rapport["essai_plateau_leve"] = "plateau levé : le robot a BOUGÉ malgré l'arrêt d'urgence déclaré"
+    return rapport
+
+
+async def _mouvoir(session: Session, ordre: Ordre, consigne: securite.Consigne, avant: Pose | None) -> dict[str, Any]:
     precision_avant = session.etat.precision_m
     ordre, garde_fou = _garder_le_pas(session, ordre)  # SEC-13 : pas raccourci, refusé, ou forcé
     if garde_fou:
@@ -826,15 +866,37 @@ async def executer_signal_plateau(session: Session, nom: str) -> dict[str, Any]:
     l'ordre, l'état est relu et l'outil dit ce qu'il a pu observer — le plus souvent rien : il ne reçoit
     aucune hauteur mesurée."""
     trame = protocole.trame_signal_plateau(nom, session.cal)
-    avant = await _exiger_lames_arret(session)  # SEC-01, sans attestation
+    # SEC-01, sans attestation ; SEC-01c : « redescendre » est l'ordre de sortie, admis aussi en statut 13.
+    avant = await _exiger_lames_arret(session, sortie_nettoyage=nom == "redescendre")
     etat = session.etat
+    statut_avant = etat.statut
     vu_avant = (etat.statut, tuple(etat.donnees.get("errorCodes") or ()), tuple(etat.donnees.get("warningCodes") or ()))
     session.journal.ecrire(
         "ordre-emis", strict=True, ordre=trame.nom, sujet=session.sujet, trame=trame.description(), essai=True,
     )
     instant = session.horloge()
+    # Noté AVANT la publication : le statut 13 peut arriver avant l'acquittement de l'ordre.
+    if nom == "nettoyage" and session.nettoyage is not None:
+        session.nettoyage.noter_emission(statut_avant)  # SEC-01c : un statut 13 dans les 10 s vient de l'outil
     await session.publier(trame, securite.DELAI_ARRET_S)
     rapport = await constater(session, avant, instant, None)
+    if nom == "redescendre" and statut_avant == securite.STATUT_PLATEAU_LEVE:
+        for _ in range(RELECTURES_SORTIE):  # le statut vivant met quelques secondes à suivre
+            if etat.statut != securite.STATUT_PLATEAU_LEVE:
+                break
+            await session.dormir(PAUSE_RELECTURE_S)
+            relance = await session.solliciter()
+            if relance is None:
+                break
+            await session.attendre("statut", relance, PAUSE_RELECTURE_S)
+        libelle = etat.resume(session.horloge())["statut_libelle"]
+        if etat.statut == securite.STATUT_PLATEAU_LEVE:
+            sortie = "toujours en arrêt d'urgence : le plateau n'est peut-être pas redescendu — regardez le robot"
+        elif securite.statut_admis(etat.statut):
+            sortie = f"le robot est sorti de l'arrêt d'urgence : prêt ({libelle})"
+        else:
+            sortie = f"le robot est sorti de l'arrêt d'urgence : {libelle}"
+        return {"mode": "réel", "ordre": trame.nom, "essai": True, "observation": sortie} | rapport
     vu_apres = (etat.statut, tuple(etat.donnees.get("errorCodes") or ()), tuple(etat.donnees.get("warningCodes") or ()))
     if not rapport["etat_rafraichi"]:
         observe = "aucun état relu après l'ordre : effet inconnu"
@@ -1093,7 +1155,7 @@ async def executer_sequence(session: Session, ordres: list[Ordre], objectif_sign
         else:
             try:  # (c) : dit ici, avec le statut en clair, plutôt qu'au refus de l'étape suivante
                 securite.verifier_presence_et_statut(
-                    session.etat.statut, session.etat.en_ligne, _attestee(session)  # SEC-01b
+                    session.etat.statut, session.etat.en_ligne, _attestee(session), _plateau_leve(session)  # SEC-01b, SEC-01c
                 )
             except RefusSecurite:
                 motif = f"le robot est passé en « {rapport['statut_apres']} », hors des statuts où un mouvement est permis"

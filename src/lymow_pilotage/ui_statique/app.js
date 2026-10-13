@@ -11,6 +11,7 @@
   var occupe = false;
   var liaisonSuspendue = false;
   var dernierPhares = { allumer: true };
+  var dernierNettoyage = {};
   var dernieresOrdres = null;
   var dernierEtat = null;
   var recalageAvant = null;
@@ -174,6 +175,10 @@
     var essai = Ordres.essaiPlateauPossible({ mode: image.mode, occupe: occupe });
     document.querySelectorAll("[data-plateau-essai]").forEach(function (bouton) { bouton.disabled = !essai.possible; });
     if (!essai.possible) { $("plateau-essai-etat").textContent = essai.motif; }
+    dernierNettoyage = image.nettoyage || {};
+    $("nettoyage").hidden = !dernierNettoyage.posee;
+    $("nettoyage-texte").textContent = dernierNettoyage.texte || "";
+    $("nettoyage-essai").disabled = occupe || !!dernierNettoyage.essai;
     $("voyants-etat").textContent = image.voyants ? image.voyants.texte : "";
     dernierPhares = Ordres.boutonPhares(image.phares);
     $("phares-libelle").textContent = dernierPhares.libelle;
@@ -744,6 +749,15 @@
         $("plateau-essai-etat").textContent = "Refusé : " + erreur.message;
       }
     });
+  });
+  $("nettoyage-essai").addEventListener("click", async function () {
+    if (!window.confirm(dernierNettoyage.confirmation)) { return; }
+    try {
+      await appeler("/api/plateau/pas-leve", { confirmer: true });
+      $("nettoyage-etat").textContent = "Essai autorisé 2 minutes : un pas à la fois, avec les flèches.";
+    } catch (erreur) {
+      $("nettoyage-etat").textContent = "Refusé : " + erreur.message;
+    }
   });
   $("garde-carte").addEventListener("change", async function () {
     try {
