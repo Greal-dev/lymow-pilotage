@@ -830,6 +830,8 @@ class ServeurUI:
             "tache": etat.resume(session.horloge())["tache_libelle"],  # dite seulement si elle diffère du statut
             # Après un dégagement, la reprise reste proposée clairement (les lames peuvent redémarrer).
             "reprise_possible": etat.statut == socle.WORK_STATUS_PAUSE,
+            # « Retour base » : l'ordre que le clic émettra, selon qu'une tâche est en cours ou non.
+            "retour_base": protocole.USER_CTRL_AUTORISES[mouvement.code_base(etat.tache, etat.statut)],
             "telecommande": etat.statut == socle.WORK_STATUS_REMOTE_CONTROL,
             "erreur": self._etat_de_l_erreur(etat, session.horloge()),
             # Dit AVANT le pas, pas après : le pas reste possible, le propriétaire décide.

@@ -211,6 +211,11 @@
   var CONFIRMATION_ESSAI_PLATEAU = "Ordre jamais essayé par le cloud sur ce robot. À faire robot à vue, mains éloignées du plateau.";
 
   /* Essais de plateau : proposés en mode réel seulement, hors de tout ordre en cours. */
+  /* « Retour base » : l'info-bulle dit l'ordre que le clic émettra (avec ou sans tâche à conserver). */
+  function bulleRetourBase(libelle) {
+    return "Émet, tout de suite : " + libelle + (/conservée/.test(libelle) ? "." : " (aucune tâche en cours).");
+  }
+
   function essaiPlateauPossible(c) {
     if (c.mode === "simulation") { return { possible: false, motif: "Essais de plateau : en mode réel seulement." }; }
     if (c.occupe) { return { possible: false, motif: "Un ordre est en cours." }; }
@@ -227,7 +232,7 @@
   function graviteDe(texte) {
     var t = String(texte).toLowerCase();
     if (/arrêt non confirmé|sec-01|liaison perdue|injoignable|en échec/.test(t)) { return "erreur"; }
-    if (/refus|échou|non abouti|désarmé|interrompu|patinage|liaison lente|d'après la carte|ignor|persiste|aucun changement|non transmis/.test(t)) { return "alerte"; }
+    if (/refus|échou|non abouti|désarmé|interrompu|patinage|liaison lente|d'après la carte|ignor|persiste|aucun changement|n'a pas changé d'état|non transmis/.test(t)) { return "alerte"; }
     return "info";
   }
 
@@ -408,6 +413,7 @@
     pastilles: pastilles,
     essaiPlateauPossible: essaiPlateauPossible,
     CONFIRMATION_ESSAI_PLATEAU: CONFIRMATION_ESSAI_PLATEAU,
+    bulleRetourBase: bulleRetourBase,
     texteDeLaMain: texteDeLaMain,
     annoncePrendreLaMain: annoncePrendreLaMain,
     suitePrendreLaMain: suitePrendreLaMain,

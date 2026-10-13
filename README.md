@@ -45,7 +45,7 @@ Python 3.12) ; il se régénère avec
 | `lymow sequence "plateau 90; tourner 45 --vitesse 0.2; reculer --duree 2 --vitesse 0.1"` | Enchaîne ; rien ne part si une étape est refusable ; s'arrête au premier refus, échec ou constat non confirmé. Étapes : `tourner`, `avancer`, `reculer`, `plateau`, `plateau-haut`, `stop`. `--reel` et `essai-arret-auto` y sont interdits. |
 | `lymow pause` | Met la tâche en pause (3), ou le retour à la base (21) : la pause de `stop`, sans les consignes nulles. |
 | `lymow calibration-constat` | Hors ligne : relit les constats vérifiés des ordres réels du journal et donne, par vitesse, le rapport mesuré / commandé, sa dispersion et le facteur suggéré. Ne modifie rien. |
-| `lymow reprendre` / `base` / `annuler` | Reprise de tâche (4), retour base tâche conservée (33), annulation sur place (28). |
+| `lymow reprendre` / `base` / `annuler` | Reprise de tâche (4), retour base (33 s'il y a une tâche, conservée ; 2 sinon), annulation sur place (28). |
 | `lymow ui [--reel \| --demo] [--port N]` | Interface web locale avec retour vidéo (voir « Interface web locale ») ; `--demo` : robot et jardin fictifs, sans compte ni réseau. |
 | `lymow carte` | Carte du robot : zones, zones interdites, passages, station (lecture seule ; contours complets avec `--json`). Une grande carte arrive coupée à 81 920 octets (constat du 2026-10-12) : les tranches suivantes sont demandées une à une (hypothèse à confirmer en réel), et une carte restée tronquée est refusée avec son motif. |
 | `lymow ajuster-zone <nom\|id> --de I --a J --cm X [--cote court\|long\|tout] [--raccord M]` | Élargit ou rogne une bande le long d'un bord d'une zone (voir « Carte et ajustement de zone »). |
@@ -657,6 +657,33 @@ en arrêt d'urgence (le robot de démonstration l'ignore : c'est une
 hypothèse) ; l'outil ne reçoit aucune hauteur mesurée du plateau ; après un
 redémarrage, un arrêt d'urgence resté en place est toujours tenu pour celui
 de la levée, même si quelqu'un a appuyé entre-temps sur le bouton du robot.
+
+## Retour à la base, et constat des ordres de tâche
+
+Constat réel du 2026-10-13 : « Retour base » émis trois fois (ordre 33,
+« tâche conservée ») sans effet — le robot n'avait aucune tâche — et le
+constat disait pourtant « émise, vérifiée ».
+
+- **attesté par les sources** (ha-lymow, `coordinator.py`, `async_dock`,
+  lignes 1094-1107 : « RECHARGE_DOCK (33) no-ops when idle with no active
+  task; DOCK (2) sends it home » ; `const.py` lignes 147 et 178 ;
+  `button.py` ligne 222 : trame `10 31 28 02` capturée robot au repos) :
+  sans tâche, c'est l'ordre 2 qui renvoie le robot à sa base ;
+- l'outil choisit donc : tâche en cours ou en pause → 33 (tâche
+  conservée) ; aucune tâche (« prêt », « au repos », inconnue) → 2. Le
+  bouton l'annonce en info-bulle, le fil le dit ;
+- **non attesté** : la sortie de télécommande (32) émise d'abord quand le
+  robot est en télécommande — règle de l'outil, déjà celle de
+  « Reprendre » ; le socle ne l'émet pas avant un retour à la base ;
+- **non repris du socle** : il n'émet rien si le robot est déjà en charge,
+  et relance (22) un retour à la base en pause ; l'outil ne connaît pas
+  l'ordre 22.
+
+Après pause, reprise, retour à la base ou annulation, l'outil guette 10 s
+le statut attendu (retour → « retour à la base » ; pause → « en pause » ;
+reprise → tonte ou retour ; annulation → « prêt »). Sinon le fil dit, en
+orange : « ordre émis, mais le robot n'a pas changé d'état : … » — plus
+jamais « vérifiée » sans changement constaté.
 
 ## Carte décalée : mesure et recalage d'affichage
 

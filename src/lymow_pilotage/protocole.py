@@ -48,9 +48,13 @@ class Categorie(enum.Enum):
 
 # SEC-01 : seuls codes userCtrl émissibles. Aucun ne démarre une tonte neuve ;
 # `reprendre` (4) est le seul qui puisse relancer les lames, sur demande explicite.
+USER_CTRL_DOCK = 2  # « dock + cancel task » (ha-lymow, const.py ligne 147) : absent du socle embarqué
 USER_CTRL_AUTORISES: dict[int, str] = {
     socle.USER_CTRL_RESUME: "reprendre la tâche",
     socle.USER_CTRL_RECHARGE_DOCK: "retour à la base, tâche conservée",
+    # Constat réel du 2026-10-13 : sans tâche en cours, l'ordre 33 reste sans effet ; c'est l'ordre 2 qui
+    # renvoie le robot à sa base (attesté par le socle : capture « idle-Dock » `10 31 28 02`).
+    USER_CTRL_DOCK: "retour à la base",
     socle.USER_CTRL_FORCE_REINIT: "annuler la tâche, arrêt sur place",
     socle.USER_CTRL_EXIT_REMOTE: "quitter le mode télécommande",
     socle.USER_CTRL_PAUSE: "mettre la tâche en pause",

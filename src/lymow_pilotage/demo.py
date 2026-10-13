@@ -121,6 +121,8 @@ class RobotFictif:
         """État publié périodiquement : sans cela l'affichage se griserait au bout de 30 s."""
         while True:
             await asyncio.sleep(PERIODE_ETAT_S)
+            if self.statut == 4:  # le retour à la base aboutit : le robot fictif s'y retrouve, en charge
+                self.est, self.nord, self.cap, self.statut = 1.0, 1.0, 0.0, 5
             self.session.recevoir_etat(self.etat())
 
     async def publier(self, _sujet: str, charge: str, *, delai: float) -> None:
@@ -140,8 +142,8 @@ class RobotFictif:
             self._retoucher(champs)
         elif commande == 50:
             self._regler_hauteur(champs)
-        elif commande == 33:  # retour à la base : le robot fictif s'y retrouve aussitôt, en charge
-            self.est, self.nord, self.cap, self.statut = 1.0, 1.0, 0.0, 5
+        elif commande == 2:  # retour à la base ; le 33 (tâche conservée) reste sans effet : le robot fictif
+            self.statut = 4  # n'a jamais de tâche — constat réel du 2026-10-13
         elif commande in (28, 32):
             self.statut = 1
         self._signal(champs)

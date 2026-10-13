@@ -304,6 +304,24 @@ async def scenario_nettoyage(page: Page, serveur: Any, donnees: Path) -> dict[st
     return bilan
 
 
+async def scenario_base(page: Page, serveur: Any, donnees: Path) -> dict[str, Any]:
+    """Clique réellement « Retour base » : sans tâche, le robot fictif ignore le 33 et ne rentre que sur l'ordre 2."""
+    robot = serveur.session.lien
+    bilan: dict[str, Any] = {"info_bulle": await page.js("document.getElementById('base-bouton').title")}
+    nombre = len(robot.recues)
+    bilan["clic"] = await page.cliquer("#base-bouton")
+    for _ in range(150):
+        if not serveur.occupe and serveur.resultat is not None and robot.statut in (4, 5):
+            break
+        await page.attendre(0.2)
+    bilan["ordres_recus"] = [o.hex(" ") for o in robot.recues[nombre:] if o[2:3] == b"\x28" and o[3] in (2, 33)]
+    bilan["statut_du_robot"] = robot.statut
+    bilan["verdict"] = (serveur.resultat or {}).get("verdict")
+    await page.attendre(1.0)
+    bilan["fil"] = await page.js("document.getElementById('fil').textContent")
+    return bilan
+
+
 async def scenario_diagonales(page: Page, serveur: Any, donnees: Path) -> dict[str, Any]:
     """Clique réellement les quatre diagonales du pavé de gauche : le robot fictif doit décrire un arc (position ET
     cap changent). Puis ↑ et ← pressées ensemble : une diagonale, sans pas droit avant."""
@@ -397,6 +415,8 @@ async def principal(sortie: Path, scenarios: list[str], navigateur: str | None) 
                     compte_rendu["recalage"] = await scenario_recalage(page, serveur, donnees)
                 if "diagonales" in scenarios:
                     compte_rendu["diagonales"] = await scenario_diagonales(page, serveur, donnees)
+                if "base" in scenarios:
+                    compte_rendu["base"] = await scenario_base(page, serveur, donnees)
                 if "nettoyage" in scenarios:
                     compte_rendu["nettoyage"] = await scenario_nettoyage(page, serveur, donnees)
                 if "boutons" in scenarios:

@@ -247,8 +247,11 @@ def session(tmp_path, horloge, lien, messages) -> Session:
 
 
 @pytest.fixture
-def session_reelle(tmp_path, lien, messages) -> Session:
+def session_reelle(tmp_path, lien, messages, monkeypatch) -> Session:
     """Session à l'horloge réelle (tests du serveur web) ; le faux robot répond après 30 ms."""
+    from lymow_pilotage import mouvement
+
+    monkeypatch.setattr(mouvement, "ATTENTE_TACHE_S", 0.3)  # horloge réelle : le guet de 10 s après un ordre de tâche, écourté
     s = Session(lien, APPAREIL, Journal(tmp_path), Calibration(), frozenset(Categorie), signaler=messages.append)
     lien.session = s
     lien.delai_robot = 0.03
