@@ -259,6 +259,51 @@ async def scenario_boutons(page: Page, serveur: Any, donnees: Path) -> dict[str,
     return bilan
 
 
+async def scenario_nettoyage(page: Page, serveur: Any, donnees: Path) -> dict[str, Any]:
+    """Clique réellement : levée de nettoyage (Calibration), « Essayer un pas plateau levé », une flèche, puis
+    « Redescendre le plateau » du bloc Pilotage. Le robot fictif rejoue le constat réel du 2026-10-13."""
+    bilan: dict[str, Any] = {}
+    robot = serveur.session.lien
+
+    async def fin(condition: Any, tours: int = 150) -> bool:
+        for _ in range(tours):
+            if not serveur.occupe and condition():
+                return True
+            await page.attendre(0.2)
+        return False
+
+    visible = "!document.getElementById('nettoyage').hidden"
+    bilan["bloc_masque_au_depart"] = not await page.js(visible)
+    await page.js("document.querySelector(\"[data-volet='calibration']\").open = true")
+    bilan["clic_levee"] = await page.cliquer("#plateau-essais [data-plateau-essai='nettoyage']")
+    bilan["statut_13_pose_par_l_outil"] = await fin(lambda: robot.statut == 13 and serveur.nettoyage.posee is not None)
+    await page.js("document.querySelector(\"[data-volet='calibration']\").open = false; window.scrollTo(0, 0)")
+    bilan["bloc_affiche"] = await page.jusqu_a(visible, 5.0)
+    bilan["texte"] = await page.js("document.getElementById('nettoyage-texte').textContent")
+    await page.capture("nettoyage.png")
+    bilan["clic_essai"] = await page.cliquer("#nettoyage-essai")
+    bilan["essai_autorise"] = await fin(lambda: serveur.nettoyage.essai_actif, 30)
+    bilan["page_a_jour"] = await page.jusqu_a("document.getElementById('nettoyage-essai').disabled", 5.0)  # sinon la prise de main juge un état périmé
+    await page.cliquer("#segments-distance button:nth-child(1)")  # 0,25 m
+    if not await page.js("document.getElementById('etat-main').textContent.indexOf('Vous avez la main') !== -1"):
+        await page.cliquer("#prendre-main")
+    await page.jusqu_a("!document.querySelector('.croix [data-fleche=\\'haut\\']').disabled")
+    nombre, avant = len(serveur.direct.faites), (robot.est, robot.nord)
+    bilan["clic_fleche"] = await page.cliquer(".croix [data-fleche='haut']")
+    bilan["pas_termine"] = await fin(lambda: len(serveur.direct.faites) > nombre)
+    bilan["main"] = await page.js("document.getElementById('etat-main').textContent + ' / ' + document.getElementById('direct-etat').textContent + ' / ' + document.getElementById('fil').textContent")
+    rapport = serveur.direct.faites[-1]["rapport"] if len(serveur.direct.faites) > nombre else {}
+    bilan["constat_du_pas"] = rapport.get("essai_plateau_leve") or rapport.get("echec")
+    bilan["robot_fictif_immobile"] = (robot.est, robot.nord) == avant
+    bilan["clic_redescendre"] = await page.cliquer("#nettoyage-redescendre")
+    bilan["sorti_de_l_arret_d_urgence"] = await fin(lambda: robot.statut == 1)
+    bilan["verdict"] = (serveur.resultat or {}).get("verdict")
+    bilan["bloc_masque_a_la_fin"] = await page.jusqu_a("document.getElementById('nettoyage').hidden", 5.0)
+    bilan["fil"] = [n["texte"] for n in serveur.fil[-8:]]
+    bilan["journal"] = sorted({e["evenement"] for e in evenements(donnees) if "nettoyage" in e["evenement"] or "plateau-leve" in e["evenement"]})
+    return bilan
+
+
 async def scenario_diagonales(page: Page, serveur: Any, donnees: Path) -> dict[str, Any]:
     """Clique réellement les quatre diagonales du pavé de gauche : le robot fictif doit décrire un arc (position ET
     cap changent). Puis ↑ et ← pressées ensemble : une diagonale, sans pas droit avant."""
@@ -352,6 +397,8 @@ async def principal(sortie: Path, scenarios: list[str], navigateur: str | None) 
                     compte_rendu["recalage"] = await scenario_recalage(page, serveur, donnees)
                 if "diagonales" in scenarios:
                     compte_rendu["diagonales"] = await scenario_diagonales(page, serveur, donnees)
+                if "nettoyage" in scenarios:
+                    compte_rendu["nettoyage"] = await scenario_nettoyage(page, serveur, donnees)
                 if "boutons" in scenarios:
                     compte_rendu["boutons"] = await scenario_boutons(page, serveur, donnees)
                 compte_rendu["boites_de_dialogue"] = page.dialogues

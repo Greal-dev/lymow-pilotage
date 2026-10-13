@@ -620,6 +620,44 @@ redescendre) après avoir constaté l'effet réel. Si rien ne se passe, c'est
 que le geste est bien réservé au Bluetooth : il faudrait alors capturer ce
 que l'application envoie quand on appuie sur sa levée de nettoyage.
 
+#### Constat réel du 2026-10-13 : le plateau se lève, le robot se déclare en arrêt d'urgence
+
+- **observé** (journal réel et propriétaire sur place) : le signal 8 passe
+  par le nuage, le plateau se lève, et le statut du robot devient aussitôt
+  13 « arrêt d'urgence », sans code d'erreur ni d'avertissement ;
+- **bogue corrigé** : « redescendre » était alors refusé par SEC-01, comme
+  tout le reste — l'outil ne savait plus sortir le robot de l'état où il
+  l'avait mis. « Redescendre » est maintenant admis en statut 13 (c'est
+  l'ordre de sortie) ; il relit ensuite le statut et dit « le robot est
+  sorti de l'arrêt d'urgence : prêt » ou « toujours en arrêt d'urgence » ;
+- **supposé, jamais essayé** : que le signal 9 redescende le plateau et lève
+  l'arrêt d'urgence. S'il ne suffit pas, levez l'arrêt d'urgence sur le
+  robot ou depuis l'application Lymow.
+
+Quand la levée part d'un autre statut que 13 et que le 13 arrive dans les
+10 secondes, l'outil retient que cet arrêt d'urgence est **posé par lui**
+(`nettoyage.json` dans le dossier de données, avec l'heure et l'appareil :
+un redémarrage de l'interface ne l'oublie pas). Le bloc Pilotage affiche
+alors « Plateau en position de nettoyage (le robot se déclare en arrêt
+d'urgence) » et le bouton « Redescendre le plateau ». Tout s'efface dès que
+le statut quitte 13.
+
+**Essayer un pas plateau levé (SEC-01c, décision du propriétaire,
+2026-10-13).** Seulement pour un arrêt d'urgence posé par l'outil — un
+arrêt d'urgence d'origine inconnue reste toujours refusé, attestation ou
+non. Après confirmation, l'outil autorise pendant 2 minutes un pas à la
+fois (aucune file) : pas droit ou arc de 0,5 m au plus, rotation ou virage
+de 45° au plus, à allure lente (0,10 m/s, 0,15 rad/s), avec l'arrêt garanti
+et le constat habituels. Le constat dit si le robot **a bougé** ou **a
+ignoré l'ordre**. L'autorisation tombe sur STOP, à l'expiration, ou dès que
+le statut quitte 13.
+
+Limites : personne ne sait encore ce que fait le robot d'une consigne reçue
+en arrêt d'urgence (le robot de démonstration l'ignore : c'est une
+hypothèse) ; l'outil ne reçoit aucune hauteur mesurée du plateau ; après un
+redémarrage, un arrêt d'urgence resté en place est toujours tenu pour celui
+de la levée, même si quelqu'un a appuyé entre-temps sur le bouton du robot.
+
 ## Carte décalée : mesure et recalage d'affichage
 
 Constat du propriétaire sur place (2026-10-12) : la position affichée est

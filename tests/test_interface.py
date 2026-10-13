@@ -211,7 +211,7 @@ def test_page_etat_du_robot_en_une_ligne_et_gestes_proposes():
         (4, "le robot rentre à sa base : mettez le retour en pause pour prendre la main — mouvement refusé (SEC-01)"),
         (14, "le robot se dégage d'un obstacle : mettez la tâche en pause pour prendre la main — mouvement refusé (SEC-01)"),
         (11, "le robot se met à jour : attendez la fin de la mise à jour — mouvement refusé (SEC-01)"),
-        (13, "arrêt d'urgence enclenché : levez-le sur le robot — mouvement refusé (SEC-01)"),
+        (13, "arrêt d'urgence enclenché : levez-le sur le robot ou depuis l'application Lymow — mouvement refusé (SEC-01)"),
     ],
 )
 def test_refus_sec01_dit_le_statut_en_francais_et_quoi_faire(statut, attendu):

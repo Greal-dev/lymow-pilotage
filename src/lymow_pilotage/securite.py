@@ -465,7 +465,9 @@ def explication_statut(statut: int | None) -> tuple[str, str | None]:
             "aucun mouvement n'est permis dans ce statut ; seul « Annuler la tâche » peut rendre la main",
         ),
         socle.WORK_STATUS_UPDATING: ("le robot se met à jour", "attendez la fin de la mise à jour"),
-        socle.WORK_STATUS_EMERGENCY_STOP: ("arrêt d'urgence enclenché", "levez-le sur le robot"),
+        socle.WORK_STATUS_EMERGENCY_STOP: (
+            "arrêt d'urgence enclenché", "levez-le sur le robot ou depuis l'application Lymow",
+        ),
         socle.WORK_STATUS_OFFLINE: ("robot inconnu ou hors ligne", "attendez son retour en ligne"),
         None: ("aucun statut reçu du robot", "cliquez sur « Actualiser »"),
     }
@@ -516,20 +518,53 @@ class Attestation:
             self.retirer(f"{explication_statut(statut)[0]} (statut {statut}) : toujours refusé")
 
 
-def statut_admis(statut: int | None, attestee: bool = False) -> bool:
-    """SEC-01 : liste blanche ; SEC-01b : ou attestation active ET statut attestable."""
+# SEC-01c — décision du propriétaire, 2026-10-13. Constat réel du même jour : la levée de nettoyage du
+# plateau (signal 8) met le robot en statut 13 « arrêt d'urgence ». Ce statut est admis dans deux cas
+# seulement : l'ordre de sortie « redescendre le plateau », et un pas d'essai « plateau levé » quand cet
+# arrêt d'urgence a été posé par l'outil lui-même (jamais pour un arrêt d'urgence d'origine inconnue).
+STATUT_PLATEAU_LEVE = socle.WORK_STATUS_EMERGENCY_STOP
+DUREE_ESSAI_PLATEAU_LEVE_S = 120.0
+PAS_MAX_PLATEAU_LEVE_M = 0.5
+ANGLE_MAX_PLATEAU_LEVE_DEG = 45.0
+VITESSE_PLATEAU_LEVE_M_S = 0.10
+VITESSE_ANGULAIRE_PLATEAU_LEVE_RAD_S = 0.15
+DELAI_CONSTAT_NETTOYAGE_S = 10.0
+MENTION_PLATEAU_LEVE = "essai de pas plateau levé (SEC-01c, décision du propriétaire, 2026-10-13)"
+
+
+def verifier_pas_plateau_leve(nom: str, valeur: float | None, angle: float | None) -> None:
+    """SEC-01c : plateau levé, seuls un pas droit ou un arc ≤ 0,5 m et une rotation ≤ 45° sont permis."""
+    if nom not in ("tourner", "avancer", "reculer", "arc") or valeur is None or not math.isfinite(valeur):
+        raise RefusSecurite("plateau levé : seuls un pas droit, un arc ou une rotation, donnés en mètres ou en degrés (SEC-01c)")
+    if nom == "tourner":
+        if abs(valeur) > ANGLE_MAX_PLATEAU_LEVE_DEG:
+            raise RefusSecurite(f"plateau levé : rotation de {ANGLE_MAX_PLATEAU_LEVE_DEG:g}° au plus (SEC-01c)")
+        return
+    if abs(valeur) > PAS_MAX_PLATEAU_LEVE_M:
+        raise RefusSecurite(f"plateau levé : pas de {PAS_MAX_PLATEAU_LEVE_M:g} m au plus (SEC-01c)")
+    if angle is not None and not abs(angle) <= ANGLE_MAX_PLATEAU_LEVE_DEG:
+        raise RefusSecurite(f"plateau levé : virage de {ANGLE_MAX_PLATEAU_LEVE_DEG:g}° au plus (SEC-01c)")
+
+
+def statut_admis(statut: int | None, attestee: bool = False, arret_urgence_admis: bool = False) -> bool:
+    """SEC-01 : liste blanche ; SEC-01b : ou attestation active ET statut attestable ;
+    SEC-01c : ou statut 13 quand l'appelant l'admet (sortie de nettoyage, essai plateau levé)."""
+    if arret_urgence_admis and statut == STATUT_PLATEAU_LEVE:
+        return True
     return statut in STATUTS_LAMES_ARRET or (attestee and statut in STATUTS_ATTESTABLES)
 
 
-def verifier_presence_et_statut(statut: int | None, en_ligne: bool | None, attestee: bool = False) -> None:
-    """SEC-01 : présence explicitement confirmée et statut dans la liste blanche (ou SEC-01b)."""
+def verifier_presence_et_statut(
+    statut: int | None, en_ligne: bool | None, attestee: bool = False, arret_urgence_admis: bool = False
+) -> None:
+    """SEC-01 : présence explicitement confirmée et statut dans la liste blanche (ou SEC-01b, SEC-01c)."""
     if en_ligne is False:
         raise RefusSecurite("robot hors ligne : attendez son retour en ligne — mouvement refusé (SEC-01)")
     if en_ligne is not True:
         raise RefusSecurite(
             "présence en ligne du robot non confirmée : cliquez sur « Actualiser » — mouvement refusé (SEC-01)"
         )
-    if statut_admis(statut, attestee):
+    if statut_admis(statut, attestee, arret_urgence_admis):
         return
     constat, conseil = explication_statut(statut)
     if attestee:
@@ -554,7 +589,8 @@ def verifier_repos_pour_carte(statut: int | None, age_s: float | None, en_ligne:
 
 
 def verifier_lames_arret(
-    statut: int | None, age_s: float | None, en_ligne: bool | None, attestee: bool = False
+    statut: int | None, age_s: float | None, en_ligne: bool | None, attestee: bool = False,
+    arret_urgence_admis: bool = False,
 ) -> None:
     """SEC-01 : refuse tout mouvement sans preuve fraîche de lames à l'arrêt.
 
@@ -568,4 +604,4 @@ def verifier_lames_arret(
             f"état périmé ({age_s:.0f} s, maximum {AGE_MAX_ETAT_S:.0f} s) : cliquez sur « Actualiser » — "
             "mouvement refusé (SEC-01)"
         )
-    verifier_presence_et_statut(statut, en_ligne, attestee)
+    verifier_presence_et_statut(statut, en_ligne, attestee, arret_urgence_admis)

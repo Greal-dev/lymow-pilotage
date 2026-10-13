@@ -153,7 +153,7 @@ def test_une_seule_confirmation_de_prise_de_main_par_session_et_boites_natives_l
     assert pave.count("dejaConfirme = false") == 1  # jamais remis à zéro : STOP puis réarmement = un clic, sans boîte
     # Boîtes natives : seulement prise de main (1re fois), annuler la tâche, attestation, essais, reprendre quand même —
     # et, hors tableau de bord, le compte (effacement, connexion en un clic) et l'écriture de carte.
-    permis = ("annoncePrendreLaMain", "CONFIRMATION_ATTESTATION", "CONFIRMATION_ESSAI_PLATEAU", "Annuler la tâche en cours",
+    permis = ("annoncePrendreLaMain", "CONFIRMATION_ATTESTATION", "CONFIRMATION_ESSAI_PLATEAU", "Annuler la tâche en cours", "dernierNettoyage.confirmation",
               "nom === \"annuler\" || nom === \"reprendre-quand-meme\"", "EXPLICATION_UN_CLIC", "Effacer de ce poste", "courante.tache")
     total = 0
     for fichier in sorted(ui.STATIQUE.glob("*.js")):
@@ -163,7 +163,7 @@ def test_une_seule_confirmation_de_prise_de_main_par_session_et_boites_natives_l
             total += 1
             contexte = source[max(0, rang - 160) : rang + 120]
             assert any(mot in contexte for mot in permis), (fichier.name, contexte)
-    assert total <= 8
+    assert total <= 9  # 9 depuis le 2026-10-13 : « Essayer un pas plateau levé » (SEC-01c) exige sa confirmation
 
 
 # --- tâches d'un clic ------------------------------------------------------------------------------------
