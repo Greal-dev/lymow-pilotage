@@ -144,6 +144,10 @@ class RobotFictif:
             self._regler_hauteur(champs)
         elif commande == 2:  # retour à la base ; le 33 (tâche conservée) reste sans effet : le robot fictif
             self.statut = 4  # n'a jamais de tâche — constat réel du 2026-10-13
+        elif commande == 21 and self.statut == 4:  # pause du retour à la base
+            self.statut = 10
+        elif commande == 22 and self.statut == 10:  # reprise du retour
+            self.statut = 4
         elif commande in (28, 32):
             self.statut = 1
         self._signal(champs)

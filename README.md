@@ -675,9 +675,10 @@ constat disait pourtant « émise, vérifiée ».
 - **non attesté** : la sortie de télécommande (32) émise d'abord quand le
   robot est en télécommande — règle de l'outil, déjà celle de
   « Reprendre » ; le socle ne l'émet pas avant un retour à la base ;
-- **non repris du socle** : il n'émet rien si le robot est déjà en charge,
-  et relance (22) un retour à la base en pause ; l'outil ne connaît pas
-  l'ordre 22.
+- **repris du socle** (`coordinator.py` lignes 1094-1107 et 1109-1112) :
+  robot en charge → rien n'est émis, l'outil dit « déjà sur la base » ;
+  retour à la base en pause → ordre 22 (reprise du retour), pour « Retour
+  base » comme pour « Reprendre » (plutôt que 4).
 
 Après pause, reprise, retour à la base ou annulation, l'outil guette 10 s
 le statut attendu (retour → « retour à la base » ; pause → « en pause » ;
