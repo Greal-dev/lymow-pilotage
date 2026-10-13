@@ -562,7 +562,7 @@ def test_reprendre_refuse_s_il_n_y_a_rien_a_reprendre(session, lien):
 def test_base_et_annuler(session, lien):
     lancer(mouvement.executer_tache(session, "base"))
     lancer(mouvement.executer_tache(session, "annuler"))
-    assert lien.ordres == [bytes.fromhex("10 31 28 21"), bytes.fromhex("10 31 28 1c")]
+    assert lien.ordres == [bytes.fromhex("10 31 28 02"), bytes.fromhex("10 31 28 1c")]  # sans tâche : ordre 2 (avenant 33)
 
 
 def test_plateau_haut_emet_la_hauteur_maximale(session, lien):

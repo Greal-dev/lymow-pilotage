@@ -157,6 +157,9 @@
     ["pause-bouton", "base-bouton", "annuler-bouton", "pave-plateau"].forEach(function (id) {
       griser(id, image.liaison_suspendue ? "La main est rendue à l'application Lymow." : occupe ? "Un ordre est en cours : attendez sa fin, ou STOP." : "");
     });
+    if (!$("base-bouton").disabled && image.ordres && image.ordres.retour_base) {
+      $("base-bouton").title = Ordres.bulleRetourBase(image.ordres.retour_base);
+    }
     dernierEtat = image.etat;
     if (recalageAvant && image.resultat && !occupe && JSON.stringify(image.resultat) !== recalageResultat) {
       $("pause-etat").textContent = Ordres.bilanDeRecalage(recalageAvant, image.etat);  // après l'aller-retour

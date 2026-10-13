@@ -28,6 +28,9 @@ from .vendor.ha_lymow import const as socle
 
 # Le robot ne parle spontanément que toutes les 60 s environ.
 ATTENTE_ETAT_S = 75.0
+# Ordres de tâche : statut vivant attendu après l'ordre, guetté 10 s au plus (constat réel du 2026-10-13 :
+# « base » émis trois fois sans effet, et pourtant « émise, vérifiée »).
+ATTENTE_TACHE_S = 10.0
 RELECTURES_SORTIE, PAUSE_RELECTURE_S = 3, 3.0  # après « redescendre » : statut relu, ~10 s au plus
 # Constat après un ordre : une trame d'état fraîche, pas davantage (voir `constater`).
 ATTENTE_CONSTAT_S = 12.0
@@ -59,6 +62,14 @@ TACHES = {
 }
 REPRISE_FORCEE = "reprendre-quand-meme"
 ETAPES_SEQUENCE = (*MOUVEMENTS, *PLATEAUX, "stop")
+_EN_ROUTE = (*sorted(socle.WORK_STATUS_MOWING_GROUP), socle.WORK_STATUS_DOCKING)
+STATUTS_ATTENDUS: dict[str, tuple[int, ...]] = {
+    "base": (socle.WORK_STATUS_DOCKING,),
+    "pause": (socle.WORK_STATUS_PAUSE, socle.WORK_STATUS_PAUSE_DOCKING),
+    "reprendre": _EN_ROUTE,
+    "reprendre-quand-meme": _EN_ROUTE,
+    "annuler": (socle.WORK_STATUS_WAITING,),
+}
 OPTIONS_MOUVEMENT = ("--vitesse", "--duree")
 _STATUTS_REPRISE = (socle.WORK_STATUS_PAUSE, socle.WORK_STATUS_REMOTE_CONTROL)
 # Chiffres ASCII seulement : `float` accepterait « 1_0 » ou des chiffres d'autres écritures.
@@ -690,6 +701,28 @@ def code_pause(statut: int | None) -> int:
     return socle.USER_CTRL_PAUSE_DOCK if statut == socle.WORK_STATUS_DOCKING else socle.USER_CTRL_PAUSE
 
 
+def code_base(tache: int | None, statut: int | None) -> int:
+    """Retour à la base : 33 (tâche conservée) s'il y a une tâche, 2 sinon — sans tâche, le robot ignore le 33.
+
+    Même règle que le socle (`async_dock` : « RECHARGE_DOCK (33) no-ops when idle with no active task ; DOCK (2)
+    sends it home »), lue ici sur le champ tâche, à défaut sur le statut vivant."""
+    reference = tache if tache is not None else statut
+    sans_tache = reference in (None, socle.WORK_STATUS_NONE, socle.WORK_STATUS_WAITING)
+    return protocole.USER_CTRL_DOCK if sans_tache else socle.USER_CTRL_RECHARGE_DOCK
+
+
+async def _attendre_statut(session: Session, attendus: tuple[int, ...], instant: float) -> bool:
+    """Guette le statut vivant attendu, `ATTENTE_TACHE_S` au plus après l'ordre."""
+    fin = instant + ATTENTE_TACHE_S
+    while session.etat.statut not in attendus and session.horloge() < fin and session.lien.connecte:
+        await session.dormir(1.0)
+        relance = session.horloge()
+        if await session.solliciter() is None:
+            break
+        await session.attendre("statut", relance, min(2.0, max(0.0, fin - session.horloge())))
+    return session.etat.statut in attendus
+
+
 async def _publier_pause(session: Session, trame: protocole.Trame) -> int:
     try:
         await session.publier(trame, securite.DELAI_ARRET_S)
@@ -933,6 +966,8 @@ async def executer_tache(session: Session, nom: str) -> dict[str, Any]:
                 "reprise-forcee", strict=True, precision_m=etat.precision_m,
                 localisation=securite.qualite_position(etat.precision_m),
             )
+        if nom == "base":
+            codes = [code_base(etat.tache, etat.statut)]
         if nom == "pause":
             codes = [code_pause(etat.statut)]  # 21 pendant un retour à la base, 3 sinon : comme `stop`
         elif etat.statut == socle.WORK_STATUS_REMOTE_CONTROL:
@@ -951,7 +986,21 @@ async def executer_tache(session: Session, nom: str) -> dict[str, Any]:
         rapport["avertissement"] = (
             f"position imprécise ({securite.texte_precision(etat.precision_m)}) : le trajet automatique peut être erratique"
         )
-    return rapport | await constater(session, avant, instant, None)
+    rapport |= await constater(session, avant, instant, None)
+    libelle = protocole.USER_CTRL_AUTORISES[codes[-1]]
+    rapport["libelle"] = libelle
+    if rapport["etat_rafraichi"]:  # jamais « vérifiée » sans changement constaté
+        atteint = await _attendre_statut(session, STATUTS_ATTENDUS[nom], instant)
+        statut = etat.resume(session.horloge())["statut_libelle"]
+        rapport["statut_apres"] = statut
+        if atteint:
+            rapport["constat"] = f"{libelle} : le robot annonce « {statut} »"
+        else:
+            rapport |= {
+                "verifie": False, "verification": ANOMALIE,
+                "constat": f"{libelle} : ordre émis, mais le robot n'a pas changé d'état : {statut}",
+            }
+    return rapport
 
 
 # --- SEC-04 : constat -------------------------------------------------------------
@@ -1139,6 +1188,8 @@ async def executer_sequence(session: Session, ordres: list[Ordre], objectif_sign
             }
         rapport["issue"] = f"émise, {rapport.get('verification', NON_VERIFIABLE)}"
         bilan["etapes"].append(rapport)
+        if ordre.nom in TACHES and len(ordres) == 1:
+            bilan["verdict"] = rapport["constat"]  # dit dans le fil : ce que le robot a fait de l'ordre
         if not ordres[rang + 1 :]:
             break
         if objectif_signal and securite.qualite_position(session.etat.precision_m) == securite.FIABLE:
