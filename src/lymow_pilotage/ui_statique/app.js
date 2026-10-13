@@ -609,6 +609,7 @@
 
   function fermerVideo() {
     if (video.minuterie) { window.clearTimeout(video.minuterie); }
+    if (video.renvoi) { window.clearInterval(video.renvoi); }
     if (video.ws) { video.ws.onclose = null; video.ws.onerror = null; video.ws.close(); }
     if (video.pc) { video.pc.onconnectionstatechange = null; video.pc.oniceconnectionstatechange = null; video.pc.close(); }
     video = { pc: null, ws: null };
@@ -667,7 +668,7 @@
     reglages = null; // secrets temporaires : rien n'est gardé au-delà de l'ouverture
     video = { pc: pc, ws: ws, minuterie: null };
     video.minuterie = window.setTimeout(function () {
-      if (video.pc === pc && pc.connectionState !== "connected") { echecVideo("délai dépassé (20 s) à l'étape : " + etape); }
+      if (video.pc === pc && pc.connectionState !== "connected") { echecVideo("délai dépassé (75 s) à l'étape : " + etape); }
     }, Ordres.DELAI_VIDEO_MS);
     etatVideo(etape + "…");
     pc.addTransceiver("video", { direction: "recvonly" });
@@ -710,7 +711,13 @@
       try {
         var offre = await pc.createOffer();
         await pc.setLocalDescription(offre);
-        ws.send(Signalisation.messageOffre(offre.sdp));
+        var trame = Signalisation.messageOffre(offre.sdp);
+        ws.send(trame);
+        // Le canal ne garde pas l'offre : la caméra du robot peut mettre 30 à 60 s à le rejoindre → on la renvoie.
+        video.renvoi = window.setInterval(function () {
+          if (video.ws !== ws || pc.remoteDescription || ws.readyState !== WebSocket.OPEN) { window.clearInterval(video.renvoi); return; }
+          ws.send(trame);
+        }, 4000);
         etape = "offre envoyée, attente de la réponse du robot";
         etapeVideo("offre-envoyee");
         etatVideo(etape + "…");

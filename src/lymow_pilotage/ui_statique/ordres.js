@@ -414,7 +414,7 @@
     pastilles: pastilles,
     essaiPlateauPossible: essaiPlateauPossible,
     CONFIRMATION_ESSAI_PLATEAU: CONFIRMATION_ESSAI_PLATEAU,
-    DELAI_VIDEO_MS: 20000,
+    DELAI_VIDEO_MS: 75000,
     bulleRetourBase: bulleRetourBase,
     texteDeLaMain: texteDeLaMain,
     annoncePrendreLaMain: annoncePrendreLaMain,
