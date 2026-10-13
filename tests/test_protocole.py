@@ -80,7 +80,7 @@ def test_encode_ordre_tache_codes_autorises(code, reference):
     assert p.encode_ordre_tache(code) == h(reference)
 
 
-@pytest.mark.parametrize("code", [1, 5, 22, 26, 37, 46, 47, 50, 0, -1, 99])  # 2 admis depuis le 2026-10-13 (retour base sans tâche)
+@pytest.mark.parametrize("code", [1, 5, 26, 37, 46, 47, 50, 0, -1, 99])  # 2 et 22 admis depuis le 2026-10-13 (retour base sans tâche)
 def test_encode_ordre_tache_refuse_tout_autre_code_dont_le_demarrage_de_tonte(code):
     # SEC-01
     with pytest.raises(RefusSecurite):

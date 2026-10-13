@@ -213,7 +213,8 @@
   /* Essais de plateau : proposés en mode réel seulement, hors de tout ordre en cours. */
   /* « Retour base » : l'info-bulle dit l'ordre que le clic émettra (avec ou sans tâche à conserver). */
   function bulleRetourBase(libelle) {
-    return "Émet, tout de suite : " + libelle + (/conservée/.test(libelle) ? "." : " (aucune tâche en cours).");
+    if (libelle === "déjà sur la base") { return "Le robot est déjà sur la base : rien ne sera émis."; }
+    return "Émet, tout de suite : " + libelle + (libelle === "retour à la base" ? " (aucune tâche en cours)." : ".");
   }
 
   function essaiPlateauPossible(c) {

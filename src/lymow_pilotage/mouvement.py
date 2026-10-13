@@ -71,7 +71,9 @@ STATUTS_ATTENDUS: dict[str, tuple[int, ...]] = {
     "annuler": (socle.WORK_STATUS_WAITING,),
 }
 OPTIONS_MOUVEMENT = ("--vitesse", "--duree")
-_STATUTS_REPRISE = (socle.WORK_STATUS_PAUSE, socle.WORK_STATUS_REMOTE_CONTROL)
+_STATUTS_REPRISE = (socle.WORK_STATUS_PAUSE, socle.WORK_STATUS_REMOTE_CONTROL, socle.WORK_STATUS_PAUSE_DOCKING)
+_EN_CHARGE = (socle.WORK_STATUS_CHARGING, socle.WORK_STATUS_CHARGING_FULL)
+DEJA_SUR_LA_BASE = "déjà sur la base"
 # Chiffres ASCII seulement : `float` accepterait « 1_0 » ou des chiffres d'autres écritures.
 _NOMBRE = re.compile(r"[+-]?[0-9]+(?:[.,][0-9]+)?")
 _ENTIER = re.compile(r"[0-9]{1,4}")
@@ -701,11 +703,16 @@ def code_pause(statut: int | None) -> int:
     return socle.USER_CTRL_PAUSE_DOCK if statut == socle.WORK_STATUS_DOCKING else socle.USER_CTRL_PAUSE
 
 
-def code_base(tache: int | None, statut: int | None) -> int:
-    """Retour à la base : 33 (tâche conservée) s'il y a une tâche, 2 sinon — sans tâche, le robot ignore le 33.
+def code_base(tache: int | None, statut: int | None) -> int | None:
+    """Retour à la base : rien si le robot est en charge ; 22 si le retour est en pause ; 33 (tâche conservée)
+    s'il y a une tâche, 2 sinon — sans tâche, le robot ignore le 33.
 
     Même règle que le socle (`async_dock` : « RECHARGE_DOCK (33) no-ops when idle with no active task ; DOCK (2)
     sends it home »), lue ici sur le champ tâche, à défaut sur le statut vivant."""
+    if statut in _EN_CHARGE:  # le socle n'émet rien : relancer un retour ferait quitter la base au robot
+        return None
+    if statut == socle.WORK_STATUS_PAUSE_DOCKING:
+        return protocole.USER_CTRL_RESUME_DOCK
     reference = tache if tache is not None else statut
     sans_tache = reference in (None, socle.WORK_STATUS_NONE, socle.WORK_STATUS_WAITING)
     return protocole.USER_CTRL_DOCK if sans_tache else socle.USER_CTRL_RECHARGE_DOCK
@@ -967,7 +974,17 @@ async def executer_tache(session: Session, nom: str) -> dict[str, Any]:
                 localisation=securite.qualite_position(etat.precision_m),
             )
         if nom == "base":
-            codes = [code_base(etat.tache, etat.statut)]
+            code = code_base(etat.tache, etat.statut)
+            if code is None:  # en charge : rien n'est émis, et c'est dit
+                statut = etat.resume(session.horloge())["statut_libelle"]
+                return {
+                    "mode": "réel", "ordre": nom, "codes_emis": [], "libelle": DEJA_SUR_LA_BASE, "etat_rafraichi": True,
+                    "statut_apres": statut, "verifie": True, "verification": VERIFIEE,
+                    "constat": f"{DEJA_SUR_LA_BASE} : le robot annonce « {statut} », rien n'est émis",
+                }
+            codes = [code]
+        elif nom in ("reprendre", REPRISE_FORCEE) and etat.statut == socle.WORK_STATUS_PAUSE_DOCKING:
+            codes = [protocole.USER_CTRL_RESUME_DOCK]  # comme le socle (async_resume) : 22 plutôt que 4
         if nom == "pause":
             codes = [code_pause(etat.statut)]  # 21 pendant un retour à la base, 3 sinon : comme `stop`
         elif etat.statut == socle.WORK_STATUS_REMOTE_CONTROL:
@@ -1187,6 +1204,8 @@ async def executer_sequence(session: Session, ordres: list[Ordre], objectif_sign
                 "reprise": None if non_confirme else _reprise(ordres, rang)["reprise"],
             }
         rapport["issue"] = f"émise, {rapport.get('verification', NON_VERIFIABLE)}"
+        if rapport.get("codes_emis") == []:
+            rapport["issue"] = "rien à émettre"
         bilan["etapes"].append(rapport)
         if ordre.nom in TACHES and len(ordres) == 1:
             bilan["verdict"] = rapport["constat"]  # dit dans le fil : ce que le robot a fait de l'ordre
