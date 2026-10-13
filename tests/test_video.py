@@ -129,11 +129,11 @@ def test_page_video_bouton_etapes_delai_et_reessayer():
     for attendu in (
         '$("video-demarrer").addEventListener("click", demarrerVideo);', '$("video-reessayer").addEventListener("click", demarrerVideo);',
         'etapeVideo("signalisation-ouverte")', 'etapeVideo("offre-envoyee")', 'etapeVideo("reponse-recue")', 'etapeVideo("connexion-etablie")',
-        '"signalisation fermée (code " + evenement.code', '"délai dépassé (20 s) à l\'étape : "', "Ordres.DELAI_VIDEO_MS",
+        '"signalisation fermée (code " + evenement.code', '"délai dépassé (75 s) à l\'étape : "', "Ordres.DELAI_VIDEO_MS",
         'pc.iceConnectionState === "failed"', 'pc.iceConnectionState === "disconnected"', '"securitypolicyviolation"',
     ):
         assert attendu in app, attendu
-    assert "DELAI_VIDEO_MS: 20000" in (ui.STATIQUE / "ordres.js").read_text(encoding="utf-8")
+    assert "DELAI_VIDEO_MS: 75000" in (ui.STATIQUE / "ordres.js").read_text(encoding="utf-8")
     assert set(ui.ETAPES_VIDEO) == {"signalisation-ouverte", "offre-envoyee", "reponse-recue", "connexion-etablie", "echec"}
 
 
