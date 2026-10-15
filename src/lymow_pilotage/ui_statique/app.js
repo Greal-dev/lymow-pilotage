@@ -767,13 +767,11 @@
       });
     });
   });
-  // Tâches : action immédiate, sans prévisualisation ni boîte de dialogue — sauf « annuler » et « reprendre quand
-  // même » (confirmation), et « reprendre », qui relance les lames : deux clics, le second dans les 5 s.
+  // Tâches : action immédiate, sans prévisualisation ni boîte de dialogue — sauf « annuler » (confirmation), et « reprendre », qui relance les lames : deux clics, le second dans les 5 s.
   var reprendreArme = 0;
   async function lancerTache(nom, bouton) {
-    if ((nom === "annuler" || nom === "reprendre-quand-meme") && !window.confirm(nom === "annuler"
-      ? "Annuler la tâche en cours ? Elle est ABANDONNÉE : le robot s'arrête sur place et se remet en attente."
-      : "Reprendre quand même ? La position du robot est imprécise : la tonte reprise ainsi peut être erratique.")) { return; }
+    if (nom === "annuler" && !window.confirm(
+      "Annuler la tâche en cours ? Elle est ABANDONNÉE : le robot s'arrête sur place et se remet en attente.")) { return; }
     if (nom === "reprendre" && !Ordres.secondClic(reprendreArme, Date.now())) {
       reprendreArme = Date.now();
       dire("Reprendre relance les lames : cliquez une seconde fois pour confirmer (5 s).", "alerte");
