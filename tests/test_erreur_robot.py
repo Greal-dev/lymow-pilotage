@@ -205,7 +205,7 @@ def test_page_prendre_la_main_en_erreur_n_emet_pas_de_pause_et_affiche_le_diagno
     assert ">Annuler la tâche et remettre le robot en attente<" in page and 'id="pave-avertissement"' in page
     app = (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
     clic = app[app.index('$("erreur-annuler").addEventListener') :][:600]
-    assert "window.confirm(" in clic and "ABANDONNÉE" in clic and '"/api/erreur/annuler", { confirmer: true }' in clic
+    assert "deuxClics(" in clic and "window.confirm(" not in clic and "ABANDONNÉE" in clic and '"/api/erreur/annuler", { confirmer: true }' in clic
 
 
 def test_route_prendre_la_main_en_erreur_aucune_pause_n_est_emise(tmp_path, monkeypatch, session_reelle, lien):

@@ -95,7 +95,7 @@ def test_une_seule_bascule_pour_les_fleches_et_plus_de_bouton_clavier_separe():
     assert "direct-interrupteur" not in PAGE + script and 'id="composer" type="checkbox"' in PAGE
     assert '<input id="composer" type="checkbox"> Composer une séquence</label>' in PAGE
     activer = script[script.index("async function activer()") : script.index("function afficherPastilles")]
-    assert "window.confirm(" in activer and "!dejaConfirme &&" in activer  # une confirmation par session de page
+    assert "window.confirm(" not in activer and "!dejaConfirme" in activer  # aucune boîte : l'annonce passe par le fil
     assert '"/api/direct/armer", { confirmer: true }' in activer and "regler(true)" in activer
     assert "if (!enDirect()) { regler(true);" in activer  # composition : aucune émission, donc aucun armement
     assert "Simulation : les flèches parcourent le même chemin, rien n'est émis" in activer
@@ -435,7 +435,7 @@ def test_page_trois_boutons_toujours_visibles_en_tete_dans_l_ordre():
     app = (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
     # « Flèches : activer » est le reflet de « Prendre la main » : le même geste, UNE confirmation.
     assert '$("prendre-main").addEventListener("click", prendreLaMain)' in pave
-    assert "if (actives) { desactiver(\"\"); } else { prendreLaMain(); }" in pave and pave.count("window.confirm(") == 1  # prendre la main, la première fois
+    assert "if (actives) { desactiver(\"\"); } else { prendreLaMain(); }" in pave and pave.count("window.confirm(") == 0  # plus aucune boîte, même la première fois
     stop = app[app.index("  async function stop() {") :][:700]
     assert "sequence = [];" in stop and "oublierPrevisualisation" in stop and "desactiverFleches(false)" in stop
     assert '"/api/liaison/rendre", { sans_attendre: true, choix: choix }' in app

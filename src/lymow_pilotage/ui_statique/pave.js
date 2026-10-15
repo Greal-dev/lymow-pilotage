@@ -170,11 +170,7 @@
     var courante = prise;
     if (suite === "confirmer") {
       // Une seule confirmation par session de page : réarmer après STOP = un clic, sans boîte de dialogue.
-      if (!dejaConfirme && !window.confirm(Ordres.annoncePrendreLaMain(contexte()))) {
-        prise = null;
-        signaler(courante.depuisSuspension ? "Liaison rétablie ; les flèches ne sont pas activées." : "");
-        return;
-      }
+      if (!dejaConfirme) { signaler(Ordres.annoncePrendreLaMain(contexte()).replace(/^Prendre la main \?\n\n/, "").replace(/\n/g, " ")); }
       dejaConfirme = true;
       courante.confirme = true;
       mainPrise = true;
