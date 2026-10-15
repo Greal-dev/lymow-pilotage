@@ -283,7 +283,7 @@ def test_page_du_pave_etat_complet_et_garde_fous_visibles(tmp_path, monkeypatch)
     assert page.count("data-fleche=") == 16  # deux pavés 3×3 : à gauche ET en surimpression de la caméra
     # Mode file : la flèche écrit dans LA séquence de la page ; aucune émission sans les deux temps.
     assert "page.ajouterEtape(etape)" in script and "/api/emettre" not in script and "/api/previsualiser" not in script
-    assert "window.confirm(" in script and '"/api/direct/armer", { confirmer: true }' in script
+    assert "window.confirm(" not in script and '"/api/direct/armer", { confirmer: true }' in script
     # Clavier : capté au niveau du document, en phase de capture ; la décision est dans fleches.js.
     assert "Fleches.interception({" in script and "repeat: evenement.repeat" in script
     assert 'document.addEventListener("keydown", function (evenement) {' in script and "}, true);" in script

@@ -129,8 +129,8 @@ def test_fil_d_activite_trois_lignes_la_plus_recente_en_haut_et_gravite():
     assert js("M.notesNouvelles(a[0], a[1])", notes, "21:40:01a") == notes[1:]
     assert js("M.notesNouvelles(a[0], a[1])", notes, "21:40:03c") == [] and js("M.notesNouvelles(a[0], a[1])", notes, "") == notes[-1:]
     tableau = (ui.STATIQUE / "tableau.js").read_text(encoding="utf-8")
-    assert 'document.querySelectorAll(".vers-fil").forEach' in tableau and "window.setTimeout(function () { toast.hidden = true; }, 4000);" in tableau
-    assert 'id="fil" class="fil"' in GAUCHE and 'id="toast" class="toast" role="status" hidden' in PAGE
+    assert 'document.querySelectorAll(".vers-fil").forEach' in tableau and "toast" not in tableau
+    assert 'id="fil" class="fil"' in GAUCHE
     assert "position: fixed" not in STYLE  # le rappel ne recouvre jamais STOP
 
 
@@ -146,24 +146,14 @@ def test_raccourcis_inactivite_et_reprendre_en_deux_clics():
     assert js("M.secondClic(0, 1000)") is False and js("M.secondClic(1000, 4000)") is True and js("M.secondClic(1000, 7000)") is False
 
 
-def test_une_seule_confirmation_de_prise_de_main_par_session_et_boites_natives_limitees():
+def test_prise_de_main_sans_boite_et_aucune_boite_native_dans_l_interface():
     pave = (ui.STATIQUE / "pave.js").read_text(encoding="utf-8")
     assert "var dejaConfirme = false;" in pave and pave.count("dejaConfirme = true;") == 1
-    assert "if (!dejaConfirme && !window.confirm(Ordres.annoncePrendreLaMain(contexte()))) {" in pave
-    assert pave.count("dejaConfirme = false") == 1  # jamais remis à zéro : STOP puis réarmement = un clic, sans boîte
-    # Boîtes natives : seulement prise de main (1re fois), annuler la tâche, attestation, essais, reprendre quand même —
-    # et, hors tableau de bord, le compte (effacement, connexion en un clic) et l'écriture de carte.
-    permis = ("annoncePrendreLaMain", "CONFIRMATION_ATTESTATION", "CONFIRMATION_ESSAI_PLATEAU", "Annuler la tâche en cours", "dernierNettoyage.confirmation",
-              "nom === \"annuler\" || nom === \"reprendre-quand-meme\"", "EXPLICATION_UN_CLIC", "Effacer de ce poste", "courante.tache")
-    total = 0
+    assert "if (!dejaConfirme) { signaler(Ordres.annoncePrendreLaMain(contexte())" in pave
     for fichier in sorted(ui.STATIQUE.glob("*.js")):
         source = fichier.read_text(encoding="utf-8")
+        assert "window.confirm(" not in source, fichier.name
         assert "alert(" not in source.replace("role=\"alert\"", ""), fichier.name
-        for rang in [m.start() for m in re.finditer(r"window\.confirm\(", source)]:
-            total += 1
-            contexte = source[max(0, rang - 160) : rang + 120]
-            assert any(mot in contexte for mot in permis), (fichier.name, contexte)
-    assert total <= 9  # 9 depuis le 2026-10-13 : « Essayer un pas plateau levé » (SEC-01c) exige sa confirmation
 
 
 # --- tâches d'un clic ------------------------------------------------------------------------------------

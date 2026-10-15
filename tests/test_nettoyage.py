@@ -291,7 +291,7 @@ def test_page_le_bloc_pilotage_porte_redescendre_et_l_essai_de_pas_avec_sa_confi
     assert ">Essayer un pas plateau levé</button>" in bloc
     app = (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
     clic = app[app.index('$("nettoyage-essai").addEventListener("click"') :][:400]
-    assert "window.confirm(dernierNettoyage.confirmation)" in clic and '"/api/plateau/pas-leve", { confirmer: true }' in clic
+    assert 'deuxClics("nettoyage"' in clic and "window.confirm(" not in clic and '"/api/plateau/pas-leve", { confirmer: true }' in clic
     assert nettoyage.CONFIRMATION_ESSAI == (
         "Le robot se déclare en arrêt d'urgence parce que le plateau est en position de nettoyage. "
         "Personne ne doit se trouver près du robot. Il ignorera peut-être l'ordre."

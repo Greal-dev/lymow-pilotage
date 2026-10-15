@@ -96,7 +96,7 @@ def test_page_essais_ranges_dans_calibration_avec_leur_confirmation_et_hors_des_
     assert "jamais essayée par le nuage sur ce robot" in calibration
     app = (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
     clic = app[app.index('document.querySelectorAll("[data-plateau-essai]").forEach(function (bouton) {\n    bouton.addEventListener') :][:600]
-    assert "window.confirm(" in clic and "Ordres.CONFIRMATION_ESSAI_PLATEAU" in clic
+    assert "deuxClics(" in clic and "window.confirm(" not in clic
     assert f'"{CONFIRMATION}"' in (ui.STATIQUE / "ordres.js").read_text(encoding="utf-8")
     # Ni la grammaire des ordres, ni les séquences, ni les flèches ne connaissent ces essais.
     from lymow_pilotage import mouvement

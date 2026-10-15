@@ -273,8 +273,23 @@
     if (bandeau !== "") { $("attestation-erreur").textContent = ""; }
   }
 
+  // Plus aucune boîte de dialogue : un geste lourd se confirme par un second clic dans les 5 s (message dans le fil).
+  var armes = {};
+  function deuxClics(cle, invite) {
+    var maintenant = Date.now();
+    if (Ordres.secondClic(armes[cle] || 0, maintenant)) { armes[cle] = 0; return true; }
+    armes[cle] = maintenant;
+    dire(invite + " — cliquez une seconde fois pour confirmer (5 s).", "alerte");
+    var bouton = document.activeElement;
+    if (bouton && bouton.classList) {
+      bouton.classList.add("a-confirmer");
+      window.setTimeout(function () { bouton.classList.remove("a-confirmer"); }, 5000);
+    }
+    return false;
+  }
+
   async function poserAttestation() {
-    if (!window.confirm(CONFIRMATION_ATTESTATION)) { return; }
+    if (!deuxClics("attestation", CONFIRMATION_ATTESTATION.split("\n")[0])) { return; }
     try {
       await appeler("/api/attestation/poser", { confirmer: true });
       $("attestation-erreur").textContent = "";
@@ -406,7 +421,7 @@
     + "ou la commande « lymow rappel-desinstaller ».";
 
   async function reglerUnClic(activer) {
-    if (activer && !window.confirm(EXPLICATION_UN_CLIC)) { return; }
+    if (activer && !deuxClics("un-clic", "Activer la connexion en un clic")) { return; }
     try {
       var reponse = await appeler("/api/compte/un-clic", { activer: activer });
       messageCompte(reponse.message);
@@ -416,7 +431,7 @@
   }
 
   async function deconnecter() {
-    if (!window.confirm("Effacer de ce poste l'accès au compte ? Il faudra se reconnecter avec Google.")) { return; }
+    if (!deuxClics("deconnecter", "Effacer l'accès au compte de ce poste")) { return; }
     try {
       await appeler("/api/compte/deconnecter");
       messageCompte("Compte effacé de ce poste.");
@@ -535,7 +550,7 @@
   async function emettre() {
     if (!previsualisation) { return; }
     var courante = previsualisation;
-    if (courante.tache && !window.confirm("Émettre « " + courante.texte + " » vers le robot ?")) { return; }
+    if (courante.tache && !deuxClics("emettre", "Émettre « " + courante.texte + " » vers le robot")) { return; }
     oublierPrevisualisation("Émission demandée…");
     try {
       await appeler("/api/emettre", { identifiant: courante.identifiant });
@@ -770,8 +785,7 @@
   // Tâches : action immédiate, sans prévisualisation ni boîte de dialogue — sauf « annuler » (confirmation), et « reprendre », qui relance les lames : deux clics, le second dans les 5 s.
   var reprendreArme = 0;
   async function lancerTache(nom, bouton) {
-    if (nom === "annuler" && !window.confirm(
-      "Annuler la tâche en cours ? Elle est ABANDONNÉE : le robot s'arrête sur place et se remet en attente.")) { return; }
+    if (nom === "annuler" && !deuxClics("annuler", "Annuler la tâche (ABANDONNÉE : le robot s'arrête sur place)")) { return; }
     if (nom === "reprendre" && !Ordres.secondClic(reprendreArme, Date.now())) {
       reprendreArme = Date.now();
       dire("Reprendre relance les lames : cliquez une seconde fois pour confirmer (5 s).", "alerte");
@@ -817,7 +831,7 @@
   });
   document.querySelectorAll("[data-plateau-essai]").forEach(function (bouton) {
     bouton.addEventListener("click", async function () {
-      if (!window.confirm(bouton.textContent + "\n\n" + Ordres.CONFIRMATION_ESSAI_PLATEAU)) { return; }
+      if (!deuxClics("plateau-" + bouton.dataset.plateauEssai, "Essai plateau : " + bouton.textContent)) { return; }
       try {
         await appeler("/api/plateau/essai", { ordre: bouton.dataset.plateauEssai, confirmer: true });
         $("plateau-essai-etat").textContent = "Ordre émis : le résultat s'affiche dans « Résultat ». Regardez le plateau.";
@@ -827,7 +841,7 @@
     });
   });
   $("nettoyage-essai").addEventListener("click", async function () {
-    if (!window.confirm(dernierNettoyage.confirmation)) { return; }
+    if (!deuxClics("nettoyage", "Essai de levée de nettoyage")) { return; }
     try {
       await appeler("/api/plateau/pas-leve", { confirmer: true });
       $("nettoyage-etat").textContent = "Essai autorisé 2 minutes : un pas à la fois, avec les flèches.";
@@ -843,8 +857,7 @@
     }
   });
   $("erreur-annuler").addEventListener("click", async function () {
-    if (!window.confirm("Annuler la tâche en cours ?\n\nLa tâche est ABANDONNÉE : le robot s'arrête sur place et se remet en "
-      + "attente. Effet sur une erreur de pare-chocs : inconnu — si l'erreur persiste, il faudra intervenir sur place.")) { return; }
+    if (!deuxClics("erreur-annuler", "Annuler la tâche (ABANDONNÉE ; effet sur une erreur de pare-chocs inconnu)")) { return; }
     try {
       await appeler("/api/erreur/annuler", { confirmer: true });
     } catch (erreur) {

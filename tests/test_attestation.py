@@ -488,7 +488,7 @@ def test_page_porte_le_message_le_bouton_la_confirmation_et_le_bandeau_d_attesta
     assert "position: fixed" not in (ui.STATIQUE / "style.css").read_text(encoding="utf-8")
     assert 'id="bandeau-attestation"' in page and ">Retirer</button>" in page
     assert "Vous attestez que les lames sont à l'arrêt. L'outil ne peut pas le vérifier." in script
-    assert "window.confirm(CONFIRMATION_ATTESTATION)" in script
+    assert 'deuxClics("attestation"' in script and "window.confirm(" not in script
     assert ui.ROUTE_ATTESTATION_POSER in script and ui.ROUTE_ATTESTATION_RETIRER in script
     assert "Le robot se déclare : " in logique
     assert "Pilotage autorisé sur attestation de l'opérateur — expire dans " in logique

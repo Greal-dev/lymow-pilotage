@@ -14,7 +14,6 @@
   var annulationVue = false;
   var derniereActivite = 0;
   var arme = false;
-  var minuterieToast = null;
 
   function $(id) { return document.getElementById(id); }
 
@@ -35,15 +34,6 @@
     if (nouvelle === lignes) { return; }
     lignes = nouvelle;
     afficherFil();
-    // « Position imprécise » : connu de l'opérateur (demande explicite), reste dans le fil, jamais en rappel flottant.
-    if (lignes[0].gravite !== "info" && !/position imprécise/i.test(lignes[0].texte)) {  // avertissement non bloquant : un rappel discret de 4 s, jamais une boîte
-      var toast = $("toast");
-      toast.textContent = lignes[0].texte;
-      toast.className = "toast " + lignes[0].gravite;
-      toast.hidden = false;
-      window.clearTimeout(minuterieToast);
-      minuterieToast = window.setTimeout(function () { toast.hidden = true; }, 4000);
-    }
   }
 
   // Les messages que les autres fichiers écrivent dans leurs zones (masquées) passent tous par le fil.

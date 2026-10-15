@@ -282,7 +282,7 @@ def test_page_explique_le_registre_et_garde_le_repli_manuel():
     script = (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
     assert "Activer la connexion en un clic" in page and "Windows va demander d'ouvrir Lymow : acceptez" in page
     assert "Repli manuel" in page and 'id="compte-adresse"' in page
-    assert r"HKCU\\Software\\Classes\\myapp" in script and "lymow rappel-desinstaller" in script and "window.confirm(EXPLICATION_UN_CLIC)" in script
+    assert r"HKCU\\Software\\Classes\\myapp" in script and "lymow rappel-desinstaller" in script and 'deuxClics("un-clic"' in script
     assert AVANCER_1 and HttpOAuth and asyncio and lire  # outils partagés avec test_ui
 
 
