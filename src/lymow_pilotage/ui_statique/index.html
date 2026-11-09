@@ -9,44 +9,54 @@
 </head>
 <body>
   <div class="haut">
-  <div id="bandeau-reel" class="bandeau-reel" hidden>MODE RÉEL — chaque ordre émis fait bouger le robot. Ne fermez pas la fenêtre du terminal pendant un mouvement.</div>
-  <div id="bandeau-demo" class="bandeau-demo" hidden>DÉMONSTRATION — robot fictif : rien ne part vers un vrai robot</div>
-  <div id="bandeau-direct" class="bandeau-direct" role="alert" hidden>PILOTAGE DIRECT ARMÉ — chaque flèche émet immédiatement, sans prévisualisation. STOP : Échap ou Espace.</div>
-  <div id="bandeau-arret" class="bandeau-reel" hidden>Interface arrêtée — relancez le raccourci.</div>
+  <div data-i18n="bandeau.reel" id="bandeau-reel" class="bandeau-reel" hidden>MODE RÉEL — chaque ordre émis fait bouger le robot. Ne fermez pas la fenêtre du terminal pendant un mouvement.</div>
+  <div data-i18n="bandeau.demo" id="bandeau-demo" class="bandeau-demo" hidden>DÉMONSTRATION — robot fictif : rien ne part vers un vrai robot</div>
+  <div data-i18n="bandeau.direct" id="bandeau-direct" class="bandeau-direct" role="alert" hidden>PILOTAGE DIRECT ARMÉ — chaque flèche émet immédiatement, sans prévisualisation. STOP : Échap ou Espace.</div>
+  <div data-i18n="bandeau.arret" id="bandeau-arret" class="bandeau-reel" hidden>Interface arrêtée — relancez le raccourci.</div>
   <div id="bandeau-attestation" class="bandeau-attestation" role="alert" hidden>
     <span id="bandeau-attestation-texte"></span>
-    <button id="attestation-retirer" type="button">Retirer</button>
+    <button data-i18n="attestation.retirer" id="attestation-retirer" type="button">Retirer</button>
   </div>
   <header class="entete">
-    <h1>Lymow <small id="appareil"></small></h1>
-    <p><span id="mode" class="pastille">…</span> <strong id="etat-resume"></strong> <span id="liaison"></span>
-      <small id="version-serveur" class="version"></small></p>
+    <div class="marque">
+      <h1>Lymow <small id="appareil"></small></h1>
+      <p class="resume"><span id="mode" class="pastille">…</span> <strong id="etat-resume"></strong> <span id="liaison" class="avance"></span>
+        <small id="version-serveur" class="version avance"></small></p>
+    </div>
+    <div class="reglages-entete">
+      <select id="langue" aria-label="Langue" data-i18n-aria="entete.langue">
+        <option value="fr">Français</option><option value="en">English</option><option value="de">Deutsch</option><option value="es">Español</option>
+      </select>
+      <label data-i18n-title="entete.avance.titre" class="interrupteur" title="Affiche les réglages et les outils de diagnostic. Mémorisé sur ce poste."><input id="mode-avance" type="checkbox" role="switch"> <span data-i18n="entete.avance">Mode avancé</span></label>
+      <span id="compte-identite" class="compte-identite"></span>
+      <button id="compte-entete" type="button" class="compte-entete">…</button>
+    </div>
     <div class="main-boutons">
       <span id="etat-main" class="etat-main" role="status"></span>
-      <button id="prendre-main" type="button" class="prendre" title="Un seul geste : rétablit la liaison si elle est suspendue, met le robot en pause s'il tond ou rentre à sa base, puis active les flèches.">Prendre la main</button>
-      <button id="rendre-main" type="button" class="rendre" title="Désactive les flèches, propose de laisser le robot en pause ou de reprendre la tâche, puis suspend la liaison pour laisser l'application Lymow se connecter.">Rendre la main</button>
-      <button id="stop" type="button" class="stop" title="Annule tout — mouvement, file d'attente, séquence, prévisualisation — puis arrête le robot et met la tâche en pause.">STOP <small>Échap ou Espace</small></button>
+      <button data-i18n="main.prendre" data-i18n-title="main.prendre.titre" id="prendre-main" type="button" class="prendre" title="Un seul geste : rétablit la liaison si elle est suspendue, met le robot en pause s'il tond ou rentre à sa base, puis active les flèches.">Prendre la main</button>
+      <button data-i18n="main.rendre" data-i18n-title="main.rendre.titre" id="rendre-main" type="button" class="rendre" title="Désactive les flèches, propose de laisser le robot en pause ou de reprendre la tâche, puis suspend la liaison pour laisser l'application Lymow se connecter.">Rendre la main</button>
+      <button data-i18n-title="stop.titre" id="stop" type="button" class="stop" title="Annule tout — mouvement, file d'attente, séquence, prévisualisation — puis arrête le robot et met la tâche en pause.">STOP <small data-i18n="stop.touches">Échap ou Espace</small></button>
     </div>
   </header>
   <div id="toast" class="toast" role="status" hidden></div>
   </div>
 
   <div id="rendre-choix" class="rendre-choix" role="alertdialog" aria-labelledby="rendre-titre" hidden>
-    <p id="rendre-titre"><strong>Rendre la main à l'application Lymow</strong></p>
+    <p id="rendre-titre"><strong data-i18n="rendre.titre">Rendre la main à l'application Lymow</strong></p>
     <p id="rendre-message" class="note"></p>
     <p class="actions">
-      <button id="rendre-pause" type="button">Laisser le robot en pause</button>
-      <button id="rendre-reprendre" type="button">Reprendre la tâche</button>
-      <button id="rendre-annuler" type="button">Annuler</button>
+      <button data-i18n="rendre.pause" id="rendre-pause" type="button">Laisser le robot en pause</button>
+      <button data-i18n="rendre.reprendre" id="rendre-reprendre" type="button">Reprendre la tâche</button>
+      <button data-i18n="commun.annuler" id="rendre-annuler" type="button">Annuler</button>
     </p>
   </div>
 
   <main>
     <section id="bloc-pilotage" class="large-bloc" aria-labelledby="titre-pilotage">
-      <h2 id="titre-pilotage" class="masque">Pilotage</h2>
+      <h2 data-i18n="pilotage.titre" id="titre-pilotage" class="masque">Pilotage</h2>
       <div class="deux-colonnes">
         <div id="bloc-fleches" class="colonne-commandes">
-          <div id="pastilles" class="pastilles-etat" role="status" aria-label="État du robot"></div>
+          <div data-i18n-aria="pilotage.etat" id="pastilles" class="pastilles-etat" role="status" aria-label="État du robot"></div>
           <p class="etat-robot vers-pastilles">
             <span id="ordres-etat" class="etat-ordres"></span>
             <strong id="localisation" class="localisation"></strong>
@@ -54,54 +64,54 @@
           <div id="erreur-robot" class="erreur-robot" role="alert" hidden>
             <p id="erreur-libelle"></p>
             <p id="erreur-phrase"></p>
-            <button id="erreur-annuler" type="button" title="Émet le seul ordre « annuler la tâche » : le robot s'arrête sur place et se remet en attente. La tâche en cours est abandonnée.">Annuler la tâche et remettre le robot en attente</button>
+            <button data-i18n="erreur.annuler" data-i18n-title="erreur.annuler.titre" id="erreur-annuler" type="button" title="Émet le seul ordre « annuler la tâche » : le robot s'arrête sur place et se remet en attente. La tâche en cours est abandonnée.">Annuler la tâche et remettre le robot en attente</button>
             <p id="erreur-suite" role="status"></p>
           </div>
           <p id="localisation-detail" class="vers-pastilles"></p>
-          <p class="options">
-            <label title="Décoché par défaut. Coché : l'outil demande au robot, toutes les 5 s, le détail de sa localisation (âge des corrections, état de la base). Jamais pendant un mouvement, jamais main rendue."><input id="diagnostic-rtk" type="checkbox"> Diagnostic de localisation</label>
+          <p class="options avance">
+            <label data-i18n="options.diagnostic" data-i18n-title="options.diagnostic.titre" title="Décoché par défaut. Coché : l'outil demande au robot, toutes les 5 s, le détail de sa localisation (âge des corrections, état de la base). Jamais pendant un mouvement, jamais main rendue."><input id="diagnostic-rtk" type="checkbox"> Diagnostic de localisation</label>
             <strong id="diagnostic-texte" class="vers-fil" role="status"></strong>
           </p>
           <p class="ligne-bascule">
-            <button id="fleches-bascule" type="button" class="bascule" aria-pressed="false" title="Active les flèches du clavier, de ce pavé et de la caméra. Chaque flèche fait bouger le robot tout de suite ; case « Séquence » cochée, elles composent une séquence à prévisualiser. Désactivées d'elles-mêmes après 5 minutes sans action.">Flèches : activer</button>
-            <label class="case" title="Cochée : les flèches ajoutent des étapes à une séquence, qui ne part qu'avec « Prévisualiser » puis « Émettre »."><input id="composer" type="checkbox"> Composer une séquence</label>
+            <button data-i18n-title="fleches.bascule.titre" id="fleches-bascule" type="button" class="bascule" aria-pressed="false" title="Active les flèches du clavier, de ce pavé et de la caméra. Chaque flèche fait bouger le robot tout de suite ; case « Séquence » cochée, elles composent une séquence à prévisualiser. Désactivées d'elles-mêmes après 5 minutes sans action.">Flèches : activer</button>
+            <label data-i18n="options.composer" data-i18n-title="options.composer.titre" class="case avance" title="Cochée : les flèches ajoutent des étapes à une séquence, qui ne part qu'avec « Prévisualiser » puis « Émettre »."><input id="composer" type="checkbox"> Composer une séquence</label>
           </p>
           <p id="pave-focus" class="vers-pastilles"></p>
           <div class="pilotage">
-            <div class="croix" role="group" aria-label="Flèches : avancer, reculer, tourner, et les quatre diagonales ; STOP au centre">
-              <button type="button" class="fleche haut-gauche" data-fleche="haut-gauche" aria-label="Avancer en virant à gauche" title="Avancer en virant à gauche : distance et angle choisis, d'une seule consigne (pavé numérique 7, ou ↑ et ← ensemble)" disabled>↖</button>
-              <button type="button" class="fleche haut" data-fleche="haut" aria-label="Avancer" title="Avancer (flèche haut)" disabled>↑</button>
-              <button type="button" class="fleche haut-droite" data-fleche="haut-droite" aria-label="Avancer en virant à droite" title="Avancer en virant à droite : distance et angle choisis, d'une seule consigne (pavé numérique 9, ou ↑ et → ensemble)" disabled>↗</button>
-              <button type="button" class="fleche gauche" data-fleche="gauche" aria-label="Tourner à gauche" title="Tourner à gauche (flèche gauche)" disabled>←</button>
-              <button id="stop-centre" type="button" class="stop-centre" title="STOP : annule tout, arrête le robot (Échap ou Espace)">STOP</button>
-              <button type="button" class="fleche droite" data-fleche="droite" aria-label="Tourner à droite" title="Tourner à droite (flèche droite)" disabled>→</button>
-              <button type="button" class="fleche bas-gauche" data-fleche="bas-gauche" aria-label="Reculer, l'arrière partant à gauche" title="Reculer, l'arrière partant à gauche : distance et angle choisis, d'une seule consigne (pavé numérique 1, ou ↓ et ← ensemble)" disabled>↙</button>
-              <button type="button" class="fleche bas" data-fleche="bas" aria-label="Reculer" title="Reculer (flèche bas)" disabled>↓</button>
-              <button type="button" class="fleche bas-droite" data-fleche="bas-droite" aria-label="Reculer, l'arrière partant à droite" title="Reculer, l'arrière partant à droite : distance et angle choisis, d'une seule consigne (pavé numérique 3, ou ↓ et → ensemble)" disabled>↘</button>
+            <div class="croix" role="group" aria-label="Flèches : avancer, reculer, tourner, et les quatre diagonales ; STOP au centre" data-i18n-aria="croix.groupe">
+              <button data-i18n-aria="fleche.hg" data-i18n-title="fleche.hg.titre" type="button" class="fleche haut-gauche" data-fleche="haut-gauche" aria-label="Avancer en virant à gauche" title="Avancer en virant à gauche : distance et angle choisis, d'une seule consigne (pavé numérique 7, ou ↑ et ← ensemble)" disabled>↖</button>
+              <button data-i18n-aria="fleche.h" data-i18n-title="fleche.h.titre" type="button" class="fleche haut" data-fleche="haut" aria-label="Avancer" title="Avancer (flèche haut)" disabled>↑</button>
+              <button data-i18n-aria="fleche.hd" data-i18n-title="fleche.hd.titre" type="button" class="fleche haut-droite" data-fleche="haut-droite" aria-label="Avancer en virant à droite" title="Avancer en virant à droite : distance et angle choisis, d'une seule consigne (pavé numérique 9, ou ↑ et → ensemble)" disabled>↗</button>
+              <button data-i18n-aria="fleche.g" data-i18n-title="fleche.g.titre" type="button" class="fleche gauche" data-fleche="gauche" aria-label="Tourner à gauche" title="Tourner à gauche (flèche gauche)" disabled>←</button>
+              <button data-i18n-title="stop.centre.titre" id="stop-centre" type="button" class="stop-centre" title="STOP : annule tout, arrête le robot (Échap ou Espace)">STOP</button>
+              <button data-i18n-aria="fleche.d" data-i18n-title="fleche.d.titre" type="button" class="fleche droite" data-fleche="droite" aria-label="Tourner à droite" title="Tourner à droite (flèche droite)" disabled>→</button>
+              <button data-i18n-aria="fleche.bg" data-i18n-title="fleche.bg.titre" type="button" class="fleche bas-gauche" data-fleche="bas-gauche" aria-label="Reculer, l'arrière partant à gauche" title="Reculer, l'arrière partant à gauche : distance et angle choisis, d'une seule consigne (pavé numérique 1, ou ↓ et ← ensemble)" disabled>↙</button>
+              <button data-i18n-aria="fleche.b" data-i18n-title="fleche.b.titre" type="button" class="fleche bas" data-fleche="bas" aria-label="Reculer" title="Reculer (flèche bas)" disabled>↓</button>
+              <button data-i18n-aria="fleche.bd" data-i18n-title="fleche.bd.titre" type="button" class="fleche bas-droite" data-fleche="bas-droite" aria-label="Reculer, l'arrière partant à droite" title="Reculer, l'arrière partant à droite : distance et angle choisis, d'une seule consigne (pavé numérique 3, ou ↓ et → ensemble)" disabled>↘</button>
             </div>
             <div class="reglages">
               <p class="pas">
-                <span class="segment-titre" title="Pas des flèches ↑ et ↓, en mètres. Clavier : touches 1 à 4.">↑↓ m</span>
-                <span id="segments-distance" class="segments" role="group" aria-label="Pas des flèches haut et bas"></span>
-                <select id="pave-distance" class="masque" aria-label="Pas des flèches haut et bas"></select>
+                <span data-i18n-title="pas.distance.titre" class="segment-titre" title="Pas des flèches ↑ et ↓, en mètres. Clavier : touches 1 à 4.">↑↓ m</span>
+                <span data-i18n-aria="pas.distance" id="segments-distance" class="segments" role="group" aria-label="Pas des flèches haut et bas"></span>
+                <select id="pave-distance" class="masque" aria-label="Pas des flèches haut et bas" data-i18n-aria="pas.distance"></select>
               </p>
               <p class="pas">
-                <span class="segment-titre" title="Pas des flèches ← et →.">←→</span>
-                <span id="segments-angle" class="segments" role="group" aria-label="Pas des flèches gauche et droite"></span>
-                <select id="pave-angle" class="masque" aria-label="Pas des flèches gauche et droite"></select>
+                <span data-i18n-title="pas.angle.titre" class="segment-titre" title="Pas des flèches ← et →.">←→</span>
+                <span data-i18n-aria="pas.angle" id="segments-angle" class="segments" role="group" aria-label="Pas des flèches gauche et droite"></span>
+                <select id="pave-angle" class="masque" aria-label="Pas des flèches gauche et droite" data-i18n-aria="pas.angle"></select>
               </p>
               <p class="pas">
-                <span class="segment-titre" title="Allure des flèches ↑ et ↓. Auto : lente près d'un bord de zone quand la position est fiable, normale sinon. Lente : 0,10 m/s. Normale : 0,25 m/s.">Allure</span>
-                <span id="segments-allure" class="segments" role="group" aria-label="Allure"></span>
-                <select id="pave-allure" class="masque" aria-label="Allure">
-                  <option value="auto" selected>auto</option><option value="lente">lente</option><option value="normale">normale</option>
+                <span data-i18n="pas.allure" data-i18n-title="pas.allure.titre" class="segment-titre" title="Allure des flèches ↑ et ↓. Auto : lente près d'un bord de zone quand la position est fiable, normale sinon. Lente : 0,10 m/s. Normale : 0,25 m/s.">Allure</span>
+                <span data-i18n-aria="pas.allure" id="segments-allure" class="segments" role="group" aria-label="Allure"></span>
+                <select id="pave-allure" class="masque" aria-label="Allure" data-i18n-aria="pas.allure">
+                  <option data-i18n="allure.auto" value="auto" selected>auto</option><option data-i18n="allure.lente" value="lente">lente</option><option data-i18n="allure.normale" value="normale">normale</option>
                 </select>
               </p>
-              <p class="options">
-                <label title="Décoché par défaut : la carte avertit seulement, le pas part en entier. Coché : un pas qui sortirait de la zone d'après la carte est raccourci ou refusé. Mémorisé sur ce poste."><input id="garde-carte" type="checkbox"> Arrêter aux bords de zone (d'après la carte)</label>
-                <label id="pave-forcer-libelle" hidden title="Lève le garde-fou carte pour le PROCHAIN pas seulement : la carte peut être fausse, et il faut pouvoir sortir d'une zone. Journalisé."><input id="pave-forcer" type="checkbox"> Forcer ce pas</label>
+              <p class="options avance">
+                <label data-i18n="options.garde" data-i18n-title="options.garde.titre" title="Décoché par défaut : la carte avertit seulement, le pas part en entier. Coché : un pas qui sortirait de la zone d'après la carte est raccourci ou refusé. Mémorisé sur ce poste."><input id="garde-carte" type="checkbox"> Arrêter aux bords de zone (d'après la carte)</label>
+                <label id="pave-forcer-libelle" hidden title="Lève le garde-fou carte pour le PROCHAIN pas seulement : la carte peut être fausse, et il faut pouvoir sortir d'une zone. Journalisé." data-i18n="options.forcer" data-i18n-title="options.forcer.titre"><input id="pave-forcer" type="checkbox"> Forcer ce pas</label>
               </p>
-              <ol id="file-pastilles" class="pastilles file" aria-label="Pas en attente"></ol>
+              <ol data-i18n-aria="file.attente" id="file-pastilles" class="pastilles file" aria-label="Pas en attente"></ol>
             </div>
           </div>
           <p id="bord-zone" class="vers-pastilles"></p>
@@ -109,53 +119,53 @@
           <p id="pave-avertissement" class="vers-fil avertissement"></p>
           <p class="vers-pastilles"><meter id="plateau-jauge" min="20" max="100" value="20" hidden></meter> <span id="plateau-etat"></span></p>
           <p class="actions-robot">
-            <button id="pause-bouton" type="button" data-tache="pause" title="Met la tâche (ou le retour à la base) en pause, tout de suite."><span class="icone" aria-hidden="true">⏸</span> Pause</button>
-            <button id="reprendre-bouton" type="button" data-tache="reprendre" title="Reprend la tâche en pause : les lames peuvent redémarrer. Deux clics (le second confirme)."><span class="icone" aria-hidden="true">▶</span> Reprendre</button>
-            <button id="base-bouton" type="button" data-tache="base" title="Retour à la base, tâche conservée, tout de suite."><span class="icone" aria-hidden="true">⌂</span> Retour base</button>
-            <button id="annuler-bouton" type="button" data-tache="annuler" title="Annule la tâche : le robot s'arrête sur place et se remet en attente. Sur confirmation."><span class="icone" aria-hidden="true">✕</span> Annuler tâche</button>
-            <button id="pave-plateau" type="button" title="Plateau de coupe au plus haut, tout de suite (en composition : ajouté à la séquence)."><span class="icone" aria-hidden="true">⤒</span> Plateau haut</button>
-            <button id="phares-bouton" type="button" title="Phares (éclairage de la caméra) : un clic. Allumage jamais essayé par le cloud sur ce robot ; extinction par un signal connu. Le robot éteint ses phares sur sa base, et une plage horaire automatique (réglée dans l'application) peut les rallumer ou les éteindre. Le fil d'activité dit si le robot a obéi."><span class="icone" aria-hidden="true">☀</span> <span id="phares-libelle">Phares : allumer</span></button>
-            <button id="recalage" type="button" title="Charge dans la séquence un aller-retour en ligne droite (deux pas en avant, deux en arrière, au pas choisi). À n'exécuter qu'en zone dégagée. Effet non garanti : jamais essayé sur ce robot."><span class="icone" aria-hidden="true">⟲</span> Recalage assisté</button>
-            <button id="bon-signal-bouton" type="button" title="Ouvre la carte et cherche l'endroit de bon signal le plus proche."><span class="icone" aria-hidden="true">◎</span> Bon signal</button>
+            <button data-i18n="action.pause" data-i18n-title="action.pause.titre" id="pause-bouton" type="button" data-tache="pause" title="Met la tâche (ou le retour à la base) en pause, tout de suite."><span class="icone" aria-hidden="true">⏸</span> Pause</button>
+            <button data-i18n="action.reprendre" data-i18n-title="action.reprendre.titre" id="reprendre-bouton" type="button" data-tache="reprendre" title="Reprend la tâche en pause : les lames peuvent redémarrer. Deux clics (le second confirme)."><span class="icone" aria-hidden="true">▶</span> Reprendre</button>
+            <button data-i18n="action.base" data-i18n-title="action.base.titre" id="base-bouton" type="button" data-tache="base" title="Retour à la base, tâche conservée, tout de suite."><span class="icone" aria-hidden="true">⌂</span> Retour base</button>
+            <button data-i18n="action.annuler" data-i18n-title="action.annuler.titre" id="annuler-bouton" type="button" data-tache="annuler" title="Annule la tâche : le robot s'arrête sur place et se remet en attente. Sur confirmation."><span class="icone" aria-hidden="true">✕</span> Annuler tâche</button>
+            <button data-i18n="action.plateau" data-i18n-title="action.plateau.titre" id="pave-plateau" type="button" class="avance" title="Plateau de coupe au plus haut, tout de suite (en composition : ajouté à la séquence)."><span class="icone" aria-hidden="true">⤒</span> Plateau haut</button>
+            <button data-i18n-title="action.phares.titre" id="phares-bouton" type="button" class="avance" title="Phares (éclairage de la caméra) : un clic. Allumage jamais essayé par le cloud sur ce robot ; extinction par un signal connu. Le robot éteint ses phares sur sa base, et une plage horaire automatique (réglée dans l'application) peut les rallumer ou les éteindre. Le fil d'activité dit si le robot a obéi."><span class="icone" aria-hidden="true">☀</span> <span id="phares-libelle">Phares : allumer</span></button>
+            <button data-i18n="action.recalage" data-i18n-title="action.recalage.titre" id="recalage" type="button" class="avance" title="Charge dans la séquence un aller-retour en ligne droite (deux pas en avant, deux en arrière, au pas choisi). À n'exécuter qu'en zone dégagée. Effet non garanti : jamais essayé sur ce robot."><span class="icone" aria-hidden="true">⟲</span> Recalage assisté</button>
+            <button data-i18n="action.signal" data-i18n-title="action.signal.titre" id="bon-signal-bouton" type="button" class="avance" title="Ouvre la carte et cherche l'endroit de bon signal le plus proche."><span class="icone" aria-hidden="true">◎</span> Bon signal</button>
           </p>
           <div class="avis">
             <p class="ligne-etat">
-              <button id="pause-raccourci" type="button" class="raccourci" hidden>Mettre en pause</button>
+              <button data-i18n="avis.pause" id="pause-raccourci" type="button" class="raccourci" hidden>Mettre en pause</button>
               <span id="pause-etat" class="vers-fil"></span>
             </p>
-            <p class="ligne-etat">
+            <p class="ligne-etat avance">
               <span class="attestation-proposition" hidden>
                 <span class="vers-fil avertissement" data-attestation="message"></span>
-                <button type="button" data-attestation="poser" title="À ne faire que si vous VOYEZ le robot, lames à l'arrêt. Valable 10 minutes.">Je vois le robot, lames à l'arrêt : autoriser le pilotage 10 min</button>
+                <button data-i18n="attestation.poser" data-i18n-title="attestation.poser.titre" type="button" data-attestation="poser" title="À ne faire que si vous VOYEZ le robot, lames à l'arrêt. Valable 10 minutes.">Je vois le robot, lames à l'arrêt : autoriser le pilotage 10 min</button>
               </span>
               <span id="attestation-erreur" class="vers-fil avertissement"></span>
             </p>
             <p class="ligne-etat" id="nettoyage" hidden>
               <span id="nettoyage-texte" class="avertissement"></span>
-              <button id="nettoyage-redescendre" type="button" class="raccourci" data-plateau-essai="redescendre" title="Émet l'ordre de redescente du plateau : c'est lui qui sort le robot de cet arrêt d'urgence.">Redescendre le plateau</button>
-              <button id="nettoyage-essai" type="button" title="Autorise pendant 2 minutes un pas à la fois, plateau levé : 0,5 m ou 45° au plus, à allure lente. Le robot ignorera peut-être l'ordre.">Essayer un pas plateau levé</button>
+              <button data-i18n="nettoyage.redescendre" data-i18n-title="nettoyage.redescendre.titre" id="nettoyage-redescendre" type="button" class="raccourci" data-plateau-essai="redescendre" title="Émet l'ordre de redescente du plateau : c'est lui qui sort le robot de cet arrêt d'urgence.">Redescendre le plateau</button>
+              <button data-i18n="nettoyage.essai" data-i18n-title="nettoyage.essai.titre" id="nettoyage-essai" type="button" class="avance" title="Autorise pendant 2 minutes un pas à la fois, plateau levé : 0,5 m ou 45° au plus, à allure lente. Le robot ignorera peut-être l'ordre.">Essayer un pas plateau levé</button>
               <span id="nettoyage-etat" class="vers-fil avertissement"></span>
             </p>
             <p class="ligne-etat" id="reprendre-rappel" hidden>
               <span id="reprise-conseil" class="vers-pastilles"></span>
               <span id="reprise-avertissement" class="vers-fil avertissement"></span>
-              <button id="reprendre-quand-meme" type="button" data-tache="reprendre-quand-meme" hidden>Reprendre quand même</button>
+              <button data-i18n="avis.reprendre-quand-meme" id="reprendre-quand-meme" type="button" data-tache="reprendre-quand-meme" hidden>Reprendre quand même</button>
             </p>
             <p id="pave-signal" class="vers-fil avertissement"></p>
             <p id="direct-etat" class="note" role="status"></p>
             <p id="pave-file" class="vers-pastilles"></p>
           </div>
-          <ol id="fil" class="fil" aria-label="Fil d'activité : les trois dernières lignes" aria-live="polite"></ol>
+          <ol data-i18n-aria="fil.aria" id="fil" class="fil" aria-label="Fil d'activité : les trois dernières lignes" aria-live="polite"></ol>
           <div class="ligne-sequence">
-            <svg id="pave-miniature" class="miniature" role="img" aria-label="Tracé schématique du trajet cumulé"></svg>
+            <svg data-i18n-aria="sequence.miniature" id="pave-miniature" class="miniature" role="img" aria-label="Tracé schématique du trajet cumulé"></svg>
             <div class="suite">
-              <ol id="pave-pastilles" class="pastilles" aria-label="Séquence en cours"></ol>
+              <ol data-i18n-aria="sequence.en-cours" id="pave-pastilles" class="pastilles" aria-label="Séquence en cours"></ol>
               <p id="pave-total" class="note ligne"></p>
               <p class="actions">
-                <button id="pave-previsualiser" type="button" disabled>Prévisualiser (Entrée)</button>
+                <button data-i18n="sequence.previsualiser-entree" id="pave-previsualiser" type="button" disabled>Prévisualiser (Entrée)</button>
                 <button id="emettre" type="button" class="emettre" disabled>Émettre l'ordre</button>
-                <button id="pave-annuler" type="button" disabled title="Retour arrière">Annuler la dernière</button>
-                <button id="pave-vider" type="button" disabled>Vider</button>
+                <button data-i18n="sequence.annuler-derniere" data-i18n-title="sequence.annuler-derniere.titre" id="pave-annuler" type="button" disabled title="Retour arrière">Annuler la dernière</button>
+                <button data-i18n="commun.vider" id="pave-vider" type="button" disabled>Vider</button>
               </p>
               <p id="emettre-note" class="note" role="status"></p>
               <p id="previsualisation-avertissement" class="avertissement" role="alert" hidden></p>
@@ -164,259 +174,260 @@
           </div>
           <ol id="pave-retours" class="vers-pastilles" aria-label="Retour des derniers pas"></ol>
           <p class="actions" id="reprise-bloc" hidden>
-            <button id="reprise" type="button" title="Recharge les étapes restantes dans la séquence et les prévisualise ; rien n'est émis sans « Émettre ».">Reprendre</button>
+            <button data-i18n-title="reprise.titre" id="reprise" type="button" title="Recharge les étapes restantes dans la séquence et les prévisualise ; rien n'est émis sans « Émettre ».">Reprendre</button>
           </p>
         </div>
         <div class="colonne-vue">
           <p class="onglets" role="tablist">
-            <button id="onglet-camera" type="button" role="tab" aria-selected="true" aria-controls="vue-camera">Caméra</button>
-            <button id="onglet-carte" type="button" role="tab" aria-selected="false" aria-controls="vue-carte">Carte</button>
-            <button id="video-demarrer" type="button" title="Contacte le cloud Lymow et active la caméra du robot, même en simulation. Rien ne démarre tout seul.">Démarrer la vidéo</button>
-            <button id="video-arreter" type="button" disabled>Arrêter</button>
-            <button id="video-reessayer" type="button" hidden title="Ferme la session vidéo en échec et en ouvre une nouvelle.">Réessayer</button>
+            <button data-i18n="onglet.camera" id="onglet-camera" type="button" role="tab" aria-selected="true" aria-controls="vue-camera">Caméra</button>
+            <button data-i18n="onglet.carte" id="onglet-carte" type="button" role="tab" aria-selected="false" aria-controls="vue-carte">Carte</button>
+            <button data-i18n="video.demarrer" data-i18n-title="video.demarrer.titre" id="video-demarrer" type="button" title="Contacte le cloud Lymow et active la caméra du robot, même en simulation. Rien ne démarre tout seul.">Démarrer la vidéo</button>
+            <button data-i18n="video.arreter" id="video-arreter" type="button" disabled>Arrêter</button>
+            <button data-i18n="video.reessayer" data-i18n-title="video.reessayer.titre" id="video-reessayer" type="button" hidden title="Ferme la session vidéo en échec et en ouvre une nouvelle.">Réessayer</button>
           </p>
-          <div id="vue-camera" class="cadre-video" role="tabpanel" title="Cliquer dans la vidéo active les flèches">
+          <div data-i18n-title="video.cadre.titre" id="vue-camera" class="cadre-video" role="tabpanel" title="Cliquer dans la vidéo active les flèches">
             <video id="video" muted playsinline></video>
             <span id="video-etat" class="etat-video">arrêtée</span>
-            <div class="pave" role="group" aria-label="Flèches : avancer, reculer, tourner">
-              <button type="button" class="fleche haut-gauche" data-fleche="haut-gauche" aria-label="Avancer en virant à gauche" title="Avancer en virant à gauche : distance et angle choisis, d'une seule consigne (pavé numérique 7, ou ↑ et ← ensemble)" disabled>↖</button>
-              <button type="button" class="fleche haut" data-fleche="haut" aria-label="Avancer" disabled>↑</button>
-              <button type="button" class="fleche haut-droite" data-fleche="haut-droite" aria-label="Avancer en virant à droite" title="Avancer en virant à droite : distance et angle choisis, d'une seule consigne (pavé numérique 9, ou ↑ et → ensemble)" disabled>↗</button>
-              <button type="button" class="fleche gauche" data-fleche="gauche" aria-label="Tourner à gauche" disabled>←</button>
-              <button type="button" class="fleche droite" data-fleche="droite" aria-label="Tourner à droite" disabled>→</button>
-              <button type="button" class="fleche bas-gauche" data-fleche="bas-gauche" aria-label="Reculer, l'arrière partant à gauche" title="Reculer, l'arrière partant à gauche : distance et angle choisis, d'une seule consigne (pavé numérique 1, ou ↓ et ← ensemble)" disabled>↙</button>
-              <button type="button" class="fleche bas" data-fleche="bas" aria-label="Reculer" disabled>↓</button>
-              <button type="button" class="fleche bas-droite" data-fleche="bas-droite" aria-label="Reculer, l'arrière partant à droite" title="Reculer, l'arrière partant à droite : distance et angle choisis, d'une seule consigne (pavé numérique 3, ou ↓ et → ensemble)" disabled>↘</button>
+            <div class="pave" role="group" aria-label="Flèches : avancer, reculer, tourner" data-i18n-aria="pave.groupe">
+              <button data-i18n-aria="fleche.hg" data-i18n-title="fleche.hg.titre" type="button" class="fleche haut-gauche" data-fleche="haut-gauche" aria-label="Avancer en virant à gauche" title="Avancer en virant à gauche : distance et angle choisis, d'une seule consigne (pavé numérique 7, ou ↑ et ← ensemble)" disabled>↖</button>
+              <button data-i18n-aria="fleche.h" type="button" class="fleche haut" data-fleche="haut" aria-label="Avancer" disabled>↑</button>
+              <button data-i18n-aria="fleche.hd" data-i18n-title="fleche.hd.titre" type="button" class="fleche haut-droite" data-fleche="haut-droite" aria-label="Avancer en virant à droite" title="Avancer en virant à droite : distance et angle choisis, d'une seule consigne (pavé numérique 9, ou ↑ et → ensemble)" disabled>↗</button>
+              <button data-i18n-aria="fleche.g" type="button" class="fleche gauche" data-fleche="gauche" aria-label="Tourner à gauche" disabled>←</button>
+              <button data-i18n-aria="fleche.d" type="button" class="fleche droite" data-fleche="droite" aria-label="Tourner à droite" disabled>→</button>
+              <button data-i18n-aria="fleche.bg" data-i18n-title="fleche.bg.titre" type="button" class="fleche bas-gauche" data-fleche="bas-gauche" aria-label="Reculer, l'arrière partant à gauche" title="Reculer, l'arrière partant à gauche : distance et angle choisis, d'une seule consigne (pavé numérique 1, ou ↓ et ← ensemble)" disabled>↙</button>
+              <button data-i18n-aria="fleche.b" type="button" class="fleche bas" data-fleche="bas" aria-label="Reculer" disabled>↓</button>
+              <button data-i18n-aria="fleche.bd" data-i18n-title="fleche.bd.titre" type="button" class="fleche bas-droite" data-fleche="bas-droite" aria-label="Reculer, l'arrière partant à droite" title="Reculer, l'arrière partant à droite : distance et angle choisis, d'une seule consigne (pavé numérique 3, ou ↓ et → ensemble)" disabled>↘</button>
             </div>
           </div>
           <div id="vue-carte" class="vue-carte" role="tabpanel" hidden>
             <p class="actions">
-              <button id="carte-actualiser" type="button">Actualiser la carte</button>
-              <button id="carte-zoom-plus" type="button" aria-label="Zoomer">+</button>
-              <button id="carte-zoom-moins" type="button" aria-label="Dézoomer">−</button>
-              <button id="carte-recadrer" type="button">Tout voir</button>
-              <button id="carte-robot-cadrer" type="button" disabled title="position du robot inconnue">Cadrer sur le robot</button>
-              <button id="recalage-ici" type="button" title="La position affichée est décalée ? Cliquez ici, puis cliquez sur la carte l'endroit où se trouve réellement le robot. L'outil décale alors son affichage (marqueur, bords de zone, trajets). Rien n'est envoyé au robot.">Le robot est ici</button>
-              <button id="recalage-annuler" type="button" hidden>Annuler le décalage</button>
-              <button id="recalage-station" type="button" hidden title="Applique comme décalage d'affichage l'écart mesuré quand le robot est arrivé à sa station.">Utiliser l'écart mesuré à la station</button>
-              <label class="case" title="La carte reste centrée sur le robot"><input id="carte-suivre" type="checkbox" checked> suivre le robot</label>
-              <label class="case"><input id="carte-noms" type="checkbox" checked> noms</label>
-              <label class="case" title="Précision de position relevée au fil des passages : vert jusqu'à 0,10 m, orange jusqu'à 0,50 m, rouge au-delà."><input id="carte-precision" type="checkbox"> précision relevée</label>
+              <button data-i18n="carte.actualiser" id="carte-actualiser" type="button">Actualiser la carte</button>
+              <button data-i18n-aria="carte.zoomer" id="carte-zoom-plus" type="button" aria-label="Zoomer">+</button>
+              <button data-i18n-aria="carte.dezoomer" id="carte-zoom-moins" type="button" aria-label="Dézoomer">−</button>
+              <button data-i18n="carte.tout-voir" id="carte-recadrer" type="button">Tout voir</button>
+              <button data-i18n="carte.cadrer" id="carte-robot-cadrer" type="button" disabled title="position du robot inconnue">Cadrer sur le robot</button>
+              <button data-i18n-title="recalage.ici.titre" id="recalage-ici" type="button" class="avance" title="La position affichée est décalée ? Cliquez ici, puis cliquez sur la carte l'endroit où se trouve réellement le robot. L'outil décale alors son affichage (marqueur, bords de zone, trajets). Rien n'est envoyé au robot.">Le robot est ici</button>
+              <button data-i18n="recalage.annuler" id="recalage-annuler" type="button" class="avance" hidden>Annuler le décalage</button>
+              <button data-i18n="recalage.station" data-i18n-title="recalage.station.titre" id="recalage-station" type="button" class="avance" hidden title="Applique comme décalage d'affichage l'écart mesuré quand le robot est arrivé à sa station.">Utiliser l'écart mesuré à la station</button>
+              <label data-i18n="carte.suivre" data-i18n-title="carte.suivre.titre" class="case" title="La carte reste centrée sur le robot"><input id="carte-suivre" type="checkbox" checked> suivre le robot</label>
+              <label data-i18n="carte.noms" class="case"><input id="carte-noms" type="checkbox" checked> noms</label>
+              <label data-i18n="carte.precision" data-i18n-title="carte.precision.titre" class="case avance" title="Précision de position relevée au fil des passages : vert jusqu'à 0,10 m, orange jusqu'à 0,50 m, rouge au-delà."><input id="carte-precision" type="checkbox"> précision relevée</label>
               <span id="carte-etat" class="note">aucune carte : cliquez sur « Actualiser la carte »</span>
             </p>
-            <p id="recalage-bandeau" class="bandeau-pointage" role="status" hidden>Cliquez l'endroit réel du robot sur la carte (Échap pour annuler)</p>
+            <p data-i18n="recalage.bandeau" id="recalage-bandeau" class="bandeau-pointage" role="status" hidden>Cliquez l'endroit réel du robot sur la carte (Échap pour annuler)</p>
             <div class="cadre-carte">
-              <svg id="carte-dessin" role="img" aria-label="Carte du terrain, nord en haut"></svg>
-              <span class="nord" aria-hidden="true">N ↑</span>
+              <svg data-i18n-aria="carte.dessin" id="carte-dessin" role="img" aria-label="Carte du terrain, nord en haut"></svg>
+              <span data-i18n="carte.nord" class="nord" aria-hidden="true">N ↑</span>
               <span class="echelle"><span id="carte-barre"></span><span id="carte-echelle"></span></span>
             </div>
             <ul class="legende">
-              <li><span class="pastille-zone"></span> zone de tonte</li>
-              <li><span class="pastille-interdite"></span> zone interdite</li>
-              <li><span class="pastille-passage"></span> passage (tirets : passage de station)</li>
-              <li><span class="pastille-station"></span> station</li>
-              <li><span class="pastille-robot"></span> robot (pointe = cap) <span id="carte-rtk"></span></li>
+              <li data-i18n="legende.zone"><span class="pastille-zone"></span> zone de tonte</li>
+              <li data-i18n="legende.interdite"><span class="pastille-interdite"></span> zone interdite</li>
+              <li data-i18n="legende.passage"><span class="pastille-passage"></span> passage (tirets : passage de station)</li>
+              <li data-i18n="legende.station"><span class="pastille-station"></span> station</li>
+              <li data-i18n="legende.robot"><span class="pastille-robot"></span> robot (pointe = cap) <span id="carte-rtk" class="avance"></span></li>
             </ul>
-            <p class="actions">
-              <button id="signal-chercher" type="button" title="Cherche, dans le relevé de précision, l'endroit de bon signal le plus proche du robot, à l'intérieur d'une zone ou d'un passage.">Bon signal le plus proche</button>
-              <label class="case" title="N'utiliser que les relevés des 30 derniers jours"><input id="signal-recent" type="checkbox"> derniers 30 jours</label>
-              <button id="signal-charger" type="button" hidden title="Charge les pas du trajet dans la séquence : vous prévisualisez puis émettez, ou vous pilotez à la main en suivant le tracé.">Charger le trajet dans la séquence</button>
+            <p class="actions avance">
+              <button data-i18n="signal.chercher" data-i18n-title="signal.chercher.titre" id="signal-chercher" type="button" title="Cherche, dans le relevé de précision, l'endroit de bon signal le plus proche du robot, à l'intérieur d'une zone ou d'un passage.">Bon signal le plus proche</button>
+              <label data-i18n="signal.recent" data-i18n-title="signal.recent.titre" class="case" title="N'utiliser que les relevés des 30 derniers jours"><input id="signal-recent" type="checkbox"> derniers 30 jours</label>
+              <button data-i18n="signal.charger" data-i18n-title="signal.charger.titre" id="signal-charger" type="button" hidden title="Charge les pas du trajet dans la séquence : vous prévisualisez puis émettez, ou vous pilotez à la main en suivant le tracé.">Charger le trajet dans la séquence</button>
               <span id="signal-etat" class="note" role="status"></span>
             </p>
-            <p class="note"><span id="carte-note" role="status"></span> <span id="carte-position" role="status"></span></p>
-            <p class="note"><strong id="recalage-texte" class="recalage" role="status"></strong> <span id="recalage-mesure" role="status"></span></p>
+            <p class="note"><span id="carte-note" class="avance" role="status"></span> <span id="carte-position" role="status"></span></p>
+            <p class="note avance"><strong id="recalage-texte" class="recalage" role="status"></strong> <span id="recalage-mesure" role="status"></span></p>
           </div>
         </div>
       </div>
-      <details id="volet-details" class="sous-volet" data-volet="details">
-        <summary>Détails de la prévisualisation</summary>
+      <details id="volet-details" class="sous-volet avance" data-volet="details">
+        <summary data-i18n="volet.details">Détails de la prévisualisation</summary>
         <p id="previsualisation-titre" class="note">Aucune prévisualisation.</p>
-        <ol id="previsualisation-etapes" class="etapes" aria-label="Étapes qui seront émises, dans cet ordre"></ol>
+        <ol data-i18n-aria="previsualisation.etapes" id="previsualisation-etapes" class="etapes" aria-label="Étapes qui seront émises, dans cet ordre"></ol>
         <div id="previsualisation-detail"></div>
       </details>
     </section>
-    <details id="volet-carte" class="volet large-bloc" data-volet="carte">
-      <summary>Ajustement de zone</summary>
-    <section id="bloc-carte" aria-label="Ajustement de zone">
+    <details id="volet-carte" class="volet large-bloc avance" data-volet="carte">
+      <summary data-i18n="volet.ajustement">Ajustement de zone</summary>
+    <section data-i18n-aria="volet.ajustement" id="bloc-carte" aria-label="Ajustement de zone">
       <form id="carte-ajustement" class="ordre">
-        <h3>Ajuster la bordure d'une zone</h3>
-        <p class="note" title="Molette : zoom ; glisser : déplacer ; double-clic sur une zone : la choisir et cadrer dessus. Les sommets apparaissent quand le zoom permet de les distinguer.">Jamais essayé sur ce robot : commencez par +5 cm sur une zone sans enjeu. Choisissez la zone, puis cliquez deux sommets de son contour.</p>
-        <label>Zone <select id="carte-zone"></select></label>
+        <h3 data-i18n="ajustement.titre">Ajuster la bordure d'une zone</h3>
+        <p data-i18n="ajustement.note" data-i18n-title="ajustement.note.titre" class="note" title="Molette : zoom ; glisser : déplacer ; double-clic sur une zone : la choisir et cadrer dessus. Les sommets apparaissent quand le zoom permet de les distinguer.">Jamais essayé sur ce robot : commencez par +5 cm sur une zone sans enjeu. Choisissez la zone, puis cliquez deux sommets de son contour.</p>
+        <label data-i18n="ajustement.zone">Zone <select id="carte-zone"></select></label>
         <p id="carte-possible" class="note" role="status"></p>
-        <label>Du sommet <input id="carte-de" inputmode="numeric" autocomplete="off"></label>
-        <label>au sommet <input id="carte-a" inputmode="numeric" autocomplete="off"></label>
-        <label>Côté de la boucle
-          <select id="carte-cote"><option value="court">le plus court</option><option value="long">le plus long</option>
-            <option value="tout">tout le contour</option></select>
+        <label data-i18n="ajustement.de">Du sommet <input id="carte-de" inputmode="numeric" autocomplete="off"></label>
+        <label data-i18n="ajustement.a">au sommet <input id="carte-a" inputmode="numeric" autocomplete="off"></label>
+        <label data-i18n="ajustement.cote">Côté de la boucle
+          <select id="carte-cote"><option data-i18n="ajustement.court" value="court">le plus court</option><option data-i18n="ajustement.long" value="long">le plus long</option>
+            <option data-i18n="ajustement.tout" value="tout">tout le contour</option></select>
         </label>
-        <label>Largeur (cm) <input id="carte-cm" inputmode="decimal" autocomplete="off">
-          <small>de −50 à 50 ; positif = élargir vers l'extérieur, négatif = rogner</small></label>
-        <label>Raccords (m) <input id="carte-raccord" inputmode="decimal" autocomplete="off">
-          <small>0 à 5 (défaut 0,5) : longueur sur laquelle la bande s'efface à chaque extrémité</small></label>
-        <p class="actions"><button id="carte-previsualiser" type="submit">Prévisualiser l'ajustement</button></p>
+        <label data-i18n="ajustement.cm">Largeur (cm) <input id="carte-cm" inputmode="decimal" autocomplete="off">
+          <small data-i18n="ajustement.cm.aide">de −50 à 50 ; positif = élargir vers l'extérieur, négatif = rogner</small></label>
+        <label data-i18n="ajustement.raccord">Raccords (m) <input id="carte-raccord" inputmode="decimal" autocomplete="off">
+          <small data-i18n="ajustement.raccord.aide">0 à 5 (défaut 0,5) : longueur sur laquelle la bande s'efface à chaque extrémité</small></label>
+        <p class="actions"><button data-i18n="ajustement.previsualiser" id="carte-previsualiser" type="submit">Prévisualiser l'ajustement</button></p>
       </form>
     </section>
     </details>
-    <details id="volet-ordres" class="volet large-bloc" data-volet="ordres">
-      <summary>Ordres détaillés</summary>
+    <details id="volet-ordres" class="volet large-bloc avance" data-volet="ordres">
+      <summary data-i18n="volet.ordres">Ordres détaillés</summary>
       <section aria-labelledby="titre-ordres">
-        <h2 id="titre-ordres" class="masque">Ordres</h2>
-      <p class="actions" title="Voyants LED du robot (« Vehicle LED » de l'application). Ce ne sont PAS les phares : aucun ordre d'allumage immédiat des phares n'est connu avec certitude ; leur état se lit dans la pastille « phares ».">
-        <button type="button" data-voyants="allumer">Voyants LED : allumer</button>
-        <button type="button" data-voyants="eteindre">Voyants LED : éteindre</button>
+        <h2 data-i18n="ordres.titre" id="titre-ordres" class="masque">Ordres</h2>
+      <p data-i18n-title="voyants.titre" class="actions" title="Voyants LED du robot (« Vehicle LED » de l'application). Ce ne sont PAS les phares : aucun ordre d'allumage immédiat des phares n'est connu avec certitude ; leur état se lit dans la pastille « phares ».">
+        <button data-i18n="voyants.allumer" type="button" data-voyants="allumer">Voyants LED : allumer</button>
+        <button data-i18n="voyants.eteindre" type="button" data-voyants="eteindre">Voyants LED : éteindre</button>
         <span id="voyants-etat" class="note" role="status"></span>
       </p>
-      <p class="note" title="Le bouton « Prévisualiser » d'un formulaire ne prévisualise que SON ordre ; « Ajouter à la séquence » l'ajoute à la séquence du pilotage.">Angle ou distance, ou bien durée. « Ajouter à la séquence » alimente la même séquence que les flèches.</p>
+      <p data-i18n="ordres.note" data-i18n-title="ordres.note.titre" class="note" title="Le bouton « Prévisualiser » d'un formulaire ne prévisualise que SON ordre ; « Ajouter à la séquence » l'ajoute à la séquence du pilotage.">Angle ou distance, ou bien durée. « Ajouter à la séquence » alimente la même séquence que les flèches.</p>
 
       <form class="ordre" data-ordre="tourner">
-        <h3>Tourner</h3>
-        <label>Sens
-          <select name="sens"><option value="1">gauche</option><option value="-1">droite</option></select>
+        <h3 data-i18n="ordres.tourner">Tourner</h3>
+        <label data-i18n="ordres.sens">Sens
+          <select name="sens"><option data-i18n="ordres.sens.gauche" value="1">gauche</option><option data-i18n="ordres.sens.droite" value="-1">droite</option></select>
         </label>
-        <label>Angle (°) <input name="valeur" inputmode="decimal" autocomplete="off"> <small data-borne="angle"></small></label>
-        <label>ou durée (s) <input name="duree" inputmode="decimal" autocomplete="off"> <small data-borne="duree"></small></label>
-        <label>Vitesse (rad/s) <input name="vitesse" inputmode="decimal" autocomplete="off"> <small data-borne="vitesse-angulaire"></small></label>
+        <label data-i18n="ordres.angle">Angle (°) <input name="valeur" inputmode="decimal" autocomplete="off"> <small data-borne="angle"></small></label>
+        <label data-i18n="ordres.duree">ou durée (s) <input name="duree" inputmode="decimal" autocomplete="off"> <small data-borne="duree"></small></label>
+        <label data-i18n="ordres.vitesse-angulaire">Vitesse (rad/s) <input name="vitesse" inputmode="decimal" autocomplete="off"> <small data-borne="vitesse-angulaire"></small></label>
         <p class="actions">
-          <button type="submit">Prévisualiser</button>
-          <button type="button" data-action="ajouter">Ajouter à la séquence</button>
+          <button data-i18n="commun.previsualiser" type="submit">Prévisualiser</button>
+          <button data-i18n="ordres.ajouter" type="button" data-action="ajouter">Ajouter à la séquence</button>
         </p>
       </form>
 
       <form class="ordre" data-ordre="translation">
-        <h3>Avancer / reculer</h3>
-        <label>Sens
-          <select name="nom"><option value="avancer">avancer</option><option value="reculer">reculer</option></select>
+        <h3 data-i18n="ordres.translation">Avancer / reculer</h3>
+        <label data-i18n="ordres.sens">Sens
+          <select name="nom"><option data-i18n="ordres.avancer" value="avancer">avancer</option><option data-i18n="ordres.reculer" value="reculer">reculer</option></select>
         </label>
-        <label>Distance (m) <input name="valeur" inputmode="decimal" autocomplete="off"> <small data-borne="distance"></small></label>
-        <label>ou durée (s) <input name="duree" inputmode="decimal" autocomplete="off"> <small data-borne="duree"></small></label>
-        <label>Vitesse (m/s) <input name="vitesse" inputmode="decimal" autocomplete="off"> <small data-borne="vitesse-lineaire"></small></label>
+        <label data-i18n="ordres.distance">Distance (m) <input name="valeur" inputmode="decimal" autocomplete="off"> <small data-borne="distance"></small></label>
+        <label data-i18n="ordres.duree">ou durée (s) <input name="duree" inputmode="decimal" autocomplete="off"> <small data-borne="duree"></small></label>
+        <label data-i18n="ordres.vitesse-lineaire">Vitesse (m/s) <input name="vitesse" inputmode="decimal" autocomplete="off"> <small data-borne="vitesse-lineaire"></small></label>
         <p class="actions">
-          <button type="submit">Prévisualiser</button>
-          <button type="button" data-action="ajouter">Ajouter à la séquence</button>
+          <button data-i18n="commun.previsualiser" type="submit">Prévisualiser</button>
+          <button data-i18n="ordres.ajouter" type="button" data-action="ajouter">Ajouter à la séquence</button>
         </p>
       </form>
 
       <form class="ordre" data-ordre="plateau">
-        <h3>Plateau de coupe</h3>
-        <label>Hauteur (mm) <input name="valeur" inputmode="numeric" autocomplete="off"> <small data-borne="hauteur"></small></label>
+        <h3 data-i18n="ordres.plateau">Plateau de coupe</h3>
+        <label data-i18n="ordres.hauteur">Hauteur (mm) <input name="valeur" inputmode="numeric" autocomplete="off"> <small data-borne="hauteur"></small></label>
         <p class="actions">
-          <button type="submit">Prévisualiser</button>
-          <button type="button" data-action="ajouter">Ajouter à la séquence</button>
-          <button type="button" data-action="plateau-haut">Plateau au plus haut</button>
+          <button data-i18n="commun.previsualiser" type="submit">Prévisualiser</button>
+          <button data-i18n="ordres.ajouter" type="button" data-action="ajouter">Ajouter à la séquence</button>
+          <button data-i18n="ordres.plateau-haut" type="button" data-action="plateau-haut">Plateau au plus haut</button>
         </p>
       </form>
 
       <div class="ordre">
-        <h3>Tâche</h3>
-        <p class="note">Une confirmation est demandée avant l'émission. « Reprendre » peut relancer les lames.</p>
+        <h3 data-i18n="ordres.tache">Tâche</h3>
+        <p data-i18n="ordres.tache.note" class="note">Une confirmation est demandée avant l'émission. « Reprendre » peut relancer les lames.</p>
         <p class="actions">
-          <button type="button" data-tache="pause">Mettre en pause</button>
-          <button type="button" data-tache="reprendre">Reprendre</button>
-          <button type="button" data-tache="base">Retour à la base</button>
-          <button type="button" data-tache="annuler">Annuler la tâche</button>
+          <button data-i18n="avis.pause" type="button" data-tache="pause">Mettre en pause</button>
+          <button data-i18n="ordres.reprendre" type="button" data-tache="reprendre">Reprendre</button>
+          <button data-i18n="ordres.base" type="button" data-tache="base">Retour à la base</button>
+          <button data-i18n="ordres.annuler" type="button" data-tache="annuler">Annuler la tâche</button>
         </p>
       </div>
 
         <div class="ordre">
-          <h3 id="titre-sequence">Séquence : ordre des étapes</h3>
-      <p id="sequence-vide" class="note">Aucune étape : « Prévisualiser la séquence » est indisponible. Utilisez
+          <h3 data-i18n="sequence.titre" id="titre-sequence">Séquence : ordre des étapes</h3>
+      <p data-i18n="sequence.vide" id="sequence-vide" class="note">Aucune étape : « Prévisualiser la séquence » est indisponible. Utilisez
         « Ajouter à la séquence » (le bouton « Prévisualiser » d'un formulaire ne prévisualise que SON ordre).</p>
       <ol id="sequence-liste"></ol>
       <p class="actions">
-        <button id="sequence-previsualiser" type="button" disabled>Prévisualiser la séquence</button>
-        <button id="sequence-vider" type="button" disabled>Vider</button>
+        <button data-i18n="sequence.previsualiser" id="sequence-previsualiser" type="button" disabled>Prévisualiser la séquence</button>
+        <button data-i18n="commun.vider" id="sequence-vider" type="button" disabled>Vider</button>
       </p>
         </div>
       </section>
     </details>
-    <details id="volet-calibration" class="volet large-bloc" data-volet="calibration">
-      <summary>Calibration</summary>
+    <details id="volet-calibration" class="volet large-bloc avance" data-volet="calibration">
+      <summary data-i18n="volet.calibration">Calibration</summary>
       <section aria-labelledby="titre-calibration">
-        <h2 id="titre-calibration" class="masque">Calibration</h2>
+        <h2 data-i18n="volet.calibration" id="titre-calibration" class="masque">Calibration</h2>
       <div id="plateau-essais" class="ordre">
-        <h3>Plateau : position de nettoyage (essai)</h3>
-        <p class="note">Ordres EXPÉRIMENTAUX, en mode réel seulement. L'application lève le plateau au-delà de sa course de coupe pour nettoyer les lames ; les sources disent ce geste réservé au Bluetooth. La forme émise ici est celle des phares du robot, avec le numéro de la levée : <strong>jamais essayée par le nuage sur ce robot</strong>. Rien ne dit que le robot peut rouler dans cette position. Enchaînez à la main : lever, une flèche de 0,25 m, redescendre — après avoir vu l'effet réel.</p>
+        <h3 data-i18n="essai.plateau.titre">Plateau : position de nettoyage (essai)</h3>
+        <p class="note"><span data-i18n="essai.plateau.note1">Ordres EXPÉRIMENTAUX, en mode réel seulement. L'application lève le plateau au-delà de sa course de coupe pour nettoyer les lames ; les sources disent ce geste réservé au Bluetooth. La forme émise ici est celle des phares du robot, avec le numéro de la levée :</span> <strong data-i18n="essai.plateau.note2">jamais essayée par le nuage sur ce robot</strong>. <span data-i18n="essai.plateau.note3">Rien ne dit que le robot peut rouler dans cette position. Enchaînez à la main : lever, une flèche de 0,25 m, redescendre — après avoir vu l'effet réel.</span></p>
         <p class="actions">
-          <button type="button" data-plateau-essai="nettoyage">Plateau : position de nettoyage (essai)</button>
-          <button type="button" data-plateau-essai="redescendre">Plateau : redescendre (essai)</button>
+          <button data-i18n="essai.plateau.lever" type="button" data-plateau-essai="nettoyage">Plateau : position de nettoyage (essai)</button>
+          <button data-i18n="essai.plateau.redescendre" type="button" data-plateau-essai="redescendre">Plateau : redescendre (essai)</button>
         </p>
         <p id="plateau-essai-etat" class="note" role="status"></p>
       </div>
       <form class="ordre" data-ordre="essai-arret-auto">
-        <h3>Essai d'arrêt automatique</h3>
-        <p class="note">Calibration, robot à vue : une seule consigne avant, puis silence, puis arrêt.
+        <h3 data-i18n="essai.arret.titre">Essai d'arrêt automatique</h3>
+        <p class="note"><span data-i18n="essai.arret.note">Calibration, robot à vue : une seule consigne avant, puis silence, puis arrêt.</span>
           <span id="exposition-essai"></span></p>
-        <label>Vitesse (m/s) <input name="vitesse" inputmode="decimal" autocomplete="off"> <small data-borne="essai-vitesse"></small></label>
-        <label>Fenêtre (s) <input name="duree" inputmode="decimal" autocomplete="off"> <small data-borne="essai-fenetre"></small></label>
-        <p class="actions"><button type="submit">Prévisualiser</button></p>
+        <label data-i18n="ordres.vitesse-lineaire">Vitesse (m/s) <input name="vitesse" inputmode="decimal" autocomplete="off"> <small data-borne="essai-vitesse"></small></label>
+        <label data-i18n="essai.arret.fenetre">Fenêtre (s) <input name="duree" inputmode="decimal" autocomplete="off"> <small data-borne="essai-fenetre"></small></label>
+        <p class="actions"><button data-i18n="commun.previsualiser" type="submit">Prévisualiser</button></p>
       </form>
       </section>
     </details>
     <details id="volet-compte" class="volet large-bloc" data-volet="compte">
-      <summary>Compte</summary>
+      <summary data-i18n="compte.titre">Compte</summary>
     <section id="bloc-compte" aria-labelledby="titre-compte">
-      <h2 id="titre-compte">Compte</h2>
+      <h2 data-i18n="compte.titre" id="titre-compte">Compte</h2>
       <p id="compte-etat" class="note">…</p>
       <p class="actions">
-        <label>Région <select id="compte-region"></select></label>
+        <label data-i18n="compte.region">Région <select id="compte-region"></select></label>
         <button id="compte-connecter" type="button">Se connecter avec Google</button>
-        <button id="compte-deconnecter" type="button" hidden>Se déconnecter de ce poste</button>
+        <button data-i18n="compte.deconnecter" id="compte-deconnecter" type="button" hidden>Se déconnecter de ce poste</button>
       </p>
       <p class="actions">
         <span id="un-clic-etat" class="note">connexion en un clic : …</span>
         <button id="un-clic-activer" type="button" hidden>Activer la connexion en un clic</button>
-        <button id="un-clic-desactiver" type="button" hidden>Désactiver</button>
+        <button data-i18n="compte.un-clic.desactiver" id="un-clic-desactiver" type="button" hidden>Désactiver</button>
       </p>
-      <p id="un-clic-attente" class="note" hidden>Windows va demander d'ouvrir Lymow : acceptez. Cette page se mettra
+      <p data-i18n="compte.un-clic.attente" id="un-clic-attente" class="note" hidden>Windows va demander d'ouvrir Lymow : acceptez. Cette page se mettra
         à jour seule dès la connexion faite.</p>
       <div id="compte-marche" hidden>
-        <p class="note">Repli manuel, si la connexion en un clic est inactive ou n'aboutit pas :</p>
+        <p data-i18n="compte.repli" class="note">Repli manuel, si la connexion en un clic est inactive ou n'aboutit pas :</p>
         <ol>
-          <li>Dans l'onglet qui vient de s'ouvrir, ouvrez les outils de développement (F12), onglet « Réseau ».</li>
-          <li>Cochez « Conserver le journal » (« Preserve log ») <strong>avant</strong> de valider la connexion Google.</li>
-          <li>Connectez-vous avec le compte Google du robot. La page finale ne s'affiche pas : c'est normal.</li>
-          <li>Dans l'onglet Réseau, repérez la ligne qui commence par <code>myapp://callback/?code=</code> et copiez
-            son adresse complète.</li>
-          <li>Astuce : cette adresse apparaît aussi en rouge dans l'onglet « Console » des outils de
+          <li data-i18n="compte.etape1">Dans l'onglet qui vient de s'ouvrir, ouvrez les outils de développement (F12), onglet « Réseau ».</li>
+          <li><span data-i18n="compte.etape2a">Cochez « Conserver le journal » (« Preserve log »)</span> <strong data-i18n="compte.etape2b">avant</strong> <span data-i18n="compte.etape2c">de valider la connexion Google.</span></li>
+          <li data-i18n="compte.etape3">Connectez-vous avec le compte Google du robot. La page finale ne s'affiche pas : c'est normal.</li>
+          <li><span data-i18n="compte.etape4a">Dans l'onglet Réseau, repérez la ligne qui commence par</span> <code>myapp://callback/?code=</code> <span data-i18n="compte.etape4b">et copiez
+            son adresse complète.</span></li>
+          <li data-i18n="compte.etape5">Astuce : cette adresse apparaît aussi en rouge dans l'onglet « Console » des outils de
             développement (message « Failed to launch 'myapp://callback/?code=…' »), souvent plus simple
             à copier que dans « Réseau ».</li>
-          <li>Collez-la ci-dessous et validez sans attendre : le code expire en une minute environ.</li>
+          <li data-i18n="compte.etape6">Collez-la ci-dessous et validez sans attendre : le code expire en une minute environ.</li>
         </ol>
-        <p><a id="compte-lien" target="_blank" rel="noopener noreferrer">Ouvrir de nouveau la page de connexion Google</a></p>
+        <p><a data-i18n="compte.lien" id="compte-lien" target="_blank" rel="noopener noreferrer">Ouvrir de nouveau la page de connexion Google</a></p>
         <form id="compte-formulaire">
-          <label>Adresse de rappel
+          <label data-i18n="compte.adresse">Adresse de rappel
             <input id="compte-adresse" type="password" autocomplete="off" spellcheck="false" class="large">
           </label>
-          <p class="actions"><button type="submit">Valider</button></p>
+          <p class="actions"><button data-i18n="compte.valider" type="submit">Valider</button></p>
         </form>
       </div>
       <div id="compte-choix" hidden>
-        <p class="note">Plusieurs appareils sur ce compte : choisissez celui à piloter.</p>
+        <p data-i18n="compte.choix" class="note">Plusieurs appareils sur ce compte : choisissez celui à piloter.</p>
         <ul id="compte-appareils"></ul>
       </div>
       <p id="compte-message" class="note" role="status"></p>
     </section>
     </details>
-    <details id="volet-journal" class="volet large-bloc" data-volet="journal">
-      <summary>Journal et résultat détaillé</summary>
+    <details id="volet-journal" class="volet large-bloc avance" data-volet="journal">
+      <summary data-i18n="volet.journal">Journal et résultat détaillé</summary>
     <section id="bloc-etat" aria-labelledby="titre-etat">
-      <h2 id="titre-etat">État détaillé du robot</h2>
+      <h2 data-i18n="journal.etat" id="titre-etat">État détaillé du robot</h2>
       <p id="etat-absent" class="note"></p>
       <dl id="etat-liste" class="grille"></dl>
-      <button id="actualiser" type="button">Actualiser</button>
+      <button data-i18n="journal.actualiser" id="actualiser" type="button">Actualiser</button>
     </section>
     <section aria-labelledby="titre-resultat">
-      <h2 id="titre-resultat">Résultat du dernier ordre</h2>
-      <p id="resultat-vide" class="note">Aucun ordre émis.</p>
+      <h2 data-i18n="journal.resultat" id="titre-resultat">Résultat du dernier ordre</h2>
+      <p data-i18n="journal.aucun-ordre" id="resultat-vide" class="note">Aucun ordre émis.</p>
       <div id="resultat-detail"></div>
     </section>
     <section aria-labelledby="titre-journal">
-      <h2 id="titre-journal">Journal de la session</h2>
+      <h2 data-i18n="journal.titre" id="titre-journal">Journal de la session</h2>
       <ol id="journal" class="journal"></ol>
     </section>
     </details>
   </main>
 
+  <script src="/statique/i18n.js"></script>
   <script src="/statique/signalisation.js"></script>
   <script src="/statique/ordres.js"></script>
   <script src="/statique/fleches.js"></script>
@@ -425,5 +436,6 @@
   <script src="/statique/carte.js"></script>
   <script src="/statique/volets.js"></script>
   <script src="/statique/tableau.js"></script>
+  <script src="/statique/avance.js"></script>
 </body>
 </html>

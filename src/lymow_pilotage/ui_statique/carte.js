@@ -6,6 +6,8 @@
   "use strict";
 
   var page = window.LymowPage;
+  var t = window.LymowI18n.t;
+  var derniereReponse = null;  // rejouée au changement de langue
   var dessin = document.getElementById("carte-dessin");
   var NS = dessin.namespaceURI; // espace de noms SVG, lu sur l'élément de la page : aucune adresse écrite ici
   var POLICE_PX = 12; // hauteur des étiquettes, en pixels d'écran
@@ -210,7 +212,7 @@
   /* Le robot apparaît dès qu'une pose est connue ; au repos sans pose, sur sa station, en le disant. */
   function placerLeRobot() {
     robot = window.LymowOrdres.positionAffichee(etatRobot, carte ? carte.station : null);
-    var note = robot ? robot.note : (etatRobot ? "position du robot inconnue" : "");
+    var note = robot ? robot.note : (etatRobot ? t("carte.position-inconnue") : "");
     $("carte-position").textContent = note;
   }
 
@@ -299,13 +301,13 @@
     var ligne = ligneChoisie();
     var texte = "";
     if (ligne && ligne.retouche_possible) {
-      texte = "Retouche possible sur cette zone";
+      texte = t("ajustement.possible");
       if (ligne.sommets_confondus) {
-        texte += " — " + ligne.sommets_confondus + " sommet(s) confondu(s) avec leur voisin : ils seront déplacés ensemble";
+        texte += t("ajustement.confondus", { n: ligne.sommets_confondus });
       }
-      texte += ". La prévisualisation vérifie encore les zones interdites, les passages et les bornes.";
+      texte += t("ajustement.verifie");
     } else if (ligne) {
-      texte = "Retouche impossible sur cette zone : " + ligne.motif + ".";
+      texte = t("ajustement.impossible", { motif: ligne.motif });  // ponytail: motif du serveur, en français
     }
     $("carte-possible").textContent = texte;
     $("carte-previsualiser").disabled = !ligne || !ligne.retouche_possible;
@@ -320,6 +322,7 @@
   }
 
   function recevoir(reponse) {
+    derniereReponse = reponse;
     carte = reponse.carte;
     apercu = null;
     var choix = $("carte-zone");
@@ -336,13 +339,13 @@
       });
     }
     var incomplete = carte && carte.complete === false
-      ? "CARTE INCOMPLÈTE (" + carte.manques.join(" ; ") + ") : affichage seul, aucune retouche possible — "
+      ? t("carte.etat.incomplete", { manques: carte.manques.join(" ; ") })
       : "";
     // Carte de référence (dernière carte complète, gardée sur disque) : dite comme telle, avec sa date.
-    var origine = reponse.reference
+    var origine = reponse.reference  // ponytail: la mention de carte de référence vient du serveur, en français
       ? reponse.reference
-      : "carte reçue à " + (reponse.heure || "?") + (typeof reponse.age_s === "number" ? " (il y a " + Math.round(reponse.age_s) + " s)" : "");
-    $("carte-etat").textContent = carte ? incomplete + origine : "aucune carte reçue pour l'instant : elle est demandée à l'ouverture ; « Actualiser la carte » la redemande";
+      : t("carte.etat.recue", { heure: reponse.heure || "?" }) + (typeof reponse.age_s === "number" ? t("carte.etat.age", { s: Math.round(reponse.age_s) }) : "");
+    $("carte-etat").textContent = carte ? incomplete + origine : t("carte.etat.attente");
     $("carte-note").textContent = reponse.note || "";
     afficherPossibilite();
     placerLeRobot();
@@ -354,7 +357,7 @@
   function nombre(id) {
     var texte = $(id).value.trim();
     if (texte === "") { return null; }
-    if (!/^[+-]?[0-9]+([.,][0-9]+)?$/.test(texte)) { throw new Error("nombre invalide : « " + texte + " »"); }
+    if (!/^[+-]?[0-9]+([.,][0-9]+)?$/.test(texte)) { throw new Error(t("nombre.invalide", { texte: texte })); }
     return Number(texte.replace(",", "."));
   }
 
@@ -383,7 +386,7 @@
   // --- branchements ---------------------------------------------------------
 
   $("carte-actualiser").addEventListener("click", function () {
-    $("carte-etat").textContent = "demande de la carte au robot…";
+    $("carte-etat").textContent = t("carte.etat.demande");
     page.appeler("/api/carte/actualiser").then(recevoir).catch(function (erreur) { $("carte-etat").textContent = erreur.message; });
   });
   $("carte-zoom-plus").addEventListener("click", function () { zoomer(0.7); });
@@ -401,22 +404,21 @@
   $("carte-precision").addEventListener("change", lireReleve);
   // Bon signal le plus proche : proposition seulement (mode assisté) ; rien n'est émis d'ici.
   $("signal-chercher").addEventListener("click", function () {
-    $("signal-etat").textContent = "recherche…";
+    $("signal-etat").textContent = t("signal.recherche");
     fetch("/api/signal" + ($("signal-recent").checked ? "?jours=30" : ""), { credentials: "same-origin", cache: "no-store" })
       .then(function (reponse) { return reponse.json(); })
       .then(function (proposition) {
         signal = proposition;
-        $("signal-etat").textContent = window.LymowOrdres.texteSignal(proposition) || "aucune proposition";
+        $("signal-etat").textContent = window.LymowOrdres.texteSignal(proposition) || t("signal.aucune");
         $("signal-charger").hidden = !(proposition.ordres && proposition.ordres.length);
         dessiner();
       })
-      .catch(function () { $("signal-etat").textContent = "proposition indisponible"; });
+      .catch(function () { $("signal-etat").textContent = t("signal.indisponible"); });
   });
   $("signal-charger").addEventListener("click", function () {
     if (!signal || !signal.ordres) { return; }
     page.chargerSequence(signal.ordres, "signal");
-    $("signal-etat").textContent = "Trajet chargé dans la séquence (" + signal.ordres.length
-      + " pas) : cochez « Composer une séquence », prévisualisez, puis émettez — ou suivez le tracé à la main.";
+    $("signal-etat").textContent = t("signal.charge", { n: signal.ordres.length });
   });
   window.setInterval(function () { if ($("carte-precision").checked) { lireReleve(); } }, 15000);
   $("carte-zone").addEventListener("change", zoneChangee);
@@ -461,15 +463,15 @@
     $("recalage-mesure").textContent = dit.mesure;
     $("recalage-annuler").hidden = !dit.annuler;
     $("recalage-station").hidden = !dit.utiliserLaMesure;
-    $("recalage-ici").textContent = attenteIci ? "Annuler le pointage" : "Le robot est ici";
+    $("recalage-ici").textContent = t(attenteIci ? "recalage.pointage-annuler" : "recalage.ici");
     $("recalage-bandeau").hidden = !attenteIci;
     dessin.classList.toggle("attente-clic", attenteIci);
   }
   function recaler(route, corps) {
     page.appeler(route, corps).then(function (reponse) { dernierRecalage = reponse; afficherRecalage(); })
       .catch(function (erreur) {
-        $("recalage-texte").textContent = "Recalage refusé : " + erreur.message;
-        if (window.LymowTableau) { window.LymowTableau.dire("Recalage refusé : " + erreur.message, "alerte"); }
+        $("recalage-texte").textContent = t("recalage.refuse", { motif: erreur.message });
+        if (window.LymowTableau) { window.LymowTableau.dire(t("recalage.refuse", { motif: erreur.message }), "alerte"); }
       });
   }
   function indiquerLeRobot(position) {
@@ -500,7 +502,7 @@
       // SEC-13 : la distance au bord de zone dans l'axe du robot est dite sur la carte.
       $("carte-rtk").textContent = (etat && etat.localisation_texte ? "— " + etat.localisation_texte : "") + (bord ? " — " + bord : "");
       $("carte-robot-cadrer").disabled = !robot;
-      $("carte-robot-cadrer").title = robot ? "" : "position du robot inconnue";
+      $("carte-robot-cadrer").title = robot ? "" : t("carte.position-inconnue");
       // « Suivre le robot » : la vue reste centrée sur lui, sans changer le zoom.
       if (robot && robot.source === "pose" && $("carte-suivre").checked && !glisse) {
         vue.x = robot.est - vue.l / 2;
@@ -519,5 +521,12 @@
       .catch(function () { return undefined; })
       .then(function () { chargement = false; });
   }
+  // Changement de langue : état de la carte, note de position et bouton de pointage réécrits.
+  window.addEventListener("lymow-langue", function () {
+    if (derniereReponse) { recevoir(derniereReponse); } else { $("carte-etat").textContent = t("carte.etat.vide"); }
+    afficherRecalage();
+  });
+  // ponytail: les info-bulles du dessin (zones, station, robot) restent en français.
+  $("carte-etat").textContent = t("carte.etat.vide");
   charger();
 })();

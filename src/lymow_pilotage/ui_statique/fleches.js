@@ -9,6 +9,10 @@
 (function (racine) {
   "use strict";
 
+  // Textes dans la langue choisie ; hors navigateur (tests Node), en français.
+  var I18n = racine.LymowI18n || (typeof require === "function" ? require("./i18n.js") : null);
+  var t = I18n.t;
+
   var DIRECTIONS = { ArrowUp: "haut", ArrowDown: "bas", ArrowLeft: "gauche", ArrowRight: "droite" };
   var SYMBOLES = {
     haut: "↑", bas: "↓", gauche: "←", droite: "→",
@@ -114,8 +118,9 @@
   }
 
   function texteTotal(total, nombre) {
-    return nombre + " étape" + (nombre > 1 ? "s" : "") + " — " + total.distance_m + " m parcourus, "
-      + total.rotation_deg + "° de rotation, environ " + Math.round(total.duree_s) + " s de mouvement";
+    return t("sequence.total", {
+      etapes: I18n.compte("mot.etape", nombre), m: total.distance_m, deg: total.rotation_deg, s: Math.round(total.duree_s)
+    });
   }
 
   /* File d'attente du mode direct : cinq au plus, l'appui en trop est ignoré (et signalé). */
@@ -147,33 +152,34 @@
     return Boolean(DIRECTIONS[evenement.key]) || evenement.key === "Backspace";
   }
 
-  function metres(valeur) { return "±" + valeur.toFixed(2).replace(".", ",") + " m"; }
+  function metres(valeur) { return "±" + I18n.decimal(valeur.toFixed(2)) + " m"; }
 
   /* Aide à retrouver le signal : la précision de position évolue-t-elle dans le bon sens ? */
   function tendance(avant, apres) {
     if (typeof avant !== "number" || typeof apres !== "number") { return ""; }
-    if (Math.abs(apres - avant) < 0.05) { return "→ stable"; }
-    return apres < avant ? "↘ en amélioration" : "↗ en dégradation";
+    if (Math.abs(apres - avant) < 0.05) { return t("tendance.stable"); }
+    return t(apres < avant ? "tendance.mieux" : "tendance.pire");
   }
 
   function textePrecision(rapport) {
     if (!rapport || typeof rapport.precision_m !== "number") { return ""; }
     var sens = tendance(rapport.precision_avant_m, rapport.precision_m);
-    return " — position " + metres(rapport.precision_m) + (sens ? " " + sens : "");
+    return t("retour.position", { p: metres(rapport.precision_m) }) + (sens ? " " + sens : "");
   }
 
   /* Retour court après une étape : « ↑ 1 m : émise, arrêt acquitté — position non fournie ». */
   function ligneRetour(ordre, rapport) {
     var debut = symbole(ordre) + " : ";
-    if (!rapport) { return debut + "en attente"; }
-    if (rapport.echec) { return debut + "refusée : " + rapport.echec; }
-    if (rapport.simulee) { return debut + "simulée, rien n'est émis"; }
+    if (!rapport) { return debut + t("retour.attente"); }
+    // ponytail: motif d'échec, constat et cause probable viennent du serveur, en français.
+    if (rapport.echec) { return debut + t("retour.refusee", { motif: rapport.echec }); }
+    if (rapport.simulee) { return debut + t("retour.simulee"); }
     var suite = rapport.constat || "";
-    if (rapport.verification === "non vérifiable") { suite = rapport.cause_probable || "position non fournie"; }
+    if (rapport.verification === "non vérifiable") { suite = rapport.cause_probable || t("retour.non-fournie"); }
     // Pose inchangée : la cause probable selon le statut (« en erreur : ordre ignoré », « patinage possible »).
-    else if (rapport.cause_probable) { suite = "le robot n'a pas bougé — " + rapport.cause_probable; }
-    if (rapport.verification === "vérifiée") { suite = "déplacement constaté"; }
-    return debut + "émise, arrêt acquitté" + (suite ? " — " + suite : "") + textePrecision(rapport);
+    else if (rapport.cause_probable) { suite = t("retour.immobile", { cause: rapport.cause_probable }); }
+    if (rapport.verification === "vérifiée") { suite = t("retour.constate"); }
+    return debut + t("retour.emise") + (suite ? " — " + suite : "") + textePrecision(rapport);
   }
 
   /* Bascule unique des flèches : un seul état pour les boutons sur la vidéo ET le clavier. */
@@ -185,7 +191,7 @@
   }
 
   function libelleBascule(actives) {
-    return actives ? "Flèches : ACTIVES — désactiver" : "Flèches : activer";
+    return t(actives ? "fleches.actives" : "fleches.activer");
   }
 
   /* Échap = STOP complet, toujours, comme Espace (revue du 2026-10-12 : la page peut croire qu'aucun ordre

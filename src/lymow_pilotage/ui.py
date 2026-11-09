@@ -57,6 +57,8 @@ FICHIERS = {
     "pave.js": "text/javascript",
     "volets.js": "text/javascript",
     "tableau.js": "text/javascript",
+    "i18n.js": "text/javascript",
+    "avance.js": "text/javascript",
 }
 # Ordres sans mouvement émis d'un clic depuis le tableau de bord (retour du propriétaire, 2026-10-12 : moins
 # d'étapes). La page garde deux clics pour « reprendre » (les lames peuvent redémarrer) et une confirmation

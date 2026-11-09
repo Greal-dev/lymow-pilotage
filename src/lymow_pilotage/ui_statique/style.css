@@ -370,3 +370,41 @@ button.pastille-etat { cursor: pointer; min-height: 2.5rem; }
 .fleche.bas-gauche { grid-column: 1; grid-row: 3; }
 .fleche.bas-droite { grid-column: 3; grid-row: 3; }
 .croix .fleche.haut-gauche, .croix .fleche.haut-droite, .croix .fleche.bas-gauche, .croix .fleche.bas-droite { font-size: 1.4rem; }
+
+/* --- Interface épurée (2026-11-09) : mode avancé, langue, compte, en-tête lisible sur portable ------------- */
+/* Le mode avancé ne fait que masquer : STOP, la main, Retour base et Annuler la tâche n'ont jamais la classe « avance ». */
+body:not(.mode-avance) .avance { display: none !important; }
+.entete { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "marque reglages" "boutons boutons"; gap: 0.35rem 0.8rem; }
+.entete .marque { grid-area: marque; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 0.8rem; }
+.entete .marque p { margin: 0; color: var(--discret); font-size: 0.9rem; min-width: 0; }
+.entete .resume strong { color: var(--texte); }
+.reglages-entete { grid-area: reglages; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.4rem; }
+.reglages-entete select { width: auto; }
+.interrupteur { display: inline-flex; align-items: center; gap: 0.3rem; margin: 0; font-size: 0.9rem; cursor: pointer; white-space: nowrap; }
+.interrupteur input { width: auto; margin: 0; accent-color: var(--accent); }
+.compte-identite { max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85rem; color: var(--discret); }
+.compte-identite:empty { display: none; }
+.compte-entete { font-weight: 700; white-space: nowrap; }
+.compte-entete:not(.connecte) { background: var(--accent); border-color: var(--accent); color: var(--fond); }
+.entete .main-boutons { grid-area: boutons; justify-content: flex-end; }
+/* Robot en erreur : la seule sortie, « Annuler la tâche », bien en évidence. */
+#erreur-annuler { background: var(--danger); border-color: var(--danger); color: #ffffff; font-weight: 800; min-height: 2.6rem; margin: 0.2rem 0; }
+#erreur-libelle { font-weight: 800; color: var(--danger); }
+@media (max-width: 40rem) {
+  /* Portable : trois rangées compactes ; l'état se lit dans les pastilles, STOP garde toute sa place. */
+  .entete { padding: 0.3rem 0.5rem; grid-template-columns: minmax(0, 1fr); grid-template-areas: "marque" "reglages" "boutons"; }
+  .entete #etat-resume { display: none; }
+  .reglages-entete { justify-content: flex-start; }
+  .entete .main-boutons { justify-content: stretch; }
+  .entete .main-boutons .etat-main { flex-basis: 100%; font-size: 0.8rem; }
+  .entete .main-boutons .etat-main:empty { display: none; }
+  .entete .main-boutons button { flex: 1 1 0; min-width: 0; min-height: 2.8rem; padding: 0 0.3rem; font-size: 0.9rem; }
+  .entete .main-boutons .stop { flex: 1.2 1 0; font-size: 1.3rem; }
+  .stop small { display: none; }
+  main { padding: 0.4rem; gap: 0.6rem; }
+  #bloc-pilotage { padding: 0.4rem; }
+  .pilotage { flex-wrap: wrap; justify-content: center; }
+  .reglages { flex-basis: 100%; }
+  .actions-robot button { font-size: 0.8rem; }
+  .compte-identite { max-width: 7rem; }
+}

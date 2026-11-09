@@ -285,4 +285,4 @@ def test_liaison_lente_desarme_apres_le_delai_sans_aucune_trame_et_stop_reste_im
 
     executer(scenario())
     pave = (ui.STATIQUE / "pave.js").read_text(encoding="utf-8")
-    assert "Liaison lente : en attente d'une nouvelle trame du robot…" in pave
+    assert 't("fleches.liaison-lente")' in pave and "Liaison lente : en attente d'une nouvelle trame du robot…" in (ui.STATIQUE / "i18n.js").read_text(encoding="utf-8")

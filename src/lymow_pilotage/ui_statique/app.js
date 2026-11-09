@@ -3,6 +3,9 @@
 (function () {
   "use strict";
 
+  var I18n = window.LymowI18n;
+  var t = I18n.t;
+  var derniereImage = null;  // rejouée au changement de langue
   var libelles = {};
   var bornes = {};
   var sequence = [];
@@ -104,10 +107,10 @@
   }
 
   function signalerErreur(erreur) {
-    $("previsualisation-titre").textContent = "Refusé : " + erreur.message;
+    $("previsualisation-titre").textContent = t("previsualisation.refusee", { motif: erreur.message });
     vider($("previsualisation-detail"));
     afficherEtapes([], "");
-    oublierPrevisualisation("Prévisualisation refusée : " + erreur.message);
+    oublierPrevisualisation(t("previsualisation.oubliee", { motif: erreur.message }));
   }
 
   // --- état -----------------------------------------------------------------
@@ -121,6 +124,7 @@
   }
 
   function appliquer(image) {
+    derniereImage = image;
     modeReel = image.mode === "réel";
     var demonstration = image.mode === "démonstration";
     emission = modeReel || demonstration;
@@ -128,12 +132,12 @@
     $("bandeau-demo").hidden = !demonstration;
     $("bandeau-arret").hidden = true; // le serveur répond
     if (image.serveur) {
-      $("version-serveur").textContent = "version " + image.serveur.empreinte + ", démarrée à " + image.serveur.demarre;
+      $("version-serveur").textContent = t("version.texte", { empreinte: image.serveur.empreinte, demarre: image.serveur.demarre });
     }
     $("video-demarrer").hidden = demonstration;
-    $("mode").textContent = modeReel ? "MODE RÉEL" : image.mode;
+    $("mode").textContent = modeReel ? t("mode.reel") : t("mode." + image.mode);
     $("mode").className = "pastille" + (modeReel ? " reel" : "");
-    $("liaison").textContent = image.liaison + (image.occupe ? " — ordre en cours" : "");
+    $("liaison").textContent = image.liaison + (image.occupe ? t("liaison.occupe") : "");  // ponytail: image.liaison vient du serveur, en français
     // Statut du robot en clair près des ordres, et le refus de mouvement dit avant toute prévisualisation.
     $("ordres-etat").textContent = Ordres.texteEtatDesOrdres(image.ordres);
     $("ordres-etat").classList.toggle("refuse", Boolean(image.ordres && image.ordres.mouvement_refuse && !image.ordres.suspendue));
@@ -151,11 +155,11 @@
     $("localisation").className = "localisation " + (image.etat ? image.etat.localisation : "perdue");
     $("localisation-detail").textContent = image.etat ? image.etat.localisation_detail : "";
     // Boutons indisponibles : grisés, leur raison en info-bulle — jamais un texte permanent.
-    griser("recalage", !(image.ordres && image.ordres.recalage_conseille) ? "Proposé quand le signal est revenu mais que la position calculée s'écarte de la position satellite." : occupe ? "Un ordre est en cours." : "");
-    griser("reprendre-bouton", image.ordres && image.ordres.reprise_possible ? "" : "Le robot n'est pas en pause : rien à reprendre.");
-    griser("bon-signal-bouton", image.carte_connue ? "" : "Aucune carte connue.");
+    griser("recalage", !(image.ordres && image.ordres.recalage_conseille) ? t("raison.recalage") : occupe ? t("commun.ordre-en-cours") : "");
+    griser("reprendre-bouton", image.ordres && image.ordres.reprise_possible ? "" : t("raison.pas-en-pause"));
+    griser("bon-signal-bouton", image.carte_connue ? "" : t("raison.pas-de-carte"));
     ["pause-bouton", "base-bouton", "annuler-bouton", "pave-plateau"].forEach(function (id) {
-      griser(id, image.liaison_suspendue ? "La main est rendue à l'application Lymow." : occupe ? "Un ordre est en cours : attendez sa fin, ou STOP." : "");
+      griser(id, image.liaison_suspendue ? t("raison.main-rendue") : occupe ? t("raison.occupe") : "");
     });
     if (!$("base-bouton").disabled && image.ordres && image.ordres.retour_base) {
       $("base-bouton").title = Ordres.bulleRetourBase(image.ordres.retour_base);
@@ -185,7 +189,7 @@
     $("voyants-etat").textContent = image.voyants ? image.voyants.texte : "";
     dernierPhares = Ordres.boutonPhares(image.phares);
     $("phares-libelle").textContent = dernierPhares.libelle;
-    griser("phares-bouton", image.liaison_suspendue ? "La main est rendue à l'application Lymow." : occupe ? "Un ordre est en cours : rappuyez à la fin du pas." : "");
+    griser("phares-bouton", image.liaison_suspendue ? t("raison.main-rendue") : occupe ? t("raison.phares-occupe") : "");
     var plateau = Ordres.textePlateau(image.plateau);
     $("plateau-etat").textContent = plateau.texte;
     $("plateau-jauge").hidden = !plateau.jauge;
@@ -199,7 +203,7 @@
     $("diagnostic-texte").textContent = image.diagnostic_texte || "";
     dernieresOrdres = image.ordres || null;
     $("rendre-main").disabled = liaisonSuspendue;
-    $("rendre-main").title = liaisonSuspendue ? "La main est déjà rendue : « Prendre la main » la reprend." : "";
+    $("rendre-main").title = liaisonSuspendue ? t("rendre.deja") : "";
     avancerRendre();
     afficherAttestation(image.attestation);
     afficherEmission();
@@ -208,6 +212,7 @@
     // Aucun compte connecté (hors démonstration) : la section « Compte » s'ouvre d'elle-même.
     if (window.LymowVolets && image.compte && !demonstration) { window.LymowVolets.compte(image.compte.connecte); }
     afficherCompte(image.compte);
+    afficherCompteEnTete(image.compte, demonstration);
     if (window.LymowTableau) {
       image.alerteBord = $("bord-zone").classList.contains("alerte-carte");
       window.LymowTableau.afficher(image);
@@ -225,7 +230,7 @@
       $("etat-absent").textContent = image.liaison;
       bloc.classList.remove("perime");
     } else {
-      $("etat-absent").textContent = image.etat.perime ? "État périmé ou jamais reçu : valeurs grisées." : "";
+      $("etat-absent").textContent = image.etat.perime ? t("journal.perime") : "";
       bloc.classList.toggle("perime", Boolean(image.etat.perime));
       CLES_ETAT.forEach(function (cle) {
         liste.appendChild(element("dt", libelle(cle)));
@@ -244,7 +249,7 @@
       reprise = image.resultat && image.resultat.reprise && image.resultat.reprise.ordres ? image.resultat.reprise : null;
       $("reprise-bloc").hidden = !reprise;
       if (reprise) { $("reprise").textContent = Ordres.libelleReprise(reprise); }
-      if (image.resultat && !occupe && !previsualisation) { noteEmission = "Ordre terminé (résultat plus bas) : prévisualisez le suivant."; afficherEmission(); }
+      if (image.resultat && !occupe && !previsualisation) { noteEmission = t("emission.termine"); afficherEmission(); }
     }
     var journal = $("journal");
     vider(journal);
@@ -255,10 +260,6 @@
 
   // --- attestation « lames à l'arrêt » de l'opérateur (SEC-01b) ---------------
   // La page propose et affiche ; le serveur seul décide (statut attestable, durée, retrait).
-
-  var CONFIRMATION_ATTESTATION = "Vous attestez que les lames sont à l'arrêt. L'outil ne peut pas le vérifier.\n\n"
-    + "Le robot se déclare pourtant dans un statut où ses lames peuvent tourner. L'attestation autorise le "
-    + "pilotage manuel pendant 10 minutes au plus ; STOP, ou le bouton « Retirer », la retire aussitôt.";
 
   function afficherAttestation(attestation) {
     var message = Ordres.messageStatutDeclare(attestation);
@@ -279,7 +280,7 @@
     var maintenant = Date.now();
     if (Ordres.secondClic(armes[cle] || 0, maintenant)) { armes[cle] = 0; return true; }
     armes[cle] = maintenant;
-    dire(invite + " — cliquez une seconde fois pour confirmer (5 s).", "alerte");
+    dire(t("confirmer.second", { invite: invite }), "alerte");
     var bouton = document.activeElement;
     if (bouton && bouton.classList) {
       bouton.classList.add("a-confirmer");
@@ -289,36 +290,36 @@
   }
 
   async function poserAttestation() {
-    if (!deuxClics("attestation", CONFIRMATION_ATTESTATION.split("\n")[0])) { return; }
+    if (!deuxClics("attestation", t("attestation.confirmer"))) { return; }
     try {
       await appeler("/api/attestation/poser", { confirmer: true });
       $("attestation-erreur").textContent = "";
     } catch (erreur) {
-      $("attestation-erreur").textContent = "Attestation refusée : " + erreur.message;
+      $("attestation-erreur").textContent = t("attestation.refusee", { motif: erreur.message });
     }
   }
 
   function retirerAttestation() {
     appeler("/api/attestation/retirer").catch(function (erreur) {
-      $("attestation-erreur").textContent = "Retrait refusé : " + erreur.message + " — utilisez STOP.";
+      $("attestation-erreur").textContent = t("attestation.retrait-refuse", { motif: erreur.message });
     });
   }
 
   function afficherBornes() {
     var textes = {
-      "angle": "jusqu'à " + bornes.angle_max_deg + "°",
-      "distance": "jusqu'à " + bornes.distance_max_m + " m",
-      "duree": "jusqu'à " + bornes.duree_max_s + " s",
-      "vitesse-angulaire": bornes.vitesse_angulaire_min + " à " + bornes.vitesse_angulaire_max + " (défaut " + bornes.vitesse_angulaire_max + ")",
-      "vitesse-lineaire": bornes.vitesse_lineaire_min + " à " + bornes.vitesse_lineaire_max + " (défaut " + bornes.vitesse_lineaire_max + ")",
-      "hauteur": "entier de " + bornes.hauteur_min_mm + " à " + bornes.hauteur_max_mm,
-      "essai-vitesse": bornes.vitesse_lineaire_min + " à " + bornes.essai_vitesse_max + " (défaut " + bornes.essai_vitesse + ")",
-      "essai-fenetre": bornes.essai_observation_min + " à " + bornes.essai_observation_max + " (défaut " + bornes.essai_observation + ")"
+      "angle": t("borne.jusqua-deg", { v: bornes.angle_max_deg }),
+      "distance": t("borne.jusqua-m", { v: bornes.distance_max_m }),
+      "duree": t("borne.jusqua-s", { v: bornes.duree_max_s }),
+      "vitesse-angulaire": t("borne.plage", { min: bornes.vitesse_angulaire_min, max: bornes.vitesse_angulaire_max, defaut: bornes.vitesse_angulaire_max }),
+      "vitesse-lineaire": t("borne.plage", { min: bornes.vitesse_lineaire_min, max: bornes.vitesse_lineaire_max, defaut: bornes.vitesse_lineaire_max }),
+      "hauteur": t("borne.entier", { min: bornes.hauteur_min_mm, max: bornes.hauteur_max_mm }),
+      "essai-vitesse": t("borne.plage", { min: bornes.vitesse_lineaire_min, max: bornes.essai_vitesse_max, defaut: bornes.essai_vitesse }),
+      "essai-fenetre": t("borne.plage", { min: bornes.essai_observation_min, max: bornes.essai_observation_max, defaut: bornes.essai_observation })
     };
     document.querySelectorAll("[data-borne]").forEach(function (noeud) {
       noeud.textContent = textes[noeud.dataset.borne] || "";
     });
-    $("exposition-essai").textContent = "Exposition : " + bornes.exposition_essai + ".";
+    $("exposition-essai").textContent = t("borne.exposition", { v: bornes.exposition_essai });  // ponytail: valeur du serveur, en français
   }
 
   // --- compte ---------------------------------------------------------------
@@ -326,24 +327,33 @@
 
   function messageCompte(texte) { $("compte-message").textContent = texte; }
 
+  /* En-tête : UN compte à la fois. Connecté : son identifiant (l'appareil) et « Se déconnecter » ; sinon « Se connecter ». */
+  function afficherCompteEnTete(compte, demonstration) {
+    var connecte = Boolean(compte && compte.connecte);
+    $("compte-identite").textContent = connecte ? compte.appareil || "" : "";
+    $("compte-entete").textContent = t(connecte ? "compte.entete.deconnecter" : "compte.entete.connecter");
+    $("compte-entete").classList.toggle("connecte", connecte);
+    $("compte-entete").title = demonstration ? t("compte.entete.demo") : connecte
+      ? t("compte.entete.titre", { appareil: compte.appareil, region: compte.region }) : t("compte.entete.aucun");
+  }
+
   function afficherCompte(compte) {
     if (!compte) { return; }
     $("bloc-compte").classList.toggle("mise-en-avant", !compte.connecte);
     $("compte-etat").textContent = compte.connecte
-      ? "Connecté — région " + compte.region + ", appareil " + compte.appareil + "."
-      : "Non connecté : aucun compte enregistré sur ce poste.";
+      ? t("compte.connecte", { region: compte.region, appareil: compte.appareil })
+      : t("compte.non-connecte");
     $("compte-deconnecter").hidden = !compte.connecte;
-    $("compte-connecter").textContent = compte.connecte ? "Changer de compte Google" : "Se connecter avec Google";
+    $("compte-connecter").textContent = t(compte.connecte ? "compte.changer" : "compte.google");
     if (!compte.tentative) { $("compte-marche").hidden = true; $("un-clic-attente").hidden = true; }
     var unClic = compte.un_clic || {};
     unClicActif = Boolean(unClic.actif);
     $("un-clic-etat").textContent = !unClic.pris_en_charge
-      ? "connexion en un clic : non prise en charge sur ce système"
-      : "connexion en un clic : " + (unClic.actif ? "active" : unClic.perime
-        ? "à réparer (elle pointe vers un autre emplacement de lymow.exe)" : "inactive")
-        + (unClic.etranger ? " (un autre programme occupe déjà le protocole myapp)" : "");
+      ? t("unclic.non-pris")
+      : t("unclic.etat", { etat: t(unClic.actif ? "unclic.active" : unClic.perime ? "unclic.perime" : "unclic.inactive") })
+        + (unClic.etranger ? t("unclic.etranger") : "");
     $("un-clic-activer").hidden = !unClic.pris_en_charge || unClic.actif || Boolean(unClic.etranger);
-    $("un-clic-activer").textContent = unClic.perime ? "Réparer la connexion en un clic" : "Activer la connexion en un clic";
+    $("un-clic-activer").textContent = t(unClic.perime ? "unclic.reparer" : "unclic.activer");
     $("un-clic-desactiver").hidden = !(unClic.actif || unClic.perime);
     var choix = $("compte-choix");
     choix.hidden = !compte.choix;
@@ -355,7 +365,7 @@
       bouton.type = "button";
       bouton.addEventListener("click", function () {
         appeler("/api/compte/choisir", { appareil: propose.appareil })
-          .then(function () { messageCompte("Connexion réussie."); })
+          .then(function () { messageCompte(t("compte.reussie")); })
           .catch(function (erreur) { messageCompte(erreur.message); });
       });
       ligne.appendChild(bouton);
@@ -384,7 +394,7 @@
       return;
     }
     if (!/^https:/.test(reponse.url)) {
-      messageCompte("Adresse de connexion inattendue : rien n'a été ouvert.");
+      messageCompte(t("compte.adresse-inattendue"));
       return;
     }
     $("compte-lien").href = reponse.url;
@@ -393,7 +403,7 @@
     $("un-clic-attente").hidden = !unClicActif;
     // Navigation dans un nouvel onglet, sans lien de retour vers cette page.
     window.open(reponse.url, "_blank", "noopener,noreferrer");
-    messageCompte("Si aucun onglet ne s'est ouvert, utilisez le lien ci-dessous. Tentative valable 10 minutes.");
+    messageCompte(t("compte.onglet"));
   }
 
   async function validerConnexion(evenement) {
@@ -401,16 +411,16 @@
     var champ = $("compte-adresse");
     var adresse = champ.value;
     champ.value = ""; // l'adresse ne reste jamais dans la page, succès ou non
-    messageCompte("Vérification en cours…");
+    messageCompte(t("compte.verification"));
     try {
       var reponse = await appeler("/api/compte/valider", { adresse: adresse });
       adresse = "";
       $("compte-marche").hidden = true;
-      messageCompte(reponse.appareils ? "Choisissez l'appareil à piloter." : "Connexion réussie.");
+      messageCompte(t(reponse.appareils ? "compte.choisir" : "compte.reussie"));
     } catch (erreur) {
       adresse = "";
       $("compte-marche").hidden = true;
-      messageCompte(erreur.message + " Recommencez avec « Se connecter avec Google ».");
+      messageCompte(t("compte.recommencer", { motif: erreur.message }));
     }
   }
 
@@ -421,7 +431,7 @@
     + "ou la commande « lymow rappel-desinstaller ».";
 
   async function reglerUnClic(activer) {
-    if (activer && !deuxClics("un-clic", "Activer la connexion en un clic")) { return; }
+    if (activer && !deuxClics("un-clic", t("compte.un-clic.confirmer"))) { return; }
     try {
       var reponse = await appeler("/api/compte/un-clic", { activer: activer });
       messageCompte(reponse.message);
@@ -431,13 +441,25 @@
   }
 
   async function deconnecter() {
-    if (!deuxClics("deconnecter", "Effacer l'accès au compte de ce poste")) { return; }
+    if (!deuxClics("deconnecter", t("compte.effacer"))) { return; }
     try {
       await appeler("/api/compte/deconnecter");
-      messageCompte("Compte effacé de ce poste.");
+      messageCompte(t("compte.efface"));
+      dire(t("compte.efface"), "info");
     } catch (erreur) {
       messageCompte(erreur.message);
+      dire(erreur.message, "alerte");  // ponytail: refus du serveur, en français
     }
+  }
+
+  /* Bouton du compte, en tête : connecté → déconnexion (deux clics) ; sinon la connexion habituelle, volet « Compte » ouvert
+   * pour le repli manuel et le choix de l'appareil. Mêmes routes, même flux que le volet. */
+  async function compteEnTete() {
+    if (derniereImage && derniereImage.mode === "démonstration") { dire(t("compte.entete.demo"), "info"); return; }
+    if (derniereImage && derniereImage.compte && derniereImage.compte.connecte) { await deconnecter(); return; }
+    $("volet-compte").open = true;
+    await commencerConnexion();
+    if ($("compte-message").textContent) { dire($("compte-message").textContent, "info"); }
   }
 
   // --- ordres ---------------------------------------------------------------
@@ -446,7 +468,7 @@
     var texte = champ.value.trim();
     if (texte === "") { return null; }
     var motif = entier ? /^[0-9]+$/ : /^[+-]?[0-9]+([.,][0-9]+)?$/;
-    if (!motif.test(texte)) { throw new Error("nombre invalide : « " + texte + " »"); }
+    if (!motif.test(texte)) { throw new Error(t("nombre.invalide", { texte: texte })); }
     return Number(texte.replace(",", "."));
   }
 
@@ -520,7 +542,7 @@
     var reponse = { ordres: titre, identifiant: identifiant };
     etapes = etapes && etapes.length ? etapes : [titre];
     $("previsualisation-titre").textContent = etapes.length > 1
-      ? "Séquence de " + etapes.length + " étapes, émises dans cet ordre :" : "Un ordre sera émis :";
+      ? t("previsualisation.sequence", { n: etapes.length }) : t("previsualisation.un-ordre");
     // La liste vient du serveur : c'est exactement ce qui partira, étape par étape.
     // SEC-13 : un pas que le garde-fou carte raccourcira ou refusera est annoncé ici, avant « Émettre ».
     afficherEtapes(etapes, [(gardeCarte || []).join(" ; "), Ordres.avertissementOrdreSeul(etapes, estTache ? 0 : sequence.length)]
@@ -528,8 +550,8 @@
     vider($("previsualisation-detail"));
     rendre(detail, $("previsualisation-detail"));
     if (!reponse.identifiant) {
-      var motif = detail && detail.motif ? detail.motif : "voir le détail ci-dessus";
-      noteEmission = emission ? "Prévisualisation refusée, rien à émettre : " + motif : "";
+      var motif = detail && detail.motif ? detail.motif : t("previsualisation.voir");
+      noteEmission = emission ? t("previsualisation.rien", { motif: motif }) : "";
       afficherEmission();
       return;
     }
@@ -538,25 +560,26 @@
       texte: reponse.ordres,
       tache: Boolean(estTache),
       minuterie: window.setTimeout(function () {
-        oublierPrevisualisation("Prévisualisation expirée : prévisualisez de nouveau.");
+        oublierPrevisualisation(t("previsualisation.expiree"));
       }, bornes.previsualisation_s * 1000)
     };
     $("emettre").textContent = Ordres.libelleEmission(etapes);
-    noteEmission = "Valable " + bornes.previsualisation_s + " s, pour "
-      + (etapes.length > 1 ? "ces " + etapes.length + " étapes" : "cet ordre") + " seulement.";
+    noteEmission = t("emission.valable", {
+      s: bornes.previsualisation_s, quoi: etapes.length > 1 ? t("emission.ces-etapes", { n: etapes.length }) : t("emission.cet-ordre")
+    });
     afficherEmission();
   }
 
   async function emettre() {
     if (!previsualisation) { return; }
     var courante = previsualisation;
-    if (courante.tache && !deuxClics("emettre", "Émettre « " + courante.texte + " » vers le robot")) { return; }
-    oublierPrevisualisation("Émission demandée…");
+    if (courante.tache && !deuxClics("emettre", t("emission.confirmer", { texte: courante.texte }))) { return; }
+    oublierPrevisualisation(t("emission.demandee"));
     try {
       await appeler("/api/emettre", { identifiant: courante.identifiant });
-      noteEmission = "Ordre accepté : le résultat s'affichera plus bas. Prévisualisez ensuite le suivant.";
+      noteEmission = t("emission.acceptee");
     } catch (erreur) {
-      noteEmission = "Émission refusée : " + erreur.message + " — prévisualisez de nouveau.";
+      noteEmission = t("emission.refusee", { motif: erreur.message });
     }
     afficherEmission();
   }
@@ -574,14 +597,14 @@
       var reponse = await appeler("/api/stop");
       if (reponse && reponse.bilan) {
         afficherEtapes([], "");
-        $("previsualisation-titre").textContent = "STOP (simulation)";
+        $("previsualisation-titre").textContent = t("stop.simulation");
         vider($("previsualisation-detail"));
         rendre(reponse.bilan, $("previsualisation-detail"));
       } else {
-        noteEmission = "STOP envoyé : tout est annulé, le robot est arrêté et sa tâche mise en pause. Réactivez les flèches pour repartir.";
+        noteEmission = t("stop.envoye");
       }
     } catch (erreur) {
-      noteEmission = "STOP refusé : " + erreur.message;
+      noteEmission = t("stop.refuse", { motif: erreur.message });
     }
     afficherEmission();
   }
@@ -593,7 +616,7 @@
     vider(liste);
     sequence.forEach(function (ordre, rang) {
       var ligne = element("li", texteOrdre(ordre) + " ");
-      [["Monter", -1], ["Descendre", 1], ["Retirer", 0]].forEach(function (action) {
+      [[t("sequence.monter"), -1], [t("sequence.descendre"), 1], [t("sequence.retirer"), 0]].forEach(function (action) {
         var bouton = element("button", action[0]);
         bouton.type = "button";
         bouton.addEventListener("click", function () {
@@ -640,7 +663,7 @@
       appeler("/api/video/arreter").catch(function () { return undefined; });
     }
     $("video-reessayer").hidden = true;
-    etatVideo(texte || "arrêtée");
+    etatVideo(texte || t("video.arretee"));
   }
 
   /* Échec : dit en clair où ça bloque, rapporté au serveur (qui libère la session), « Réessayer » proposé. */
@@ -648,7 +671,7 @@
     fermerVideo();
     videoOuverte = false;
     etapeVideo("echec", motif);
-    etatVideo("échec : " + motif);
+    etatVideo(t("video.echec", { motif: motif }));  // ponytail: les motifs d'échec vidéo restent en français
     $("video-reessayer").hidden = false;
   }
 
@@ -656,13 +679,13 @@
     fermerVideo();
     $("video-demarrer").disabled = true;
     $("video-reessayer").hidden = true;
-    etatVideo("demande des réglages au cloud Lymow…");
+    etatVideo(t("video.reglages"));
     var reglages;
     try {
       reglages = await appeler("/api/video/demarrer");
     } catch (erreur) {  // le serveur a déjà écrit le refus et son code dans le fil et le journal
       fermerVideo();
-      etatVideo("refusée par l'interface : " + erreur.message);
+      etatVideo(t("video.refusee", { motif: erreur.message }));
       $("video-reessayer").hidden = false;
       return;
     }
@@ -697,7 +720,7 @@
         window.clearTimeout(video.minuterie);
         etape = "connexion établie";
         etapeVideo("connexion-etablie");
-        etatVideo("connexion établie");
+        etatVideo(t("video.etablie"));
       } else if (pc.connectionState === "failed") {
         echecVideo("liaison vidéo en échec après l'étape : " + etape);
       } else {
@@ -785,19 +808,19 @@
   // Tâches : action immédiate, sans prévisualisation ni boîte de dialogue — sauf « annuler » (confirmation), et « reprendre », qui relance les lames : deux clics, le second dans les 5 s.
   var reprendreArme = 0;
   async function lancerTache(nom, bouton) {
-    if (nom === "annuler" && !deuxClics("annuler", "Annuler la tâche (ABANDONNÉE : le robot s'arrête sur place)")) { return; }
+    if (nom === "annuler" && !deuxClics("annuler", t("tache.annuler-confirmer"))) { return; }
     if (nom === "reprendre" && !Ordres.secondClic(reprendreArme, Date.now())) {
       reprendreArme = Date.now();
-      dire("Reprendre relance les lames : cliquez une seconde fois pour confirmer (5 s).", "alerte");
+      dire(t("tache.reprendre-confirmer"), "alerte");
       if (bouton) { bouton.classList.add("a-confirmer"); window.setTimeout(function () { bouton.classList.remove("a-confirmer"); }, 5000); }
       return;
     }
     reprendreArme = 0;
     try {
       var reponse = await appeler("/api/tache", { nom: nom, confirmer: true });
-      if (reponse.simulation) { dire("Simulation : « " + nom + " » parcouru, rien n'est émis.", "info"); }
+      if (reponse.simulation) { dire(t("tache.simulation", { nom: t("tache." + nom) }), "info"); }
     } catch (erreur) {
-      dire("« " + nom + " » refusé : " + erreur.message, "alerte");
+      dire(t("tache.refusee", { nom: t("tache." + nom), motif: erreur.message }), "alerte");
     }
   }
   function dire(texte, gravite) {
@@ -813,9 +836,9 @@
     // Un clic, sans prévisualisation : ordre sans mouvement. Le serveur dit ensuite, dans le fil, si le robot a obéi.
     try {
       var reponse = await appeler("/api/phares", { allumer: dernierPhares.allumer });
-      if (reponse.simulation) { dire("Phares : simulation, rien n'est émis.", "info"); }
+      if (reponse.simulation) { dire(t("phares.simulation"), "info"); }
     } catch (erreur) {
-      dire("Phares : refusé — " + erreur.message, "alerte");
+      dire(t("phares.refuse", { motif: erreur.message }), "alerte");
     }
   });
   document.querySelectorAll("[data-voyants]").forEach(function (bouton) {
@@ -823,45 +846,45 @@
       // Voyants LED (pas les phares) : un clic, sans prévisualisation ; pendant un pas, le serveur met en attente.
       try {
         var reponse = await appeler("/api/voyants", { allumer: bouton.dataset.voyants === "allumer" });
-        if (reponse.simulation) { $("voyants-etat").textContent = "Simulation : rien n'est émis."; }
+        if (reponse.simulation) { $("voyants-etat").textContent = t("voyants.simulation"); }
       } catch (erreur) {
-        $("voyants-etat").textContent = "Refusé : " + erreur.message;
+        $("voyants-etat").textContent = t("commun.refuse", { motif: erreur.message });
       }
     });
   });
   document.querySelectorAll("[data-plateau-essai]").forEach(function (bouton) {
     bouton.addEventListener("click", async function () {
-      if (!deuxClics("plateau-" + bouton.dataset.plateauEssai, "Essai plateau : " + bouton.textContent)) { return; }
+      if (!deuxClics("plateau-" + bouton.dataset.plateauEssai, t("essai.plateau.confirmer", { libelle: bouton.textContent }))) { return; }
       try {
         await appeler("/api/plateau/essai", { ordre: bouton.dataset.plateauEssai, confirmer: true });
-        $("plateau-essai-etat").textContent = "Ordre émis : le résultat s'affiche dans « Résultat ». Regardez le plateau.";
+        $("plateau-essai-etat").textContent = t("essai.plateau.emis");
       } catch (erreur) {
-        $("plateau-essai-etat").textContent = "Refusé : " + erreur.message;
+        $("plateau-essai-etat").textContent = t("commun.refuse", { motif: erreur.message });
       }
     });
   });
   $("nettoyage-essai").addEventListener("click", async function () {
-    if (!deuxClics("nettoyage", "Essai de levée de nettoyage")) { return; }
+    if (!deuxClics("nettoyage", t("nettoyage.confirmer"))) { return; }
     try {
       await appeler("/api/plateau/pas-leve", { confirmer: true });
-      $("nettoyage-etat").textContent = "Essai autorisé 2 minutes : un pas à la fois, avec les flèches.";
+      $("nettoyage-etat").textContent = t("nettoyage.autorise");
     } catch (erreur) {
-      $("nettoyage-etat").textContent = "Refusé : " + erreur.message;
+      $("nettoyage-etat").textContent = t("commun.refuse", { motif: erreur.message });
     }
   });
   $("garde-carte").addEventListener("change", async function () {
     try {
       await appeler("/api/garde-carte", { arreter: $("garde-carte").checked });
     } catch (erreur) {
-      $("pause-etat").textContent = "Réglage refusé : " + erreur.message;
+      $("pause-etat").textContent = t("options.garde.refuse", { motif: erreur.message });
     }
   });
   $("erreur-annuler").addEventListener("click", async function () {
-    if (!deuxClics("erreur-annuler", "Annuler la tâche (ABANDONNÉE ; effet sur une erreur de pare-chocs inconnu)")) { return; }
+    if (!deuxClics("erreur-annuler", t("erreur.confirmer"))) { return; }
     try {
       await appeler("/api/erreur/annuler", { confirmer: true });
     } catch (erreur) {
-      $("erreur-suite").textContent = "Refusé : " + erreur.message;
+      $("erreur-suite").textContent = t("commun.refuse", { motif: erreur.message });
     }
   });
   $("diagnostic-rtk").addEventListener("change", async function () {
@@ -870,7 +893,7 @@
       await appeler("/api/diagnostic-rtk", { actif: $("diagnostic-rtk").checked });
     } catch (erreur) {
       $("diagnostic-rtk").checked = false;
-      $("diagnostic-texte").textContent = "Diagnostic de localisation refusé : " + erreur.message;
+      $("diagnostic-texte").textContent = t("options.diagnostic.refuse", { motif: erreur.message });
     }
   });
   $("recalage").addEventListener("click", function () {
@@ -882,7 +905,7 @@
     recalageResultat = dernierResultat;
     afficherSequence();
     previsualiser(sequence.slice(), false);
-    $("pause-etat").textContent = "Recalage assisté chargé : à n'émettre qu'en zone dégagée. Effet non garanti (jamais essayé sur ce robot).";
+    $("pause-etat").textContent = t("recalage.charge");
   });
   // Cadre de droite : deux onglets, « Caméra » et « Carte ».
   function montrerOnglet(nom) {
@@ -906,12 +929,12 @@
     });
     var attente = etape === "attendre";
     $("rendre-message").textContent = attente
-      ? "Le robot est encore en télécommande : il revient seul en pause après une trentaine de secondes. Patientez…"
-      : (dernieresOrdres && dernieresOrdres.avertissement_position
-        ? dernieresOrdres.avertissement_position + " « Reprendre la tâche » sera refusé dans cet état."
-        : "Que doit faire le robot une fois la main rendue ? « Reprendre la tâche » redémarre les lames.");
+      ? t("rendre.attente")
+      : (dernieresOrdres && dernieresOrdres.avertissement_position  // ponytail: l'avertissement SEC-12 vient du serveur, en français
+        ? t("rendre.refus-position", { avertissement: dernieresOrdres.avertissement_position })
+        : t("rendre.question"));
     $("rendre-pause").disabled = false;
-    $("rendre-pause").textContent = attente ? "Rendre la main sans attendre (robot laissé tel quel)" : "Laisser le robot en pause";
+    $("rendre-pause").textContent = t(attente ? "rendre.sans-attendre" : "rendre.pause");
     $("rendre-reprendre").disabled = attente || !(dernieresOrdres && dernieresOrdres.reprise_possible);
   }
   async function rendreLaMain(choix) {
@@ -922,10 +945,10 @@
         $("rendre-choix").hidden = true;
         $("pause-etat").textContent = "";
       } else {
-        $("rendre-message").textContent = "La main n'a pas été rendue : " + (reponse.refus || reponse.message || "refus");
+        $("rendre-message").textContent = t("rendre.non-rendue", { motif: reponse.refus || reponse.message || "refus" });
       }
     } catch (erreur) {
-      $("rendre-message").textContent = "Refusé : " + erreur.message;
+      $("rendre-message").textContent = t("commun.refuse", { motif: erreur.message });
     }
   }
   function clicExplicite(evenement) {  // `detail` vaut 0 pour un clic né du clavier (Entrée, Espace)
@@ -936,8 +959,8 @@
   $("rendre-main").addEventListener("click", async function (evenement) {
     if (!clicExplicite(evenement)) { return; }
     var etape = Ordres.etapeRendreLaMain({ suspendue: liaisonSuspendue, occupe: occupe, ordres: dernieresOrdres, sansAttendre: false });
-    if (etape === "deja") { $("pause-etat").textContent = "La main est déjà rendue : « Prendre la main » la reprend."; return; }
-    if (etape === "refus") { $("pause-etat").textContent = "Un mouvement est en cours : utilisez STOP, puis rendez la main."; return; }
+    if (etape === "deja") { $("pause-etat").textContent = t("rendre.deja"); return; }
+    if (etape === "refus") { $("pause-etat").textContent = t("rendre.mouvement"); return; }
     if (window.LymowPave) { await window.LymowPave.desactiverFleches(true); }
     rendreSansAttendre = false;
     $("rendre-choix").hidden = false;
@@ -950,9 +973,9 @@
     // La pause seule, tout de suite. Aucun mouvement n'est enchaîné : c'est à vous de rappuyer.
     try {
       var reponse = await appeler("/api/pause", { confirmer: true });
-      $("pause-etat").textContent = reponse.simulation ? "Simulation : pause parcourue, rien n'est émis." : "Pause demandée…";
+      $("pause-etat").textContent = t(reponse.simulation ? "avis.pause-simulation" : "avis.pause-demandee");
     } catch (erreur) {
-      $("pause-etat").textContent = "Pause refusée : " + erreur.message;
+      $("pause-etat").textContent = t("avis.pause-refusee", { motif: erreur.message });
     }
   });
   $("reprise").addEventListener("click", function () {
@@ -973,6 +996,7 @@
   $("compte-connecter").addEventListener("click", commencerConnexion);
   $("compte-formulaire").addEventListener("submit", validerConnexion);
   $("compte-deconnecter").addEventListener("click", deconnecter);
+  $("compte-entete").addEventListener("click", compteEnTete);
   $("un-clic-activer").addEventListener("click", function () { reglerUnClic(true); });
   $("un-clic-desactiver").addEventListener("click", function () { reglerUnClic(false); });
   $("video-arreter").addEventListener("click", function () { arreterVideo(); });
@@ -1017,11 +1041,22 @@
       flux.onerror = function () {
         // Flux rompu : le serveur est arrêté (ou remplacé). Plus de page figée qui semble vivante.
         $("bandeau-arret").hidden = false;
-        $("liaison").textContent = "page déconnectée du serveur local";
+        $("liaison").textContent = t("liaison.deconnectee");
       };
     })
-    .catch(function () { $("liaison").textContent = "serveur local injoignable"; });
+    .catch(function () { $("liaison").textContent = t("liaison.injoignable"); });
   afficherSequence();
+  etatVideo(t("video.arretee"));
+  $("previsualisation-titre").textContent = t("previsualisation.aucune");
+  // Changement de langue : les textes écrits ici sont réécrits d'après le dernier état reçu.
+  window.addEventListener("lymow-langue", function () {
+    titresDOrigine = {};  // info-bulles d'origine : relues dans la nouvelle langue
+    afficherBornes();
+    afficherSequence();
+    if (!videoOuverte) { etatVideo(t("video.arretee")); }
+    if (!previsualisation) { $("previsualisation-titre").textContent = t("previsualisation.aucune"); }
+    if (derniereImage) { dernierResultat = ""; appliquer(derniereImage); }
+  });
   // Outils partagés avec le panneau « Carte » (carte.js), sans variable globale de plus.
   window.LymowPage = {
     appeler: appeler, element: element, vider: vider, proposer: proposer, signalerErreur: signalerErreur,

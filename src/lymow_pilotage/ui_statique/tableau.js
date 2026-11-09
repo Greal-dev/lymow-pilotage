@@ -6,12 +6,14 @@
 
   var Ordres = window.LymowOrdres;
   var Fleches = window.LymowFleches;
+  var t = window.LymowI18n.t;
   var page = window.LymowPage;
   var lignes = [];            // fil d'activité, la plus récente en tête
   var dernierJournal = "";    // dernière note du serveur déjà reprise
   var dernierRetour = "";     // dernier retour de pas déjà repris
   var erreurOuverte = false;  // la pastille d'erreur ouvre et ferme le diagnostic
   var annulationVue = false;
+  var erreurVue = false;
   var derniereActivite = 0;
   var arme = false;
 
@@ -56,7 +58,7 @@
 
   function segments(idListe, idGroupe) {
     var liste = $(idListe), groupe = $(idGroupe);
-    var signature = Array.prototype.map.call(liste.options, function (o) { return o.value; }).join("|");
+    var signature = Array.prototype.map.call(liste.options, function (o) { return o.value + o.textContent; }).join("|") + window.LymowI18n.langue();  // la langue aussi
     if (groupe.dataset.signature !== signature) {
       groupe.dataset.signature = signature;
       page.vider(groupe);
@@ -64,7 +66,7 @@
         var bouton = page.element("button", option.textContent.replace(/ m$/, ""));  // l'unité est dans le titre du groupe
         bouton.type = "button";
         bouton.dataset.valeur = option.value;
-        if (idListe === "pave-distance") { bouton.title = "Touche " + (rang + 1); }
+        if (idListe === "pave-distance") { bouton.title = t("pas.touche", { n: rang + 1 }); }
         bouton.addEventListener("click", function () {
           liste.value = option.value;
           liste.dispatchEvent(new Event("change"));
@@ -138,6 +140,8 @@
     });
   }
 
+  window.addEventListener("lymow-langue", function () { tousLesSegments(); });
+
   window.LymowTableau = {
     dire: dire,
     afficher: function (image) {
@@ -150,6 +154,10 @@
       var suivi = Boolean(erreur && (erreur.annulation || erreur.resolue));
       if (suivi && !annulationVue) { erreurOuverte = true; }
       annulationVue = suivi;
+      // Erreur nouvelle : l'encadré et sa seule sortie (« Annuler la tâche ») s'ouvrent d'eux-mêmes, sans clic.
+      var enErreur = Boolean(erreur && !erreur.resolue);
+      if (enErreur && !erreurVue) { erreurOuverte = true; }
+      erreurVue = enErreur;
       if (!erreur) { erreurOuverte = false; }
       $("erreur-robot").hidden = !(erreur && erreurOuverte);
       // File du pilotage direct : visible en pastilles.

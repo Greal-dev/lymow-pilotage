@@ -354,7 +354,8 @@ def test_page_propose_de_reparer(tmp_path, monkeypatch, registre):
             }
 
     executer(scenario())
-    assert "Réparer la connexion en un clic" in (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
+    assert 't(unClic.perime ? "unclic.reparer" : "unclic.activer")' in (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
+    assert "Réparer la connexion en un clic" in (ui.STATIQUE / "i18n.js").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(
