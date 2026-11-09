@@ -376,6 +376,121 @@ async def scenario_diagonales(page: Page, serveur: Any, donnees: Path) -> dict[s
     return bilan
 
 
+# Texte visible de la page (éléments affichés seulement), ligne par ligne.
+TEXTE_VISIBLE = (
+    "(function () { var lignes = []; var w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);"
+    " while (w.nextNode()) { var n = w.currentNode, e = n.parentElement, s = n.nodeValue.trim();"
+    " if (s && e && e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden' && !e.closest('#fil')) { lignes.push(s); } }"
+    " return lignes; })()"
+)
+DEBORDEMENT = "document.documentElement.scrollWidth - document.documentElement.clientWidth"
+FRANCAIS = "éèêàùçâîôûœ"
+
+
+async def largeur(page: Page, pixels: int | None) -> None:
+    """Fenêtre de portable (≈ 390 px) ou retour au bureau (1366 × 768)."""
+    if pixels is None:
+        await page.appel("Emulation.clearDeviceMetricsOverride")
+    else:
+        await page.appel("Emulation.setDeviceMetricsOverride", width=pixels, height=844, deviceScaleFactor=1, mobile=True)
+    await page.attendre(0.8)
+
+
+async def scenario_interface(page: Page, serveur: Any, donnees: Path) -> dict[str, Any]:
+    """Langues EN, DE, ES puis FR (captures bureau et 390 px), mode avancé cliqué, bouton du compte cliqué (refus attendu en
+    démonstration), puis Prendre la main, une flèche, STOP — clics de souris réels."""
+    bilan: dict[str, Any] = {"langues": {}}
+    for langue in ("en", "de", "es", "fr"):
+        # Liste déroulante native : la valeur est choisie comme le ferait le clavier, puis l'évènement « change » part.
+        await page.js(f"(function () {{ var s = document.getElementById('langue'); s.focus(); s.value = '{langue}';"
+                      " s.dispatchEvent(new Event('change')); s.blur(); })()")
+        await page.attendre(1.2)
+        visible = await page.js(TEXTE_VISIBLE)
+        releve = {
+            "html_lang": await page.js("document.documentElement.lang"),
+            "prendre": await page.js("document.getElementById('prendre-main').textContent"),
+            "stop": await page.js("document.getElementById('stop').textContent"),
+            "resume": await page.js("document.getElementById('etat-resume').textContent"),
+            "pastilles": await page.js("document.getElementById('pastilles').textContent"),
+            "debordement_bureau_px": await page.js(DEBORDEMENT),
+        }
+        if langue == "en":  # aucun texte français visible (hors fil d'activité, qui reprend des messages du serveur)
+            releve["textes_a_accents"] = [ligne for ligne in visible if any(c in ligne.lower() for c in FRANCAIS)]
+        await page.capture(f"interface-{langue}-bureau.png")
+        await largeur(page, 390)
+        releve["debordement_390_px"] = await page.js(DEBORDEMENT)
+        releve["stop_visible_390"] = await page.js(
+            "(function () { var r = document.getElementById('stop').getBoundingClientRect(); return r.width > 0 && r.top >= 0 && r.bottom <= innerHeight; })()")
+        await page.capture(f"interface-{langue}-390.png")
+        await largeur(page, None)
+        bilan["langues"][langue] = releve
+    # Mode avancé : désactivé au départ ; un clic réel sur l'interrupteur montre les volets, un second les masque.
+    visible_ordres = "document.getElementById('volet-ordres').getClientRects().length > 0"
+    bilan["avance_au_depart"] = await page.js(visible_ordres)
+    await page.cliquer(".interrupteur")
+    bilan["avance_apres_clic"] = await page.jusqu_a(visible_ordres, 3.0)
+    bilan["avance_memorise"] = await page.js("localStorage.getItem('lymow-mode-avance')")
+    await page.js("window.scrollTo(0, 0)")
+    await page.capture("interface-avance.png")
+    await page.cliquer(".interrupteur")
+    bilan["avance_apres_second_clic"] = await page.js(visible_ordres)
+    bilan["stop_visible_en_mode_simple"] = await page.js("document.getElementById('stop').getClientRects().length > 0")
+    # Compte : en démonstration, aucun compte — le clic aboutit à un refus dit dans le fil.
+    await page.js("window.scrollTo(0, 0)")
+    bilan["compte_libelle"] = await page.js("document.getElementById('compte-entete').textContent")
+    await page.cliquer("#compte-entete")
+    await page.attendre(1.5)
+    bilan["compte_message"] = await page.js("document.getElementById('compte-message').textContent")
+    bilan["compte_fil"] = await page.js("document.getElementById('fil').textContent")
+    # Prendre la main, une flèche, STOP.
+    await page.js("window.scrollTo(0, 0)")
+    await page.cliquer("#prendre-main")
+    bilan["main_prise"] = await page.jusqu_a("document.getElementById('etat-main').textContent.indexOf('Vous avez la main') !== -1")
+    await page.jusqu_a("!document.querySelector('.croix [data-fleche=\\'haut\\']').disabled")
+    nombre = len(serveur.direct.faites)
+    bilan["clic_fleche"] = await page.cliquer(".croix [data-fleche='haut']")
+    for _ in range(100):
+        if not serveur.occupe and len(serveur.direct.faites) > nombre:
+            break
+        await page.attendre(0.2)
+    bilan["pas_fait"] = len(serveur.direct.faites) > nombre
+    await page.js("window.scrollTo(0, 0)")
+    await page.cliquer("#stop")
+    await page.attendre(2.0)
+    bilan["stop_emis"] = any(e["evenement"] == "arret-emis" for e in evenements(donnees))
+    bilan["fil"] = await page.js("document.getElementById('fil').textContent")
+    await page.capture("interface-apres-stop.png")
+    return bilan
+
+
+async def monter_serveur_compte(donnees: Path) -> Any:
+    """Simulation avec un compte FACTICE (comme l'essai vidéo) : la déconnexion n'efface rien de réel."""
+    from lymow_pilotage import compte
+
+    serveur = await monter_serveur_video(donnees, SignalisationDeTest())
+    compte.oublier = lambda: None  # le coffre réel n'est jamais touché
+    return serveur
+
+
+async def scenario_compte(page: Page, serveur: Any, donnees: Path) -> dict[str, Any]:
+    """Compte connecté : identifiant affiché en tête ; « Se déconnecter » en deux clics réels, puis « Se connecter »."""
+    bilan: dict[str, Any] = {
+        "identite": await page.js("document.getElementById('compte-identite').textContent"),
+        "libelle_avant": await page.js("document.getElementById('compte-entete').textContent"),
+    }
+    await page.capture("compte-connecte.png")
+    await page.cliquer("#compte-entete")
+    await page.attendre(0.8)
+    bilan["premier_clic_toujours_connecte"] = serveur.ident is not None
+    bilan["fil_apres_premier_clic"] = await page.js("document.getElementById('fil').textContent")
+    await page.cliquer("#compte-entete")
+    bilan["deconnecte"] = await page.jusqu_a("document.getElementById('compte-entete').textContent === 'Se connecter'", 8.0)
+    bilan["serveur_sans_compte"] = serveur.ident is None
+    bilan["libelle_apres"] = await page.js("document.getElementById('compte-entete').textContent")
+    await page.capture("compte-deconnecte.png")
+    return bilan
+
+
 class SignalisationDeTest:
     """Petit serveur WebSocket local : tient lieu de signalisation vidéo, garde ce que le navigateur lui envoie."""
 
@@ -512,6 +627,9 @@ async def principal(sortie: Path, scenarios: list[str], navigateur: str | None) 
         scenarios = ["video"]
         await signalisation.demarrer()
         serveur = await monter_serveur_video(donnees, signalisation)
+    elif "compte" in scenarios:  # essai à part : un compte factice connecté, à déconnecter
+        scenarios = ["compte"]
+        serveur = await monter_serveur_compte(donnees)
     else:
         serveur = ui.ServeurUI(Calibration(), Journal(donnees), reel=False, port=0, demonstration=True)
         serveur.registre = FauxRegistre()
@@ -542,6 +660,10 @@ async def principal(sortie: Path, scenarios: list[str], navigateur: str | None) 
                 await page.jusqu_a("document.getElementById('pastilles') && document.getElementById('pastilles').children.length > 0")
                 await page.attendre(2.0)
                 await page.capture("ouverture.png")
+                if "interface" in scenarios:
+                    compte_rendu["interface"] = await scenario_interface(page, serveur, donnees)
+                if "compte" in scenarios:
+                    compte_rendu["compte"] = await scenario_compte(page, serveur, donnees)
                 if "recalage" in scenarios:
                     compte_rendu["recalage"] = await scenario_recalage(page, serveur, donnees)
                 if "diagonales" in scenarios:
