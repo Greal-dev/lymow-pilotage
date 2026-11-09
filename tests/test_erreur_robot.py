@@ -205,7 +205,8 @@ def test_page_prendre_la_main_en_erreur_n_emet_pas_de_pause_et_affiche_le_diagno
     assert ">Annuler la tâche et remettre le robot en attente<" in page and 'id="pave-avertissement"' in page
     app = (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
     clic = app[app.index('$("erreur-annuler").addEventListener') :][:600]
-    assert "deuxClics(" in clic and "window.confirm(" not in clic and "ABANDONNÉE" in clic and '"/api/erreur/annuler", { confirmer: true }' in clic
+    assert "deuxClics(" in clic and "window.confirm(" not in clic and 't("erreur.confirmer")' in clic and '"/api/erreur/annuler", { confirmer: true }' in clic
+    assert "Annuler la tâche (ABANDONNÉE ; effet sur une erreur de pare-chocs inconnu)" in (ui.STATIQUE / "i18n.js").read_text(encoding="utf-8")  # texte français du dictionnaire
 
 
 def test_route_prendre_la_main_en_erreur_aucune_pause_n_est_emise(tmp_path, monkeypatch, session_reelle, lien):

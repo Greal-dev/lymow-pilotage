@@ -8,6 +8,7 @@
 
   var page = window.LymowPage;
   var Fleches = window.LymowFleches;
+  var t = window.LymowI18n.t;
   var panneau = document.getElementById("bloc-fleches");
   var miniature = document.getElementById("pave-miniature");
   var NS = miniature.namespaceURI;
@@ -102,9 +103,9 @@
     pointe.setAttribute("points", [[1.6, 0], [-1, 0.9], [-1, -0.9]].map(function (p) { return p[0] * taille + "," + p[1] * taille; }).join(" "));
     pointe.setAttribute("transform", "translate(" + fin.x + " " + (-fin.y) + ") rotate(" + (-fin.cap) + ")");
     miniature.appendChild(pointe);
-    var enTete = cap === null ? "Départ : repère local (cap du robot inconnu, tracé vers le haut). " : "Départ : cap courant du robot. ";
+    var enTete = t(cap === null ? "sequence.depart-inconnu" : "sequence.depart-cap");
     $("pave-total").textContent = Fleches.texteTotal(Fleches.trace(aVenir, depart, vitesses), aVenir.length)
-      + (direct.arme ? " en attente" : "");
+      + (direct.arme ? t("sequence.total-attente") : "");
     $("pave-total").title = enTete;
   }
 
@@ -135,10 +136,10 @@
     try {
       jeton = (await page.appeler("/api/direct/armer", { confirmer: true })).jeton;
       regler(true);
-      signaler(modeSimulation ? "Simulation : les flèches parcourent le même chemin, rien n'est émis vers le robot." : "");
+      signaler(modeSimulation ? t("fleches.simulation") : "");
     } catch (erreur) {
       jeton = null;
-      signaler("Activation refusée : " + erreur.message);
+      signaler(t("fleches.activation-refusee", { motif: erreur.message }));
     }
   }
 
@@ -154,7 +155,7 @@
    * rentre (et pause attendue), puis flèches actives. Chaque pas attend l'état annoncé par le serveur. */
   function prendreLaMain() {
     if (prise) { return; }
-    if (occupeCourant) { signaler("Un ordre est en cours : attendez sa fin, ou STOP."); return; }
+    if (occupeCourant) { signaler(t("prise.occupe")); return; }
     // Le focus ne reste pas sur les boutons du haut : une touche n'y activerait rien par mégarde.
     if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); }
     prise = { confirme: false, pauseDemandee: false, enCours: false, depuisSuspension: suspendue, echeance: Date.now() + 60000 };
@@ -170,7 +171,7 @@
     var courante = prise;
     if (suite === "confirmer") {
       // Une seule confirmation par session de page : réarmer après STOP = un clic, sans boîte de dialogue.
-      if (!dejaConfirme) { signaler(Ordres.annoncePrendreLaMain(contexte()).replace(/^Prendre la main \?\n\n/, "").replace(/\n/g, " ")); }
+      if (!dejaConfirme) { signaler(Ordres.annoncePrendreLaMain(contexte()).replace(/^[^\n]*\n\n/, "").replace(/\n/g, " ")); }
       dejaConfirme = true;
       courante.confirme = true;
       mainPrise = true;
@@ -180,7 +181,7 @@
     courante.enCours = true;
     try {
       if (suite === "liaison") {
-        signaler("Liaison en cours de rétablissement…");
+        signaler(t("prise.retablissement"));
         await page.appeler("/api/liaison/reprendre");
         suspendue = false;
       } else if (suite === "pause") {
@@ -193,14 +194,13 @@
         prise = null;
       } else {  // abandon, blocage ou délai dépassé : dit en clair, rien d'autre n'est tenté
         prise = null;
-        signaler(suite === "bloque"
-          ? "Le robot n'est pas pilotable dans cet état : " + ((ordresDuRobot && ordresDuRobot.mouvement_refuse) || "statut inconnu")
-          : suite === "abandon" ? "Pause non confirmée par le robot : les flèches ne sont pas activées."
-            : "Prise en main interrompue : le robot ne répond pas comme attendu.");
+        signaler(suite === "bloque"  // ponytail: le motif de refus vient du serveur, en français
+          ? t("prise.bloque", { motif: (ordresDuRobot && ordresDuRobot.mouvement_refuse) || t("resume.statut-inconnu") })
+          : t(suite === "abandon" ? "prise.abandon" : "prise.interrompue"));
       }
     } catch (erreur) {
       prise = null;
-      signaler("Prise en main interrompue : " + erreur.message);
+      signaler(t("prise.interrompue-motif", { motif: erreur.message }));
     } finally {
       courante.enCours = false;
     }
@@ -211,7 +211,7 @@
     page.vider(liste);
     faites.forEach(function (ordre) { liste.appendChild(page.element("li", Fleches.symbole(ordre), "faite")); });
     aVenir.forEach(function (ordre) { liste.appendChild(page.element("li", Fleches.symbole(ordre))); });
-    if (!faites.length && !aVenir.length) { liste.appendChild(page.element("li", "séquence vide", "vide")); }
+    if (!faites.length && !aVenir.length) { liste.appendChild(page.element("li", t("sequence.vide-pastille"), "vide")); }
   }
 
   function afficherRetours() {
@@ -225,8 +225,7 @@
     }
     lignes.slice(-2).forEach(function (ligne) { liste.appendChild(page.element("li", ligne)); });
     $("pave-file").textContent = direct.arme
-      ? "File d'attente (" + direct.file.length + "/" + config.file_max + ") : "
-        + (direct.file.map(Fleches.symbole).join(", ") || "vide")
+      ? t("sequence.file", { n: direct.file.length, max: config.file_max, liste: direct.file.map(Fleches.symbole).join(", ") || t("sequence.file-vide") })
       : "";
   }
 
@@ -241,7 +240,7 @@
     $("pave-vider").disabled = vide;
     $("pave-boutons-note").textContent = composition || vide
       ? ""
-      : "Séquence en attente : cochez « Composer une séquence » pour la prévisualiser.";
+      : t("sequence.attente-composer");
   }
 
   function rafraichir() {
@@ -269,7 +268,8 @@
     try {
       var reponse = await page.appeler("/api/direct/fleche", demande);
       jeton = reponse.jeton;
-      signaler([reponse.allure, reponse.simulation ? "Simulation : étape parcourue, rien n'est émis." : ""].filter(Boolean).join(" — "));
+      // ponytail: l'allure annoncée vient du serveur, en français.
+      signaler([reponse.allure, reponse.simulation ? t("fleches.etape-simulee") : ""].filter(Boolean).join(" — "));
     } catch (erreur) {
       signaler(erreur.message); // file pleine : appui ignoré ; tout autre refus désarme côté serveur
     }
@@ -309,7 +309,7 @@
     if (!actives && !evenement.target.closest("button")) { prendreLaMain(); }
   });
   $("composer").addEventListener("change", function () {
-    if (actives) { desactiver("Mode changé : réactivez les flèches."); }
+    if (actives) { desactiver(t("fleches.mode-change")); }
     rafraichir();
   });
 
@@ -377,9 +377,9 @@
       if (!image.arret_aux_bords) { $("pave-forcer").checked = false; }
       // Robot en erreur : dit AVANT le pas ; pas sans déplacement : dit, la main est gardée.
       $("pave-avertissement").textContent = [
-        image.ordres && image.ordres.liaison_lente ? "Liaison lente : en attente d'une nouvelle trame du robot… (vos appuis restent en file ; STOP reste immédiat)" : "",
+        image.ordres && image.ordres.liaison_lente ? t("fleches.liaison-lente") : "",
         image.ordres && image.ordres.avertissement_pas,
-        image.ordres && image.ordres.immobiles ? "Pas d'avance : patinage ? (" + image.ordres.immobiles + " de suite) — la main est gardée, insistez ou changez de direction." : ""
+        image.ordres && image.ordres.immobiles ? t("fleches.immobiles", { n: image.ordres.immobiles }) : ""
       ].filter(Boolean).join(" ");
       connecte = Boolean(image.connecte);
       occupeCourant = Boolean(image.occupe);
@@ -391,7 +391,7 @@
       if (!direct.arme && jeton) {  // expiré, STOP, refus ou échec : le serveur a désarmé — l'activation tombe
         jeton = null;
         regler(false);
-        signaler("Flèches désactivées (STOP, statut du robot, liaison perdue ou 5 min sans action) : un clic les réactive.");
+        signaler(t("fleches.desarmees"));
       }
       cap = image.etat && typeof image.etat.cap_deg === "number" ? image.etat.cap_deg : null;
       var texte = JSON.stringify(image.resultat);
@@ -419,4 +419,5 @@
     }
   };
   regler(false);
+  window.addEventListener("lymow-langue", function () { regler(actives); rafraichir(); });
 })();

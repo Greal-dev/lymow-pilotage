@@ -8,6 +8,10 @@
 (function (racine) {
   "use strict";
 
+  // Textes dans la langue choisie ; hors navigateur (tests Node), en français.
+  var I18n = racine.LymowI18n || (typeof require === "function" ? require("./i18n.js") : null);
+  var t = I18n.t;
+
   function texteOrdre(ordre) {
     var mots = [ordre.nom];
     if (ordre.valeur !== null && ordre.valeur !== undefined) { mots.push(String(ordre.valeur)); }
@@ -19,49 +23,56 @@
   /* Intitulé du bouton d'émission : il dit combien d'étapes partiront. */
   function libelleEmission(etapes) {
     var nombre = (etapes || []).length;
-    return nombre > 1 ? "Émettre la séquence (" + nombre + " étapes)" : "Émettre l'ordre";
+    return nombre > 1 ? t("emission.sequence", { n: nombre }) : t("emission.ordre");
   }
 
   /* Un ordre seul prévisualisé alors qu'une séquence est composée : le dire, toujours. */
   function avertissementOrdreSeul(etapesPrevisualisees, tailleSequence) {
     if (!tailleSequence || (etapesPrevisualisees || []).length === tailleSequence) { return ""; }
-    return "Attention : cette prévisualisation ne contient PAS la séquence composée (" + tailleSequence
-      + " étape" + (tailleSequence > 1 ? "s" : "") + "). Pour l'émettre, utilisez « Prévisualiser la séquence ».";
+    return t("sequence.ordre-seul", { etapes: I18n.compte("mot.etape", tailleSequence) });
   }
 
   /* Pourquoi « Émettre » est indisponible ; chaîne vide s'il est disponible. Jamais de bouton grisé muet. */
   function motifEmissionIndisponible(contexte) {
-    if (contexte.occupe) { return "Ordre en cours : attente de sa fin et du constat (12 s au plus). STOP reste disponible."; }
+    if (contexte.occupe) { return t("emission.occupe"); }
     if (contexte.previsualisationValide) { return ""; }
-    if (!contexte.emission) { return "Simulation : le serveur n'émet rien (relancez « lymow ui --reel » pour émettre)."; }
-    return contexte.note || "Prévisualisez un ordre ou la séquence : « Émettre » s'active ensuite.";
+    if (!contexte.emission) { return t("emission.simulation"); }
+    return contexte.note || t("emission.prevoir");
   }
 
   function libelleReprise(reprise) {
     var nombre = reprise.ordres.length;
-    return "Reprendre à l'étape " + reprise.etape + " (" + nombre + " étape" + (nombre > 1 ? "s" : "") + " restante"
-      + (nombre > 1 ? "s" : "") + ")";
+    return t("reprise.libelle", { etape: reprise.etape, restantes: I18n.compte("mot.restante", nombre) });
   }
 
   /* Statut du robot en clair, et le refus de mouvement dit AVANT toute prévisualisation. */
   function texteEtatDesOrdres(ordres) {
     if (!ordres) { return ""; }
-    if (ordres.suspendue) { return ordres.texte; }  // état voulu : dit tel quel, sans alarme
-    var texte = ordres.statut ? "Robot : " + ordres.statut : "Robot : état inconnu";
-    if (ordres.tache) { texte += " (tâche : " + ordres.tache + ")"; }
+    if (ordres.suspendue) { return I18n.francais() ? ordres.texte : t("resume.suspendue"); }  // état voulu : dit tel quel, sans alarme
+    var texte = ordres.statut ? t("ordres.robot", { statut: I18n.statut(ordres.statut) }) : t("ordres.robot-inconnu");
+    if (ordres.tache) { texte += t("resume.tache", { tache: I18n.statut(ordres.tache) }); }
+    // ponytail: le motif de refus vient du serveur, en français ; à coder côté serveur pour le traduire.
     return ordres.mouvement_refuse ? texte + " — " + ordres.mouvement_refuse : texte;
   }
 
   /* En-tête : l'état du robot en une ligne (en ligne, statut, batterie, RTK). */
   function resumeEtat(etat, suspendue) {
-    if (suspendue) { return "liaison suspendue : l'application Lymow a la main"; }
-    if (!etat) { return "état du robot inconnu"; }
-    var morceaux = [etat.en_ligne === true ? "en ligne" : etat.en_ligne === false ? "HORS LIGNE" : "présence inconnue"];
-    morceaux.push((etat.statut_libelle || "statut inconnu") + (etat.tache_libelle ? " (tâche : " + etat.tache_libelle + ")" : ""));
-    if (typeof etat.batterie_pct === "number") { morceaux.push("batterie " + etat.batterie_pct + " %"); }
+    if (suspendue) { return t("resume.suspendue"); }
+    if (!etat) { return t("resume.inconnu"); }
+    var morceaux = [t(etat.en_ligne === true ? "resume.en-ligne" : etat.en_ligne === false ? "resume.hors-ligne" : "resume.presence")];
+    morceaux.push((I18n.statut(etat.statut_libelle, etat.statut) || t("resume.statut-inconnu"))
+      + (etat.tache_libelle ? t("resume.tache", { tache: I18n.statut(etat.tache_libelle, etat.tache) }) : ""));
+    if (typeof etat.batterie_pct === "number") { morceaux.push(t("resume.batterie", { pct: etat.batterie_pct })); }
     // La précision en mètres, pas un libellé RTK non confirmé.
-    if (etat.localisation_texte) { morceaux.push(etat.localisation_texte); }
-    return morceaux.join(" · ") + (etat.perime ? " (état ancien)" : "");
+    if (etat.localisation_texte) { morceaux.push(texteLocalisation(etat)); }
+    return morceaux.join(" · ") + (etat.perime ? t("resume.ancien") : "");
+  }
+
+  /* « position : ±0,02 m — fiable » : le texte du serveur en français, recomposé dans les autres langues. */
+  function texteLocalisation(etat) {
+    if (I18n.francais() || !etat) { return etat ? etat.localisation_texte : ""; }
+    var precision = typeof etat.precision_m === "number" ? "±" + I18n.decimal(etat.precision_m.toFixed(2)) + " m" : t("loc.inconnue");
+    return t("loc.texte", { precision: precision, qualite: t("loc." + etat.localisation) });
   }
 
   /* Sections repliables : fermées par défaut, puis ce que le poste a mémorisé ; « compte » ouverte
@@ -78,7 +89,7 @@
    * demandée, elles attendent le statut « pause » frais — et rien ne part tout seul ensuite. */
   function blocageDesFleches(ordres) {
     if (ordres && ordres.pause && ordres.pause.etat === "en attente") {
-      return "Pause en attente de confirmation : les flèches reprendront ensuite.";
+      return t("fleches.pause-attente");
     }
     return "";
   }
@@ -100,15 +111,14 @@
    * décide si elle est proposable (statut attestable) ; rien n'est déduit ici. */
   function messageStatutDeclare(attestation) {
     if (!attestation || !attestation.proposable || attestation.active) { return ""; }
-    return "Le robot se déclare : " + attestation.statut + ".";
+    return t("attestation.statut", { statut: I18n.statut(attestation.statut) });
   }
 
   function bandeauAttestation(attestation) {
     if (!attestation || !attestation.active) { return ""; }
     var reste = Math.max(0, Math.floor(attestation.reste_s || 0));
     var secondes = reste % 60;
-    return "Pilotage autorisé sur attestation de l'opérateur — expire dans "
-      + (reste < 600 ? "0" : "") + Math.floor(reste / 60) + ":" + (secondes < 10 ? "0" : "") + secondes;
+    return t("attestation.bandeau", { reste: (reste < 600 ? "0" : "") + Math.floor(reste / 60) + ":" + (secondes < 10 ? "0" : "") + secondes });
   }
 
   function libelleLiaison(suspendue) {
@@ -123,14 +133,14 @@
       // Position ancienne : le marqueur reste où il était, et c'est dit — le robot ne la transmet plus.
       var age = typeof etat.age_position_s === "number" ? etat.age_position_s : 0;
       var note = age > 5
-        ? "position reçue il y a " + (age < 90 ? Math.round(age) + " s" : Math.round(age / 60) + " min") + " : le robot ne la transmet plus, le marqueur n'est plus à jour"
+        ? t("carte.position-ancienne", { duree: age < 90 ? Math.round(age) + " s" : Math.round(age / 60) + " min" })
         : "";
       return { est: etat.position_est_m, nord: etat.position_nord_m, cap: etat.cap_deg || 0, rayon: rayon, source: "pose", note: note };
     }
     if (station) {
       return {
         est: station.est_m, nord: station.nord_m, cap: station.cap_deg || 0, rayon: null, source: "station",
-        note: "position non transmise au repos : robot placé sur sa station"
+        note: t("carte.position-station")
       };
     }
     return null;
@@ -141,10 +151,12 @@
     if (!proposition) { return ""; }
     var texte = "";
     if (proposition.cible) {
-      texte = "Bon signal à " + proposition.cible.distance_m + " m, cap " + proposition.cible.cap_deg + "° ("
-        + proposition.cible.points + " relevé" + (proposition.cible.points > 1 ? "s" : "") + ")";
-      if (proposition.ordres) { texte += " — trajet de " + proposition.ordres.length + " pas"; }
+      texte = t("signal.texte", {
+        m: proposition.cible.distance_m, cap: proposition.cible.cap_deg, releves: I18n.compte("mot.releve", proposition.cible.points)
+      });
+      if (proposition.ordres) { texte += t("signal.trajet", { n: proposition.ordres.length }); }
     }
+    // ponytail: motif et mention viennent du serveur, en français.
     if (proposition.motif) { texte += (texte ? " — " : "") + proposition.motif; }
     if (proposition.mention) { texte += " — " + proposition.mention; }
     return texte;
@@ -152,9 +164,7 @@
 
   /* Robot en pause : la phrase qui accompagne « Reprendre ». Signal retrouvé : la reprise est conseillée. */
   function conseilDeReprise(ordres) {
-    return ordres && ordres.reprise_conseillee
-      ? "Signal retrouvé, position fiable : vous pouvez « Reprendre » la tâche — les lames redémarrent."
-      : "Robot en pause : « Reprendre » relance la tâche — les lames peuvent redémarrer.";
+    return t(ordres && ordres.reprise_conseillee ? "reprise.conseillee" : "reprise.pause");
   }
 
   /* Recalage assisté : un aller-retour en ligne droite, chargé dans la séquence (jamais exécuté seul).
@@ -168,12 +178,12 @@
   /* Après le recalage : la situation s'est-elle améliorée ? (précision et écart, avant / après) */
   function bilanDeRecalage(avant, apres) {
     if (!avant || !apres) { return ""; }
-    var texte = "Recalage : précision " + avant.precision_m + " m → " + apres.precision_m + " m";
+    var texte = t("recalage.bilan", { avant: avant.precision_m, apres: apres.precision_m });
     if (typeof avant.ecart_brut_m === "number" && typeof apres.ecart_brut_m === "number") {
-      texte += ", écart " + avant.ecart_brut_m + " m → " + apres.ecart_brut_m + " m";
-      texte += apres.ecart_brut_m < avant.ecart_brut_m ? " : amélioré." : " : pas d'amélioration (retour à la base, ou redémarrage du robot).";
+      texte += t("recalage.bilan-ecart", { avant: avant.ecart_brut_m, apres: apres.ecart_brut_m });
+      texte += t(apres.ecart_brut_m < avant.ecart_brut_m ? "recalage.ameliore" : "recalage.sans-amelioration");
     } else {
-      texte += apres.precision_m <= avant.precision_m ? " : stable ou amélioré." : " : dégradé.";
+      texte += t(apres.precision_m <= avant.precision_m ? "recalage.stable" : "recalage.degrade");
     }
     return texte;
   }
@@ -188,7 +198,7 @@
   function etatDuRecalage(recalage, attenteDuClic) {
     var r = recalage || {};
     return {
-      texte: attenteDuClic ? "Cliquez l'endroit réel du robot sur la carte (Échap pour annuler)" : (r.texte || ""),
+      texte: attenteDuClic ? t("recalage.bandeau") : (r.texte || ""),  // ponytail: r.texte vient du serveur, en français
       annuler: Boolean(r.actif),
       mesure: r.mesure_station || "",
       utiliserLaMesure: Boolean(r.mesure_station) && !r.actif
@@ -201,11 +211,12 @@
     var p = plateau || {};
     var suite = p.suite ? " — " + p.suite : "";
     if (typeof p.mm !== "number") {
-      return { texte: "Plateau : hauteur inconnue : le robot ne l'a pas transmise" + suite, jauge: null };
+      return { texte: t("plateau.inconnu", { suite: suite }), jauge: null };
     }
-    var valeur = p.au_maximum ? p.mm + " mm — au maximum" : p.mm + " mm (maximum " + p.maximum_mm + ")";
-    var nature = "consigne enregistrée par le robot (" + (p.nature || "réglage") + (p.date ? ", " + p.date : "") + "), pas une hauteur mesurée";
-    return { texte: "Plateau : " + valeur + " — " + nature + suite, jauge: { min: p.minimum_mm, max: p.maximum_mm, valeur: Math.min(p.mm, p.maximum_mm) } };
+    var valeur = p.au_maximum ? t("plateau.au-max", { mm: p.mm }) : t("plateau.valeur", { mm: p.mm, max: p.maximum_mm });
+    // ponytail: nature et suite viennent du serveur, en français.
+    var nature = t("plateau.nature", { nature: p.nature || t("plateau.reglage"), date: p.date ? ", " + p.date : "" });
+    return { texte: t("plateau.texte", { valeur: valeur, nature: nature, suite: suite }), jauge: { min: p.minimum_mm, max: p.maximum_mm, valeur: Math.min(p.mm, p.maximum_mm) } };
   }
 
   var CONFIRMATION_ESSAI_PLATEAU = "Ordre jamais essayé par le cloud sur ce robot. À faire robot à vue, mains éloignées du plateau.";
@@ -213,13 +224,14 @@
   /* Essais de plateau : proposés en mode réel seulement, hors de tout ordre en cours. */
   /* « Retour base » : l'info-bulle dit l'ordre que le clic émettra (avec ou sans tâche à conserver). */
   function bulleRetourBase(libelle) {
-    if (libelle === "déjà sur la base") { return "Le robot est déjà sur la base : rien ne sera émis."; }
-    return "Émet, tout de suite : " + libelle + (libelle === "retour à la base" ? " (aucune tâche en cours)." : ".");
+    if (libelle === "déjà sur la base") { return t("base.deja"); }
+    // ponytail: le libellé de l'ordre vient du serveur, en français.
+    return t("base.emet", { libelle: libelle }) + (libelle === "retour à la base" ? t("base.sans-tache") : ".");
   }
 
   function essaiPlateauPossible(c) {
-    if (c.mode === "simulation") { return { possible: false, motif: "Essais de plateau : en mode réel seulement." }; }
-    if (c.occupe) { return { possible: false, motif: "Un ordre est en cours." }; }
+    if (c.mode === "simulation") { return { possible: false, motif: t("essai.reel-seulement") }; }
+    if (c.occupe) { return { possible: false, motif: t("commun.ordre-en-cours") }; }
     return { possible: true, motif: "" };
   }
 
@@ -261,7 +273,7 @@
 
   /* Inactivité du pilotage direct : le temps restant n'est dit que dans la dernière minute. */
   function texteInactivite(arme, reste) {
-    return arme && typeof reste === "number" && reste <= 60 ? "Flèches désactivées dans " + reste + " s sans action." : "";
+    return arme && typeof reste === "number" && reste <= 60 ? t("fleches.inactivite", { s: reste }) : "";
   }
 
   /* « Reprendre » relance les lames : deux clics, le second dans les 5 s (pas de boîte de dialogue). */
@@ -273,31 +285,37 @@
   function pastilles(image) {
     var ordres = image.ordres || {}, etat = image.etat || null, liste = [];
     if (enErreur(ordres)) {
-      var codes = (ordres.erreur.libelles || []).map(function (l) { return l.split(" : ")[0]; }).join(", ");
-      liste.push({ texte: "⚠ erreur " + codes, classe: "erreur", action: "erreur", titre: "Cliquez : diagnostic et geste proposé — " + (ordres.erreur.libelles || []).join(" ; ") });
+      var libelles = (ordres.erreur.libelles || []).map(function (l) { return I18n.erreur(l); });
+      var codes = libelles.map(function (l) { return l.split(" : ")[0]; }).join(", ");
+      liste.push({ texte: t("pastille.erreur", { codes: codes }), classe: "erreur", action: "erreur", titre: t("pastille.erreur.titre", { libelles: libelles.join(" ; ") }) });
     }
     liste.push({
-      texte: ordres.suspendue ? "liaison suspendue" : (ordres.statut || "état inconnu"),
-      classe: ordres.mouvement_refuse ? "alerte" : "", titre: ordres.suspendue ? ordres.texte : texteEtatDesOrdres(ordres)
+      texte: ordres.suspendue ? t("pastille.suspendue") : (I18n.statut(ordres.statut, etat ? etat.statut : null) || t("pastille.inconnu")),
+      classe: ordres.mouvement_refuse ? "alerte" : "", titre: texteEtatDesOrdres(ordres)
     });
     if (etat && typeof etat.batterie_pct === "number") { liste.push({ texte: "🔋 " + etat.batterie_pct + " %", classe: etat.batterie_pct < 20 ? "alerte" : "" }); }
     if (etat && typeof etat.precision_m === "number") {
-      liste.push({ texte: "±" + String(etat.precision_m).replace(".", ",") + " m", classe: etat.localisation,
-        titre: "Position " + etat.localisation + " (fiable jusqu'à 0,10 m, dégradée jusqu'à 0,50 m)" + (etat.localisation_detail ? " — " + etat.localisation_detail : "") });
+      // ponytail: le détail de localisation vient du serveur, en français.
+      liste.push({ texte: "±" + I18n.decimal(etat.precision_m) + " m", classe: etat.localisation,
+        titre: t("pastille.position", { qualite: I18n.francais() ? etat.localisation : t("loc." + etat.localisation) })
+          + (etat.localisation_detail ? " — " + etat.localisation_detail : "") });
     } else if (etat) {
-      liste.push({ texte: "position ?", classe: "perdue", titre: "Précision de position non transmise" });
+      liste.push({ texte: t("pastille.position-inconnue"), classe: "perdue", titre: t("pastille.position-inconnue.titre") });
     }
     if (ordres.bord && typeof ordres.bord.devant_m === "number") {
-      liste.push({ texte: "bord " + String(ordres.bord.devant_m).replace(".", ",") + " m", classe: image.alerteBord ? "alerte" : "", titre: ordres.bord.texte });
+      // ponytail: le texte du bord (info-bulle) vient du serveur, en français.
+      liste.push({ texte: t("pastille.bord", { m: I18n.decimal(ordres.bord.devant_m) }), classe: image.alerteBord ? "alerte" : "", titre: ordres.bord.texte });
     }
     var plateau = textePlateau(image.plateau);
-    liste.push({ texte: image.plateau && typeof image.plateau.mm === "number" ? "plateau " + image.plateau.mm + " mm" + (image.plateau.au_maximum ? " (max)" : "") : "plateau ?", titre: plateau.texte });
+    liste.push({ texte: image.plateau && typeof image.plateau.mm === "number"
+      ? t("pastille.plateau", { mm: image.plateau.mm }) + (image.plateau.au_maximum ? t("pastille.plateau-max") : "") : t("pastille.plateau-inconnu"), titre: plateau.texte });
     // Phares : lecture seule (niveau annoncé par le robot, plage réglée dans l'application).
     if (image.phares && typeof image.phares.allumes === "boolean") {
-      liste.push({ texte: image.phares.allumes ? "phares allumés" : "phares éteints", titre: image.phares.texte });
+      liste.push({ texte: t(image.phares.allumes ? "pastille.phares-allumes" : "pastille.phares-eteints"), titre: image.phares.texte });
     }
-    if (image.recalage && image.recalage.actif) { liste.push({ texte: "carte recalée", classe: "alerte", titre: image.recalage.texte }); }
-    liste.push({ texte: image.connecte ? "liaison ✓" : "liaison ✗", classe: image.connecte ? "ok" : (ordres.suspendue ? "" : "erreur"), titre: image.liaison || "" });
+    if (image.recalage && image.recalage.actif) { liste.push({ texte: t("pastille.recalee"), classe: "alerte", titre: image.recalage.texte }); }
+    // ponytail: image.liaison (info-bulle) vient du serveur, en français.
+    liste.push({ texte: t(image.connecte ? "pastille.liaison-ok" : "pastille.liaison-ko"), classe: image.connecte ? "ok" : (ordres.suspendue ? "" : "erreur"), titre: image.liaison || "" });
     return liste;
   }
 
@@ -310,7 +328,7 @@
   /* Bouton à bascule des phares : il propose le contraire du niveau annoncé par le robot (inconnu : allumer). */
   function boutonPhares(phares) {
     var allumer = !(phares && phares.allumes === true);
-    return { allumer: allumer, libelle: allumer ? "Phares : allumer" : "Phares : éteindre" };
+    return { allumer: allumer, libelle: t(allumer ? "phares.allumer" : "phares.eteindre") };
   }
 
   function enErreur(ordres) {
@@ -321,12 +339,17 @@
    * l'erreur a persisté — rien ne boucle), puis la suite. Rien si le robot n'est pas en erreur. */
   function diagnosticErreur(erreur) {
     if (!erreur) { return null; }
-    if (erreur.resolue) { return { titre: "", phrase: "", bouton: false, suite: erreur.message || "" }; }
+    // Hors français, les messages du serveur sont redits d'après l'état de l'annulation (texte du serveur sinon).
+    var suite = I18n.francais() || !erreur.message ? erreur.message || ""
+      : erreur.resolue ? t("erreur.resolue") : erreur.annulation === "en attente" ? t("erreur.attente")
+        : erreur.annulation === "persistante" ? t("erreur.persiste") : erreur.message;
+    if (erreur.resolue) { return { titre: "", phrase: "", bouton: false, suite: suite }; }
+    var libelles = erreur.libelles && erreur.libelles.length ? erreur.libelles.map(function (l) { return I18n.erreur(l); }).join(" ; ") : t("erreur.sans-code");
     return {
-      titre: "Robot en erreur — " + (erreur.libelles && erreur.libelles.length ? erreur.libelles.join(" ; ") : "code d'erreur non transmis"),
-      phrase: erreur.phrase || "",
+      titre: t("erreur.titre", { libelles: libelles }),
+      phrase: I18n.francais() || !erreur.phrase ? erreur.phrase || "" : t("erreur.phrase"),
       bouton: !erreur.annulation,
-      suite: erreur.message || ""
+      suite: suite
     };
   }
 
@@ -338,24 +361,23 @@
   }
 
   function texteDeLaMain(qui) {
-    if (qui === "outil") { return "Vous avez la main"; }
-    return qui === "application" ? "L'application Lymow a la main — liaison suspendue" : "";
+    if (qui === "outil") { return t("main.vous"); }
+    return qui === "application" ? t("main.application") : "";
   }
 
   /* « Prendre la main » : ce que le geste va faire, dit dans SA confirmation unique. */
   function annoncePrendreLaMain(c) {
     var lignes = [];
-    if (c.suspendue) { lignes.push("La liaison avec le robot sera rétablie."); }
+    if (c.suspendue) { lignes.push(t("prise.liaison")); }
     if (enErreur(c.ordres)) {
-      lignes.push("Le robot est EN ERREUR : il ignorera probablement les flèches. Voyez l'encadré rouge (annuler la tâche).");
+      lignes.push(t("prise.erreur"));
     } else if (c.ordres && c.ordres.action === "pause") {
-      lignes.push(c.ordres.mouvement_refuse.replace(/ : .*$/, "") + " : la tâche sera mise en pause.");
+      var motif = I18n.francais() ? c.ordres.mouvement_refuse.replace(/ : .*$/, "") : t("ordres.robot", { statut: I18n.statut(c.ordres.statut) });
+      lignes.push(t("prise.pause", { motif: motif }));
     }
-    lignes.push(c.composer
-      ? "Les flèches composeront une séquence (rien ne part sans « Émettre »)."
-      : "Les flèches feront ensuite bouger le robot IMMÉDIATEMENT" + (c.simulation ? " (simulation : rien n'est émis)." : "."));
-    lignes.push("STOP : Échap ou Espace.");
-    return "Prendre la main ?\n\n" + lignes.join("\n");
+    lignes.push(c.composer ? t("prise.composer") : t("prise.direct") + (c.simulation ? t("prise.simulation") : "."));
+    lignes.push(t("prise.stop"));
+    return t("prise.titre") + "\n\n" + lignes.join("\n");
   }
 
   /* « Prendre la main », pas à pas : la prochaine action, au vu de l'état que le serveur vient d'annoncer.

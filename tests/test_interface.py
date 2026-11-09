@@ -39,7 +39,7 @@ def robot_obeit_a_la_pause(lien, nouveau=EN_PAUSE):
 
 
 def test_sections_repliees_par_defaut_et_ecran_principal_dans_un_seul_bloc():
-    volets = re.findall(r'<details id="volet-([a-z]+)" class="([^"]+)" data-volet="([a-z]+)"( open)?>\s*<summary>([^<]+)</summary>', PAGE)
+    volets = re.findall(r'<details id="volet-([a-z]+)" class="([^"]+)" data-volet="([a-z]+)"( open)?>\s*<summary[^>]*>([^<]+)</summary>', PAGE)
     assert [(nom, titre) for nom, _classe, _cle, _ouvert, titre in volets] == [
         ("details", "Détails de la prévisualisation"), ("carte", "Ajustement de zone"),
         ("ordres", "Ordres détaillés"), ("calibration", "Calibration"), ("compte", "Compte"),
@@ -98,7 +98,8 @@ def test_une_seule_bascule_pour_les_fleches_et_plus_de_bouton_clavier_separe():
     assert "window.confirm(" not in activer and "!dejaConfirme" in activer  # aucune boîte : l'annonce passe par le fil
     assert '"/api/direct/armer", { confirmer: true }' in activer and "regler(true)" in activer
     assert "if (!enDirect()) { regler(true);" in activer  # composition : aucune émission, donc aucun armement
-    assert "Simulation : les flèches parcourent le même chemin, rien n'est émis" in activer
+    assert 't("fleches.simulation")' in activer
+    assert "Simulation : les flèches parcourent le même chemin, rien n'est émis" in (ui.STATIQUE / "i18n.js").read_text(encoding="utf-8")
     style = (ui.STATIQUE / "style.css").read_text(encoding="utf-8")
     assert ".cadre-video.actif { border-color" in style  # liseré visible
     assert ".haut { position: sticky" in style and "bandeau-demo {\n  position: sticky" not in style  # STOP jamais recouvert
@@ -109,7 +110,7 @@ def test_une_seule_bascule_pour_les_fleches_et_plus_de_bouton_clavier_separe():
 def test_memoire_des_sections_seul_usage_du_stockage_du_navigateur():
     for fichier in ui.STATIQUE.iterdir():
         texte = fichier.read_text(encoding="utf-8")
-        if fichier.name != "volets.js":
+        if fichier.name not in ("volets.js", "i18n.js", "avance.js"):  # langue et mode avancé : préférences d'affichage
             assert "localStorage" not in texte and "sessionStorage" not in texte, fichier.name
     volets = (ui.STATIQUE / "volets.js").read_text(encoding="utf-8")
     assert volets.count("localStorage") == 2 and 'var CLE = "lymow-volets"' in volets and "sessionStorage" not in volets
@@ -427,7 +428,7 @@ def test_page_trois_boutons_toujours_visibles_en_tete_dans_l_ordre():
     haut = PAGE[PAGE.index('<div class="haut">') : PAGE.index("<main>")]
     positions = [haut.index(f'id="{identifiant}"') for identifiant in ("prendre-main", "rendre-main", "stop")]
     assert positions == sorted(positions) and PAGE.count('id="rendre-main"') == 1  # « Rendre la main » : seulement en haut
-    assert ">Prendre la main<" in haut and ">Rendre la main<" in haut and ">STOP <small>Échap ou Espace</small><" in haut
+    assert ">Prendre la main<" in haut and ">Rendre la main<" in haut and '>STOP <small data-i18n="stop.touches">Échap ou Espace</small><' in haut
     for identifiant in ("rendre-choix", "rendre-pause", "rendre-reprendre", "rendre-annuler", "etat-main"):
         assert f'id="{identifiant}"' in haut
     assert ">Laisser le robot en pause<" in haut and ">Reprendre la tâche<" in haut

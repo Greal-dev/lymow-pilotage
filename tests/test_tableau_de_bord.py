@@ -80,7 +80,8 @@ def test_actions_en_grille_de_boutons_et_cibles_d_au_moins_quarante_pixels():
     app = (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
     # Bouton indisponible : grisé, sa raison en info-bulle.
     assert "bouton.disabled = Boolean(raison);" in app and "bouton.title = raison || titresDOrigine[id];" in app
-    assert 'griser("reprendre-bouton", image.ordres && image.ordres.reprise_possible ? "" : "Le robot n\'est pas en pause : rien à reprendre.");' in app
+    assert 'griser("reprendre-bouton", image.ordres && image.ordres.reprise_possible ? "" : t("raison.pas-en-pause"));' in app
+    assert "Le robot n'est pas en pause : rien à reprendre." in (ui.STATIQUE / "i18n.js").read_text(encoding="utf-8")
 
 
 def test_sequence_et_previsualisation_n_occupent_de_place_qu_en_composition():

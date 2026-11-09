@@ -475,8 +475,10 @@ def test_attestation_acceptee_en_demonstration(tmp_path, monkeypatch):
 
 def test_page_porte_le_message_le_bouton_la_confirmation_et_le_bandeau_d_attestation():
     page = (ui.STATIQUE / "index.html").read_text(encoding="utf-8")
-    script = (ui.STATIQUE / "app.js").read_text(encoding="utf-8")
-    logique = (ui.STATIQUE / "ordres.js").read_text(encoding="utf-8")
+    # Les textes affichés vivent dans i18n.js (dictionnaire français) ; app.js et ordres.js les appellent par leur clé.
+    textes = (ui.STATIQUE / "i18n.js").read_text(encoding="utf-8")
+    script = (ui.STATIQUE / "app.js").read_text(encoding="utf-8") + textes
+    logique = (ui.STATIQUE / "ordres.js").read_text(encoding="utf-8") + textes
     bouton = "Je vois le robot, lames à l'arrêt : autoriser le pilotage 10 min"
     # Interface simplifiée : UNE proposition, dans le bloc Pilotage, sur la ligne de statut sous la barre
     # de commande — après le raccourci « Mettre en pause » (la pause d'abord, l'attestation ensuite).
