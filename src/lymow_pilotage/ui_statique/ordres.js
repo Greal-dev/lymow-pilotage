@@ -309,6 +309,13 @@
     var plateau = textePlateau(image.plateau);
     liste.push({ texte: image.plateau && typeof image.plateau.mm === "number"
       ? t("pastille.plateau", { mm: image.plateau.mm }) + (image.plateau.au_maximum ? t("pastille.plateau-max") : "") : t("pastille.plateau-inconnu"), titre: plateau.texte });
+    // Lames : le robot n'envoie aucun état de ses lames ; seule une présomption tirée du statut
+    // est affichable (mêmes listes que SEC-01 : tonte = en marche, repos/pause/erreur = arrêt).
+    if (etat) {
+      var lames = [2, 8, 9].indexOf(etat.statut) >= 0 ? "marche"
+        : [0, 1, 3, 5, 6, 7, 12].indexOf(etat.statut) >= 0 ? "arret" : "inconnu";
+      liste.push({ texte: t("pastille.lames-" + lames), classe: lames === "arret" ? "" : "alerte", titre: t("pastille.lames.titre") });
+    }
     // Phares : lecture seule (niveau annoncé par le robot, plage réglée dans l'application).
     if (image.phares && typeof image.phares.allumes === "boolean") {
       liste.push({ texte: t(image.phares.allumes ? "pastille.phares-allumes" : "pastille.phares-eteints"), titre: image.phares.texte });

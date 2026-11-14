@@ -99,7 +99,7 @@ def test_pastilles_d_etat_compactes():
         "etat": {"batterie_pct": 87, "precision_m": 0.02, "localisation": "fiable", "localisation_detail": ""},
         "plateau": {"mm": 96, "maximum_mm": 100, "minimum_mm": 20, "au_maximum": False, "nature": "réglage global de tonte", "date": None, "suite": None},
     }
-    assert [p["texte"] for p in js("M.pastilles(a[0])", image)] == ["tonte en pause", "🔋 87 %", "±0,02 m", "bord 2,4 m", "plateau 96 mm", "liaison ✓"]
+    assert [p["texte"] for p in js("M.pastilles(a[0])", image)] == ["tonte en pause", "🔋 87 %", "±0,02 m", "bord 2,4 m", "plateau : consigne 96 mm", "lames : état inconnu", "liaison ✓"]
     erreur = {"resolue": False, "libelles": ["44 : pare-chocs enfoncé (Bumper stuck)"], "annulation": None}
     en_erreur = js("M.pastilles(a[0])", image | {"ordres": image["ordres"] | {"statut": "en erreur", "erreur": erreur}})
     assert en_erreur[0] == {

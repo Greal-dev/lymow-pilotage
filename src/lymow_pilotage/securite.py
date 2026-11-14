@@ -462,7 +462,9 @@ def explication_statut(statut: int | None) -> tuple[str, str | None]:
         socle.WORK_STATUS_ESCAPING: ("le robot se dégage d'un obstacle", "mettez la tâche en pause pour prendre la main"),
         socle.WORK_STATUS_PAUSE_DOCKING: (
             "le retour à la base est en pause",
-            "aucun mouvement n'est permis dans ce statut ; seul « Annuler la tâche » peut rendre la main",
+            # SEC-01b : statut attestable — l'ancien conseil « seul Annuler la tâche » poussait à
+            # perdre la tâche en cours alors que l'attestation suffit (constat du 2026-11-14).
+            "attestez l'arrêt des lames pour prendre la main sans perdre la tâche",
         ),
         socle.WORK_STATUS_UPDATING: ("le robot se met à jour", "attendez la fin de la mise à jour"),
         socle.WORK_STATUS_EMERGENCY_STOP: (

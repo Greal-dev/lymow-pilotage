@@ -151,8 +151,8 @@ def test_textes_generes_par_la_page_suivent_la_langue_et_restent_identiques_en_f
         "plateau": {"mm": 96, "maximum_mm": 100, "minimum_mm": 20, "au_maximum": False},
     }
     textes = lambda langue: [p["texte"] for p in js("ordres.js", "M.pastilles(a[0])", image, langue=langue)]  # noqa: E731
-    assert textes("fr") == ["⚠ erreur 44", "tonte en pause", "🔋 87 %", "±0,02 m", "plateau 96 mm", "liaison ✓"]
-    assert textes("en") == ["⚠ error 44", "mowing paused", "🔋 87 %", "±0.02 m", "deck 96 mm", "link ✓"]
+    assert textes("fr") == ["⚠ erreur 44", "tonte en pause", "🔋 87 %", "±0,02 m", "plateau : consigne 96 mm", "lames : à l'arrêt (présumé)", "liaison ✓"]
+    assert textes("en") == ["⚠ error 44", "mowing paused", "🔋 87 %", "±0.02 m", "deck: set to 96 mm", "blades: stopped (presumed)", "link ✓"]
     assert textes("de")[1] == "Mähen pausiert" and textes("es")[1] == "corte en pausa"
     resume = {"en_ligne": True, "statut": 2, "statut_libelle": "tonte en cours", "batterie_pct": 80, "precision_m": 0.02,
               "localisation": "fiable", "localisation_texte": "position : ±0,02 m — fiable"}
@@ -206,7 +206,9 @@ def test_stop_et_l_essentiel_ne_sont_jamais_derriere_le_mode_avance():
         noeud = element(identifiant)
         assert any("avance" in classes(n) for n in [noeud, *noeud["ancetres"]]), identifiant
     attestation = next(e for e in ARBRE.elements if e["attrs"].get("data-attestation") == "poser")
-    assert any("avance" in classes(n) for n in attestation["ancetres"])  # la proposition ; le bandeau actif, jamais
+    # Proposition visible hors mode avancé (2026-11-14) : sans elle, un retour en pause (10) ne
+    # laissait que « Annuler la tâche », qui fait perdre la tâche en cours.
+    assert not any("avance" in classes(n) for n in [attestation, *attestation["ancetres"]])
 
 
 def test_robot_en_erreur_l_encadre_et_annuler_la_tache_s_ouvrent_d_eux_memes():

@@ -65,6 +65,12 @@ def test_suite_d_un_ordre_de_plateau():
     assert ui.suite_du_plateau(globale, None) == "hauteur inconnue après l'ordre : le robot ne l'a pas transmise"
 
 
+def test_ordre_de_plateau_refuse_ou_deja_au_maximum_ne_dit_pas_qu_il_est_ignore():
+    haut = (100, "consigne en cours")
+    assert ui.suite_du_plateau(haut, haut) == "consigne déjà au plus haut (100 mm)"
+    assert ui.suite_du_plateau(haut, haut, refuse=True) == "ordre refusé, rien n'a été envoyé ; consigne actuelle : 100 mm"
+
+
 @sans_node
 def test_page_texte_du_plateau_inconnue_consigne_maximum_et_changement():
     inconnue = js("M.textePlateau(a[0])", {"mm": None, "maximum_mm": 100, "minimum_mm": 20, "suite": None})
