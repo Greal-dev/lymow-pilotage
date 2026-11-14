@@ -206,7 +206,9 @@ def test_stop_et_l_essentiel_ne_sont_jamais_derriere_le_mode_avance():
         noeud = element(identifiant)
         assert any("avance" in classes(n) for n in [noeud, *noeud["ancetres"]]), identifiant
     attestation = next(e for e in ARBRE.elements if e["attrs"].get("data-attestation") == "poser")
-    assert any("avance" in classes(n) for n in attestation["ancetres"])  # la proposition ; le bandeau actif, jamais
+    # Proposition visible hors mode avancé (2026-11-14) : sans elle, un retour en pause (10) ne
+    # laissait que « Annuler la tâche », qui fait perdre la tâche en cours.
+    assert not any("avance" in classes(n) for n in [attestation, *attestation["ancetres"]])
 
 
 def test_robot_en_erreur_l_encadre_et_annuler_la_tache_s_ouvrent_d_eux_memes():

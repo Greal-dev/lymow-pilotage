@@ -235,7 +235,7 @@ def test_refus_sec01_les_autres_cas_disent_aussi_quoi_faire_et_la_liste_blanche_
         securite.verifier_lames_arret(1, 45.0, True)
     with pytest.raises(RefusSecurite, match="aucun état reçu .* cliquez sur « Actualiser »"):
         securite.verifier_lames_arret(None, None, True)
-    with pytest.raises(RefusSecurite, match="retour à la base est en pause : aucun mouvement n'est permis"):
+    with pytest.raises(RefusSecurite, match="retour à la base est en pause : attestez l'arrêt des lames"):
         securite.verifier_presence_et_statut(10, True)
 
 
