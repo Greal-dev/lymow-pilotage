@@ -151,8 +151,16 @@ def _nombre(valeur: Any, entier: bool = False) -> float | int | None:
     return valeur
 
 
-def suite_du_plateau(avant: tuple[int, str] | None, apres: tuple[int, str] | None) -> str:
-    """Après un ordre de plateau et la relecture de la carte : ce que la consigne enregistrée est devenue."""
+def suite_du_plateau(avant: tuple[int, str] | None, apres: tuple[int, str] | None, refuse: bool = False) -> str:
+    """Après un ordre de plateau et la relecture de la carte : ce que la consigne enregistrée est devenue.
+
+    Constat du 2026-11-14 : un ordre refusé avant émission, plateau déjà au plus haut, faisait dire
+    « l'ordre n'a pas été pris en compte » — faux et inquiétant."""
+    if refuse:
+        actuelle = f"consigne actuelle : {apres[0]} mm" if apres else "consigne actuelle inconnue"
+        return f"ordre refusé, rien n'a été envoyé ; {actuelle}"
+    if apres is not None and avant is not None and avant[0] == apres[0] >= securite.HAUTEUR_MAX_MM:
+        return f"consigne déjà au plus haut ({apres[0]} mm)"
     if apres is None:
         return "hauteur inconnue après l'ordre : le robot ne l'a pas transmise"
     if avant is None:
@@ -1080,7 +1088,8 @@ class ServeurUI:
         except Exception:  # noqa: BLE001 — la relecture est un service, pas une condition de l'ordre
             self._plateau_suite = "relecture impossible après l'ordre de plateau : hauteur non vérifiée"
         else:
-            self._plateau_suite = suite_du_plateau(avant, apres)
+            refuse = any("echec" in etape and etape.get("refus_avant_emission") for etape in bilan.get("etapes", []))
+            self._plateau_suite = suite_du_plateau(avant, apres, refuse)
         self.journal.ecrire("plateau-relu", avant=avant and avant[0], apres=self._hauteur_lue() and self._hauteur_lue()[0], constat=self._plateau_suite)
         bilan["plateau_relu"] = self._plateau_suite
         return bilan, code
